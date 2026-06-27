@@ -109,15 +109,28 @@ const LB: CSSProperties   = { ...BASE, background: LIGHT, fontWeight: 600, color
 /* ─── PDF Shell ─── */
 function PdfHeader({ s }: { s: AppSettings }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingBottom: 10, borderBottom: `2px solid ${BLUE2}` }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <img src="/logo.png" alt="Logo" style={{ width: 44, height: 44, objectFit: "contain" }} />
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingBottom: 12, borderBottom: `3px solid ${BLUE2}`, marginBottom: 4 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+        <img src="/logo.png" alt="Logo" style={{ width: 52, height: 52, objectFit: "contain" }} />
         <div>
-          <div style={{ color: NAVY, fontWeight: 700 }}>{s?.name?.toUpperCase() ?? ''}</div>
-          <div>📞 {s?.phone ?? ''} · {s?.email ?? ''} · GST: {s?.gst ?? ''}</div>
+          <div style={{ color: NAVY, fontWeight: 800, fontSize: 16, letterSpacing: 0.6, marginBottom: 3 }}>
+            {s.name.toUpperCase()}
+          </div>
+          <div style={{ color: "#555", fontSize: 10, fontStyle: "italic", marginBottom: 2 }}>
+            Engineering · Procurement · Construction (EPC) – Solar Division
+          </div>
+          <div style={{ display: "flex", gap: 12, fontSize: 9.5, color: "#444", marginTop: 2 }}>
+            <span>📞 {s.phone}</span>
+            <span>✉ {s.email}</span>
+            {s.gst && <span>GST: {s.gst}</span>}
+            {s.website && <span>🌐 {s.website}</span>}
+          </div>
         </div>
       </div>
-      <img src="/waaree_logo.png" alt="Waaree" style={{ height: 44, objectFit: "contain" }} />
+      <div style={{ textAlign: "right" }}>
+        <img src="/waaree_logo.png" alt="Waaree" style={{ height: 44, objectFit: "contain", display: "block" }} />
+        <div style={{ fontSize: 8, color: "#999", marginTop: 4, fontStyle: "italic" }}>Authorized Partner</div>
+      </div>
     </div>
   );
 }
@@ -590,7 +603,7 @@ function QuotePageInner() {
       setSettings(s)
       setF(prev => ({
         ...prev,
-        proposalNo: `${s.short_name}-${new Date().getFullYear()}-001`,
+        proposalNo: `${s.short_name || 'OPS'}-${new Date().getFullYear()}-001`,
         ratePerWp: s.default_rate,
       }))
     }
