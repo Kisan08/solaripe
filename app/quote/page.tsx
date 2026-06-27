@@ -582,7 +582,7 @@ function QuotePageInner() {
   const today = new Date().toISOString().split("T")[0];
   const valid = new Date(); valid.setDate(valid.getDate() + 30);
   const searchParams = useSearchParams();
-  const [settings, setSettings] = useState<AppSettings>(defaultSettings)
+  const [settings, setSettings] = useState<AppSettings | null>(null)
 
 useEffect(() => {
   const run = async () => {
@@ -668,6 +668,12 @@ useEffect(() => {
   };
 
   const numFields = ["systemCapacity","ratePerWp","subsidyPerKw","monthlyBill","gridRate","ppaRate","batteryKwh"];
+
+  if (!settings) return (
+    <div className="min-h-screen bg-[#F4F6F9] flex items-center justify-center">
+      <p className="text-sm text-gray-400">Loading...</p>
+    </div>
+  )
 
   return (
     <div className="min-h-screen bg-[#F4F6F9]">
