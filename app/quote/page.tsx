@@ -584,22 +584,27 @@ function QuotePageInner() {
   const searchParams = useSearchParams();
   const [settings, setSettings] = useState<AppSettings | null>(null)
 
-useEffect(() => {
-  const run = async () => {
-    const s = await getSettings()
-    setSettings(s)
-  }
-  run()
-}, [])
+  useEffect(() => {
+    const run = async () => {
+      const s = await getSettings()
+      setSettings(s)
+      setF(prev => ({
+        ...prev,
+        proposalNo: `${s.short_name}-${new Date().getFullYear()}-001`,
+        ratePerWp: s.default_rate,
+      }))
+    }
+    run()
+  }, [])
   const [f, setF] = useState<QuoteForm>({
-    proposalNo: `${settings.short_name}-${new Date().getFullYear()}-001`,
+    proposalNo: `OPS-${new Date().getFullYear()}-001`,
     date: today,
     validUntil: valid.toISOString().split("T")[0],
     clientName: searchParams.get("name") ?? "",
     siteAddress: searchParams.get("address") ?? "",
     contactPhone: searchParams.get("phone") ?? "",
     systemCapacity: Number(searchParams.get("system_size")) || 15,
-    ratePerWp: settings.default_rate,
+    ratePerWp: 52,
     subsidyPerKw: 0,
     monthlyBill: 8000,
     gridRate: 9,
@@ -610,7 +615,7 @@ useEffect(() => {
     ppaRate: 5.5,
     acCableSpec: "4C x 25 sq. mm AL Armoured as per Design",
     batteryKwh: 0,
-  });
+  })
 
   const [busy, setBusy] = useState(false);
   const c = compute(f);
