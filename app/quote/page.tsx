@@ -113,8 +113,8 @@ function PdfHeader({ s }: { s: AppSettings }) {
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
         <img src="/logo.png" alt="Logo" style={{ width: 44, height: 44, objectFit: "contain" }} />
         <div>
-          <div style={{ color: NAVY, fontWeight: 700 }}>{s.name.toUpperCase()}</div>
-          <div>📞 {s.phone} · {s.email} · GST: {s.gst}</div>
+          <div style={{ color: NAVY, fontWeight: 700 }}>{s?.name?.toUpperCase() ?? ''}</div>
+          <div>📞 {s?.phone ?? ''} · {s?.email ?? ''} · GST: {s?.gst ?? ''}</div>
         </div>
       </div>
       <img src="/waaree_logo.png" alt="Waaree" style={{ height: 44, objectFit: "contain" }} />
@@ -125,7 +125,7 @@ function PdfHeader({ s }: { s: AppSettings }) {
 function PdfFooter({ s }: { s: AppSettings }) {
   return (
     <div style={{ borderTop: "1px solid #ddd", paddingTop: 5, marginTop: "auto", textAlign: "center", color: "#888", fontSize: 9 }}>
-      {s.name} · {s.phone} · {s.email} · Confidential — For {"{client}"} only
+      {s?.name ?? ''} · {s?.phone ?? ''} · {s?.email ?? ''} · Confidential — For {"{client}"} only
     </div>
   );
 }
@@ -582,7 +582,7 @@ function QuotePageInner() {
   const today = new Date().toISOString().split("T")[0];
   const valid = new Date(); valid.setDate(valid.getDate() + 30);
   const searchParams = useSearchParams();
-  const [settings, setSettings] = useState<AppSettings | null>(null)
+  const [settings, setSettings] = useState<AppSettings>(defaultSettings)
 
   useEffect(() => {
     const run = async () => {
@@ -674,11 +674,7 @@ function QuotePageInner() {
 
   const numFields = ["systemCapacity","ratePerWp","subsidyPerKw","monthlyBill","gridRate","ppaRate","batteryKwh"];
 
-  if (!settings) return (
-    <div className="min-h-screen bg-[#F4F6F9] flex items-center justify-center">
-      <p className="text-sm text-gray-400">Loading...</p>
-    </div>
-  )
+  
 
   return (
     <div className="min-h-screen bg-[#F4F6F9]">
