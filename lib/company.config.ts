@@ -7,6 +7,7 @@ export const company = {
   gst: '27FAVPD3160C1ZE',
   proprietor: 'Omkar Deshmukh',
   address: 'Kalyan East, Maharashtra',
+  website: 'www.onesolarpower.in',
   colors: {
     primary: '#1A4F8A',
     dark: '#0D3260',
