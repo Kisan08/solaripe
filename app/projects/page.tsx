@@ -13,6 +13,8 @@ import {
   updateProjectMilestone,
 } from "@/lib/data"
 import type { Project } from "@/lib/types"
+export const dynamic = 'force-dynamic'
+export const fetchCache = 'force-no-store'
 
 export default function ProjectsPage() {
   const { projects, isLoading, mutate } = useProjects()

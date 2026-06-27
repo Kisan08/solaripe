@@ -4,6 +4,9 @@ import Image from "next/image";
 import { useSearchParams } from "next/navigation";
 import { company } from "@/lib/company.config";
 import { getSettings, defaultSettings, type AppSettings } from '@/lib/settings'
+
+export const dynamic = 'force-dynamic'
+export const fetchCache = 'force-no-store'
 /* ─── Types ─── */
 interface QuoteForm {
   proposalNo: string;

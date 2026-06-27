@@ -17,6 +17,12 @@ export function useLeads() {
       if (error) throw error
       return (data ?? []) as Lead[]
     },
+    {
+      revalidateOnFocus: true,
+      revalidateOnMount: true,
+      revalidateOnReconnect: true,
+      dedupingInterval: 5000,
+    }
   )
   return { leads: data ?? [], error, isLoading, mutate }
 }
@@ -32,6 +38,12 @@ export function useProjects() {
       if (error) throw error
       return (data ?? []) as Project[]
     },
+    {
+      revalidateOnFocus: true,
+      revalidateOnMount: true,
+      revalidateOnReconnect: true,
+      dedupingInterval: 5000,
+    }
   )
   return { projects: data ?? [], error, isLoading, mutate }
 }
