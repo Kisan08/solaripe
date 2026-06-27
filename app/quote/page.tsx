@@ -1,9 +1,9 @@
 "use client";
-import { useState, type ChangeEvent, type ReactNode, type CSSProperties, Suspense } from "react";
+import { useState, useEffect, type ChangeEvent, type ReactNode, type CSSProperties, Suspense } from "react";
 import Image from "next/image";
 import { useSearchParams } from "next/navigation";
 import { company } from "@/lib/company.config";
-
+import { getSettings, defaultSettings, type AppSettings } from '@/lib/settings'
 /* ─── Types ─── */
 interface QuoteForm {
   proposalNo: string;
@@ -107,15 +107,14 @@ const TD: CSSProperties   = { ...BASE };
 const LB: CSSProperties   = { ...BASE, background: LIGHT, fontWeight: 600, color: NAVY };
 
 /* ─── PDF Shell ─── */
-function PdfHeader() {
+function PdfHeader({ s }: { s: AppSettings }) {
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingBottom: 10, borderBottom: `2px solid ${BLUE2}` }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
         <img src="/logo.png" alt="Logo" style={{ width: 44, height: 44, objectFit: "contain" }} />
         <div>
-          <div style={{ color: NAVY, fontWeight: 700, fontSize: 14, letterSpacing: 0.4 }}>{company.name.toUpperCase()}</div>
-          <div style={{ color: "#555", fontSize: 9, fontStyle: "italic", marginTop: 1 }}>Engineering · Procurement · Construction (EPC) – Solar Division</div>
-          <div style={{ color: "#555", fontSize: 9, marginTop: 2 }}>📞 {company.phone} · {company.email} · GST: {company.gst}</div>
+          <div style={{ color: NAVY, fontWeight: 700 }}>{s.name.toUpperCase()}</div>
+          <div>📞 {s.phone} · {s.email} · GST: {s.gst}</div>
         </div>
       </div>
       <img src="/waaree_logo.png" alt="Waaree" style={{ height: 44, objectFit: "contain" }} />
@@ -123,20 +122,20 @@ function PdfHeader() {
   );
 }
 
-function PdfFooter() {
+function PdfFooter({ s }: { s: AppSettings }) {
   return (
     <div style={{ borderTop: "1px solid #ddd", paddingTop: 5, marginTop: "auto", textAlign: "center", color: "#888", fontSize: 9 }}>
-      {company.name} · {company.phone} · {company.email} · Confidential — For {"{client}"} only
+      {s.name} · {s.phone} · {s.email} · Confidential — For {"{client}"} only
     </div>
   );
 }
 
-function Page({ children }: { children: ReactNode }) {
+function Page({ children, s }: { children: ReactNode; s: AppSettings }) {
   return (
     <div className="quote-page" style={{ fontFamily: "Calibri, Arial, sans-serif", fontSize: 11, color: "#1a1a1a", background: "white", padding: "24px 30px", width: 794, minHeight: 1123, margin: "0 auto 18px", boxSizing: "border-box", display: "flex", flexDirection: "column", pageBreakAfter: "always" }}>
-      <PdfHeader />
+      <PdfHeader s={s} />
       <div style={{ flex: 1, paddingTop: 6 }}>{children}</div>
-      <PdfFooter />
+      <PdfFooter s={s} />
     </div>
   );
 }
@@ -162,12 +161,12 @@ function KpiCard({ label, value, sub, color = BLUE2, bg = LIGHT }: { label: stri
 }
 
 /* ─── PAGE 1 — Premium Cover ─── */
-function P1({ f, c }: { f: QuoteForm; c: Calc }) {
+function P1({ f, c, s }: { f: QuoteForm; c: Calc; s: AppSettings }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: 0 }}>
       {/* Hero image */}
       <div style={{ position: "relative", marginTop: 8, borderRadius: 8, overflow: "hidden" }}>
-        <img src="/solar_cover.jpg" alt={company.name} style={{ width: "100%", height: 200, objectFit: "cover", display: "block" }} />
+        <img src="/solar_cover.jpg" alt={s.name} style={{ width: "100%", height: 200, objectFit: "cover", display: "block" }} />
         <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to right, rgba(15,30,61,0.85) 0%, rgba(15,30,61,0.3) 100%)" }} />
         <div style={{ position: "absolute", bottom: 20, left: 20, color: "white" }}>
           <div style={{ fontSize: 10, letterSpacing: 2, opacity: 0.8, marginBottom: 4 }}>TECHNO-COMMERCIAL PROPOSAL</div>
@@ -488,7 +487,7 @@ function P4() {
 }
 
 /* ─── PAGE 5 — Signatures + Clients ─── */
-function P5({ f }: { f: QuoteForm }) {
+function P5({ f, s }: { f: QuoteForm; s: AppSettings }) {
   return (
     <>
       <SectionTitle title="Terms & Acceptance" />
@@ -529,24 +528,24 @@ function P5({ f }: { f: QuoteForm }) {
       </div>
 
       <div style={{ marginTop: 14, background: NAVY, color: "white", textAlign: "center", padding: "14px", borderRadius: 8 }}>
-        <div style={{ color: ACCENT, fontWeight: 700, fontSize: 13 }}>Thank you for choosing {company.name}</div>
-        <div style={{ color: "#aac9f0", fontSize: 10, marginTop: 4 }}>Powering a Greener Tomorrow ☀ · {company.phone} · {company.email}</div>
+        <div style={{ color: ACCENT, fontWeight: 700, fontSize: 13 }}>Thank you for choosing {s.name}</div>
+        <div style={{ color: "#aac9f0", fontSize: 10, marginTop: 4 }}>Powering a Greener Tomorrow ☀ · {s.phone} · {s.email}</div>
       </div>
     </>
   );
 }
 
 /* ─── Full Document ─── */
-function QuotationDocument({ f, c }: { f: QuoteForm; c: Calc }) {
+function QuotationDocument({ f, c, s }: { f: QuoteForm; c: Calc; s: AppSettings }) {
   return (
     <div id="quotation-document">
-      <Page><P1 f={f} c={c} /></Page>
-      <Page><P2 f={f} c={c} /></Page>
-      <Page><P3 f={f} c={c} /></Page>
-      <Page><P4 /></Page>
-      <Page><P5 f={f} /></Page>
+      <Page s={s}><P1 f={f} c={c} s={s} /></Page>
+      <Page s={s}><P2 f={f} c={c} /></Page>
+      <Page s={s}><P3 f={f} c={c} /></Page>
+      <Page s={s}><P4 /></Page>
+      <Page s={s}><P5 f={f} s={s} /></Page>
     </div>
-  );
+  )
 }
 
 /* ─── Form Field ─── */
@@ -583,16 +582,24 @@ function QuotePageInner() {
   const today = new Date().toISOString().split("T")[0];
   const valid = new Date(); valid.setDate(valid.getDate() + 30);
   const searchParams = useSearchParams();
+  const [settings, setSettings] = useState<AppSettings>(defaultSettings)
 
+useEffect(() => {
+  const run = async () => {
+    const s = await getSettings()
+    setSettings(s)
+  }
+  run()
+}, [])
   const [f, setF] = useState<QuoteForm>({
-    proposalNo: `OPS-${new Date().getFullYear()}-001`,
+    proposalNo: `${settings.short_name}-${new Date().getFullYear()}-001`,
     date: today,
     validUntil: valid.toISOString().split("T")[0],
     clientName: searchParams.get("name") ?? "",
     siteAddress: searchParams.get("address") ?? "",
     contactPhone: searchParams.get("phone") ?? "",
     systemCapacity: Number(searchParams.get("system_size")) || 15,
-    ratePerWp: 52,
+    ratePerWp: settings.default_rate,
     subsidyPerKw: 0,
     monthlyBill: 8000,
     gridRate: 9,
@@ -784,7 +791,7 @@ function QuotePageInner() {
         {/* PDF Preview */}
         <div className="overflow-auto rounded-2xl border border-gray-200" style={{ maxHeight: "88vh", background: "#e5e7eb" }}>
           <div style={{ padding: 16 }}>
-            <QuotationDocument f={f} c={c} />
+           <QuotationDocument f={f} c={c} s={settings} />
           </div>
         </div>
       </div>

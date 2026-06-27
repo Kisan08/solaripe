@@ -1,184 +1,131 @@
-"use client"
+'use client'
+import { useEffect, useState } from 'react'
+import { Save, CheckCircle } from 'lucide-react'
+import { getSettings, saveSettings, defaultSettings, type AppSettings } from '@/lib/settings'
 
-import { useState } from "react"
-import { AnimatePresence, motion } from "framer-motion"
-import { Building2, FileSpreadsheet, PhoneCall, Check, Loader2 } from "lucide-react"
-import { PageHeader } from "@/components/page-header"
-import { Card } from "@/components/ui/card"
-import { Field, Input, Select, Textarea } from "@/components/ui/field"
-
-function Section({
-  icon: Icon,
-  title,
-  description,
-  children,
-}: {
-  icon: typeof Building2
-  title: string
-  description: string
-  children: React.ReactNode
-}) {
-  return (
-    <Card className="p-5 md:p-6">
-      <div className="mb-5 flex items-start gap-3">
-        <span className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
-          <Icon className="size-[18px]" />
-        </span>
-        <div>
-          <h2 className="text-sm font-bold text-foreground">{title}</h2>
-          <p className="mt-0.5 text-[13px] text-muted-foreground">
-            {description}
-          </p>
-        </div>
-      </div>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">{children}</div>
-    </Card>
-  )
-}
+const SECTIONS = [
+  {
+    title: 'Company Info',
+    color: 'bg-blue-600',
+    fields: [
+      { key: 'name', label: 'Company Name', type: 'text', placeholder: 'Omkar Power Solutions' },
+      { key: 'short_name', label: 'Short Name', type: 'text', placeholder: 'OPS' },
+      { key: 'phone', label: 'Phone', type: 'text', placeholder: '8452035102' },
+      { key: 'email', label: 'Email', type: 'email', placeholder: 'email@company.com' },
+      { key: 'gst', label: 'GST Number', type: 'text', placeholder: '27XXXXX' },
+      { key: 'proprietor', label: 'Proprietor Name', type: 'text', placeholder: 'Omkar Deshmukh' },
+      { key: 'address', label: 'Address', type: 'text', placeholder: 'Kalyan East, Maharashtra' },
+      { key: 'website', label: 'Website', type: 'text', placeholder: 'www.yoursite.in' },
+    ],
+  },
+  {
+    title: 'Quote Defaults',
+    color: 'bg-green-600',
+    fields: [
+      { key: 'panel_brand', label: 'Panel Brand', type: 'text', placeholder: 'Waaree' },
+      { key: 'panel_wp', label: 'Panel Wp', type: 'number', placeholder: '580' },
+      { key: 'default_rate', label: 'Default Rate (₹/Wp)', type: 'number', placeholder: '52' },
+      { key: 'yield_kwh', label: 'Yield (kWh/kWp/yr)', type: 'number', placeholder: '1332' },
+      { key: 'gst_rate', label: 'GST Rate (%)', type: 'number', placeholder: '8.9' },
+    ],
+  },
+  {
+    title: 'AI Calling',
+    color: 'bg-purple-600',
+    fields: [
+      { key: 'twilio_number', label: 'Twilio Number', type: 'text', placeholder: '+19154403891' },
+      { key: 'owner_phone', label: 'Your Phone (alerts)', type: 'text', placeholder: '+918452035102' },
+    ],
+  },
+]
 
 export default function SettingsPage() {
+  const [values, setValues] = useState<AppSettings>(defaultSettings)
+  const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
 
-  const handleSave = async () => {
+  useEffect(() => {
+    const run = async () => {
+      const s = await getSettings()
+      setValues(s)
+      setLoading(false)
+    }
+    run()
+  }, [])
+
+  const save = async () => {
     setSaving(true)
-    await new Promise((r) => setTimeout(r, 700))
-    setSaving(false)
-    setSaved(true)
-    setTimeout(() => setSaved(false), 2200)
+    try {
+      await saveSettings(values)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 3000)
+    } catch (err) {
+      alert('Failed to save. Check Supabase connection.')
+    } finally {
+      setSaving(false)
+    }
   }
 
+  if (loading) return (
+    <div className="min-h-screen bg-[#F4F6F9] flex items-center justify-center">
+      <p className="text-sm text-gray-400">Loading settings...</p>
+    </div>
+  )
+
   return (
-    <>
-      <PageHeader
-        title="Settings"
-        subtitle="Configure your company, quotes, and AI calling."
-        action={
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="inline-flex h-9 min-w-32 items-center justify-center gap-1.5 rounded-lg bg-primary px-3.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-70"
-          >
-            <AnimatePresence mode="wait" initial={false}>
-              {saving ? (
-                <motion.span
-                  key="saving"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  className="inline-flex items-center gap-1.5"
-                >
-                  <Loader2 className="size-4 animate-spin" />
-                  Saving…
-                </motion.span>
-              ) : saved ? (
-                <motion.span
-                  key="saved"
-                  initial={{ opacity: 0, scale: 0.8 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0 }}
-                  className="inline-flex items-center gap-1.5"
-                >
-                  <Check className="size-4" />
-                  Saved
-                </motion.span>
-              ) : (
-                <motion.span
-                  key="idle"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                >
-                  Save changes
-                </motion.span>
-              )}
-            </AnimatePresence>
+    <div className="min-h-screen bg-[#F4F6F9]">
+      <div className="bg-white border-b border-gray-200 px-6 py-4">
+        <div className="flex items-center justify-between max-w-3xl mx-auto">
+          <div>
+            <h1 className="text-xl font-bold text-gray-900">Settings</h1>
+            <p className="text-sm text-gray-500 mt-0.5">Changes apply to all proposals automatically</p>
+          </div>
+          <button onClick={save} disabled={saving}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium text-white disabled:opacity-50 transition-all"
+            style={{ background: saved ? '#16a34a' : '#1A4F8A' }}>
+            {saved ? <CheckCircle size={15} /> : <Save size={15} />}
+            {saving ? 'Saving...' : saved ? 'Saved!' : 'Save Settings'}
           </button>
-        }
-      />
-
-      <div className="mx-auto max-w-3xl space-y-5 p-5 md:p-8">
-        <Section
-          icon={Building2}
-          title="Company information"
-          description="Details shown on proposals and invoices."
-        >
-          <Field label="Company name">
-            <Input defaultValue="SunEdge Energy Pvt. Ltd." />
-          </Field>
-          <Field label="GSTIN">
-            <Input defaultValue="29ABCDE1234F1Z5" />
-          </Field>
-          <Field label="Contact email">
-            <Input type="email" defaultValue="hello@sunedge.in" />
-          </Field>
-          <Field label="Contact phone">
-            <Input defaultValue="+91 98765 43210" />
-          </Field>
-          <Field label="Registered address" className="sm:col-span-2">
-            <Textarea defaultValue="No. 24, MG Road, Bengaluru, Karnataka 560001" />
-          </Field>
-        </Section>
-
-        <Section
-          icon={FileSpreadsheet}
-          title="Quote defaults"
-          description="Pre-filled values when creating new proposals."
-        >
-          <Field label="Default price / Wp (₹)">
-            <Input type="number" defaultValue="48" />
-          </Field>
-          <Field label="GST rate (%)">
-            <Input type="number" defaultValue="13.8" />
-          </Field>
-          <Field label="Default warranty (years)">
-            <Input type="number" defaultValue="25" />
-          </Field>
-          <Field label="Quote validity (days)">
-            <Input type="number" defaultValue="15" />
-          </Field>
-          <Field label="Default module type" className="sm:col-span-2">
-            <Select defaultValue="Mono PERC">
-              <option>Mono PERC</option>
-              <option>TOPCon</option>
-              <option>Bifacial</option>
-              <option>Polycrystalline</option>
-            </Select>
-          </Field>
-        </Section>
-
-        <Section
-          icon={PhoneCall}
-          title="AI calling"
-          description="Automated follow-ups for your leads."
-        >
-          <Field label="Caller ID name">
-            <Input defaultValue="SunEdge Solar" />
-          </Field>
-          <Field label="Outbound number">
-            <Input defaultValue="+91 80471 23456" />
-          </Field>
-          <Field label="Call language">
-            <Select defaultValue="Hindi + English">
-              <option>Hindi + English</option>
-              <option>English</option>
-              <option>Hindi</option>
-              <option>Kannada</option>
-              <option>Tamil</option>
-            </Select>
-          </Field>
-          <Field label="Voice tone">
-            <Select defaultValue="Professional">
-              <option>Professional</option>
-              <option>Friendly</option>
-              <option>Concise</option>
-            </Select>
-          </Field>
-          <Field label="Call script" className="sm:col-span-2">
-            <Textarea defaultValue="Hi, this is SunEdge Solar following up on your rooftop solar enquiry. Is this a good time to discuss your savings estimate?" />
-          </Field>
-        </Section>
+        </div>
       </div>
-    </>
+
+      <div className="max-w-3xl mx-auto px-6 py-6 space-y-4">
+        {SECTIONS.map(({ title, color, fields }) => (
+          <div key={title} className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+            <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-2">
+              <span className={`w-1.5 h-4 rounded ${color} inline-block`} />
+              <h2 className="text-sm font-semibold text-gray-700">{title}</h2>
+            </div>
+            <div className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {fields.map(({ key, label, type, placeholder }) => (
+                <div key={key}>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">{label}</label>
+                  <input
+                    type={type}
+                    placeholder={placeholder}
+                    value={String(values[key as keyof AppSettings] ?? '')}
+                    onChange={e => setValues(v => ({
+                      ...v,
+                      [key]: type === 'number' ? parseFloat(e.target.value) || 0 : e.target.value
+                    }))}
+                    className="w-full px-3 py-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 transition-all"
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+
+        {/* Info banner */}
+        <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 flex gap-3">
+          <div className="text-blue-500 text-lg">💡</div>
+          <div>
+            <p className="text-sm font-medium text-blue-800">Settings are live</p>
+            <p className="text-xs text-blue-600 mt-0.5">Company name, phone, email and quote defaults update instantly across all new proposals when you save.</p>
+          </div>
+        </div>
+      </div>
+    </div>
   )
 }
