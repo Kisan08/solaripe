@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 60" width="180" height="60">
+  <!-- Green background bar -->
+  <rect width="180" height="60" rx="4" fill="white"/>
+  
+  <!-- WAAREE text -->
+  <text x="12" y="38" 
+    font-family="Arial Black, Arial, sans-serif" 
+    font-weight="900" 
+    font-size="32" 
+    fill="#2E7D32"
+    letter-spacing="2">WAAREE</text>
+  
+  <!-- Registered trademark -->
+  <text x="163" y="20" 
+    font-family="Arial, sans-serif" 
+    font-size="11" 
+    fill="#2E7D32">®</text>
+  
+  <!-- Green underline -->
+  <rect x="12" y="42" width="155" height="2.5" fill="#2E7D32"/>
+  
+  <!-- Tagline -->
+  <text x="90" y="56" 
+    font-family="Arial, sans-serif" 
+    font-size="9.5" 
+    fill="#2E7D32" 
+    text-anchor="middle"
+    letter-spacing="0.5">One with the Sun</text>
+</svg>
