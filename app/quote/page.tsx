@@ -17,7 +17,7 @@ interface QuoteForm {
   contactPhone: string;
   systemCapacity: number;
   ratePerWp: number;
-  subsidyPerKw: number;
+  subsidyTotal: number;
   monthlyBill: number;
   gridRate: number;
   roofType: string;
@@ -60,7 +60,7 @@ function compute(f: QuoteForm) {
   const exGst           = wp * f.ratePerWp;
   const gst             = Math.round(exGst * GST_RATE);
   const net             = exGst + gst;
-  const subsidy         = f.subsidyPerKw * f.systemCapacity;
+  const subsidy         = f.subsidyTotal;
   const netAfterSubsidy = Math.max(0, net - subsidy);
   const annualSavingsY1 = Math.round(gen * f.gridRate);
   const paybackYears    = netAfterSubsidy > 0 ? +(netAfterSubsidy / annualSavingsY1).toFixed(1) : 0;
@@ -89,7 +89,7 @@ function totalSavings25(f: QuoteForm, gen: number) {
 function savingsTable(f: QuoteForm, gen: number) {
   const rows = [];
   let cumSavings = 0;
-  const netCost = Math.max(0, (f.systemCapacity * 1000 * f.ratePerWp * (1 + GST_RATE)) - f.subsidyPerKw * f.systemCapacity);
+  const netCost = Math.max(0, (f.systemCapacity * 1000 * f.ratePerWp * (1 + GST_RATE)) - f.subsidyTotal);
   for (let y = 1; y <= 25; y++) {
     const genY    = Math.round(gen * Math.pow(1 - DEGRADE, y - 1));
     const gridY   = f.gridRate * Math.pow(1 + GRID_RISE, y - 1);
@@ -104,7 +104,7 @@ function savingsTable(f: QuoteForm, gen: number) {
 type Calc = ReturnType<typeof compute>;
 
 /* ─── PDF Base Styles ─── */
-const BASE: CSSProperties = { padding: "6px 10px", border: "1px solid #d0d7e2", fontSize: 11 };
+const BASE: CSSProperties = { padding: "7px 12px", border: "1px solid #d0d7e2", fontSize: 13 };
 const TH: CSSProperties   = { ...BASE, background: NAVY, color: "white", fontWeight: 700, textAlign: "left" };
 const TD: CSSProperties   = { ...BASE };
 const LB: CSSProperties   = { ...BASE, background: LIGHT, fontWeight: 600, color: NAVY };
@@ -148,7 +148,7 @@ function PdfFooter({ s }: { s: AppSettings }) {
 
 function Page({ children, s }: { children: ReactNode; s: AppSettings }) {
   return (
-    <div className="quote-page" style={{ fontFamily: "Calibri, Arial, sans-serif", fontSize: 11, color: "#1a1a1a", background: "white", padding: "24px 30px", width: 794, minHeight: 1123, margin: "0 auto 18px", boxSizing: "border-box", display: "flex", flexDirection: "column", pageBreakAfter: "always" }}>
+    <div className="quote-page" style={{ fontFamily: "Calibri, Arial, sans-serif", fontSize: 13, color: "#1a1a1a", background: "white", padding: "24px 30px", width: 794, minHeight: 1123, margin: "0 auto 18px", boxSizing: "border-box", display: "flex", flexDirection: "column", pageBreakAfter: "always" }}>
       <PdfHeader s={s} />
       <div style={{ flex: 1, paddingTop: 6 }}>{children}</div>
       <PdfFooter s={s} />
@@ -177,7 +177,7 @@ function KpiCard({ label, value, sub, color = BLUE2, bg = LIGHT }: { label: stri
 }
 
 /* ─── PAGE 1 — Premium Cover ─── */
-function P1({ f, c, s }: { f: QuoteForm; c: Calc; s: AppSettings }) {
+function P1({ f, c, s, showSiteDetails }: { f: QuoteForm; c: Calc; s: AppSettings; showSiteDetails: boolean }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: 0 }}>
       {/* Hero image */}
@@ -203,8 +203,29 @@ function P1({ f, c, s }: { f: QuoteForm; c: Calc; s: AppSettings }) {
       </div>
 
       {/* Proposal meta */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 }}>
-        <div style={{ background: GRAY, borderRadius: 8, padding: "12px 14px" }}>
+      {showSiteDetails ? (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 }}>
+          <div style={{ background: GRAY, borderRadius: 8, padding: "12px 14px" }}>
+            <div style={{ fontSize: 9, color: "#888", fontWeight: 600, letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 8 }}>Proposal Details</div>
+            {[["No.", f.proposalNo], ["Date", fmtDate(f.date)], ["Valid Until", fmtDate(f.validUntil)], ["Project Type", f.projectType]].map(([k, v]) => (
+              <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, paddingBottom: 4, borderBottom: "1px solid #e5e7eb", marginBottom: 4 }}>
+                <span style={{ color: "#666" }}>{k}</span>
+                <span style={{ fontWeight: 600, color: NAVY }}>{v}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{ background: GRAY, borderRadius: 8, padding: "12px 14px" }}>
+            <div style={{ fontSize: 9, color: "#888", fontWeight: 600, letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 8 }}>Site Details</div>
+            {[["Roof Type", f.roofType], ["Floors", f.floors], ["Shading", f.shadow], ["Contact", f.contactPhone]].map(([k, v]) => (
+              <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, paddingBottom: 4, borderBottom: "1px solid #e5e7eb", marginBottom: 4 }}>
+                <span style={{ color: "#666" }}>{k}</span>
+                <span style={{ fontWeight: 600, color: NAVY }}>{v || "—"}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div style={{ background: GRAY, borderRadius: 8, padding: "12px 14px", marginTop: 10 }}>
           <div style={{ fontSize: 9, color: "#888", fontWeight: 600, letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 8 }}>Proposal Details</div>
           {[["No.", f.proposalNo], ["Date", fmtDate(f.date)], ["Valid Until", fmtDate(f.validUntil)], ["Project Type", f.projectType]].map(([k, v]) => (
             <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, paddingBottom: 4, borderBottom: "1px solid #e5e7eb", marginBottom: 4 }}>
@@ -213,16 +234,7 @@ function P1({ f, c, s }: { f: QuoteForm; c: Calc; s: AppSettings }) {
             </div>
           ))}
         </div>
-        <div style={{ background: GRAY, borderRadius: 8, padding: "12px 14px" }}>
-          <div style={{ fontSize: 9, color: "#888", fontWeight: 600, letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 8 }}>Site Details</div>
-          {[["Roof Type", f.roofType], ["Floors", f.floors], ["Shading", f.shadow], ["Contact", f.contactPhone]].map(([k, v]) => (
-            <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, paddingBottom: 4, borderBottom: "1px solid #e5e7eb", marginBottom: 4 }}>
-              <span style={{ color: "#666" }}>{k}</span>
-              <span style={{ fontWeight: 600, color: NAVY }}>{v || "—"}</span>
-            </div>
-          ))}
-        </div>
-      </div>
+      )}
 
       {/* Why solar strip */}
       <div style={{ marginTop: 10, background: NAVY, borderRadius: 8, padding: "12px 16px" }}>
@@ -311,7 +323,7 @@ function P2({ f, c }: { f: QuoteForm; c: Calc }) {
             { n: "2", d: "Solar + Infrastructure (excl. GST)", r: `Rs. ${f.ratePerWp} / Wp × ${(f.systemCapacity*1000).toLocaleString("en-IN")} Wp`, a: inrFull(c.exGst), bold: false, bg: "#F5F9FF" },
             { n: "3", d: "GST @ 8.9%", r: "", a: inrFull(c.gst), bold: false, bg: "#fff" },
             { n: "4", d: "Total (incl. GST)", r: "", a: inrFull(c.net), bold: true, bg: "#EEF5FF" },
-            ...(f.subsidyPerKw > 0 ? [{ n: "5", d: `PM Surya Ghar Subsidy (${f.systemCapacity} kWp)`, r: `Rs. ${f.subsidyPerKw.toLocaleString("en-IN")} / kWp`, a: `− ${inrFull(c.subsidy)}`, bold: false, bg: "#E6F4FF" }] : []),
+            ...(f.subsidyTotal > 0 ? [{ n: "5", d: `PM Surya Ghar Subsidy`, r: `Direct subsidy amount`, a: `− ${inrFull(c.subsidy)}`, bold: false, bg: "#E6F4FF" }] : []),
           ].map(row => (
             <tr key={row.n} style={{ background: row.bg }}>
               <td style={{ ...TD, textAlign: "center" }}>{row.n}</td>
@@ -322,7 +334,7 @@ function P2({ f, c }: { f: QuoteForm; c: Calc }) {
           ))}
           <tr style={{ background: NAVY }}>
             <td colSpan={3} style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: "white", fontWeight: 700, fontSize: 12 }}>
-              {f.subsidyPerKw > 0 ? "NET COST TO CLIENT (after subsidy)" : "NET TOTAL (incl. GST)"}
+              {f.subsidyTotal > 0 ? "NET COST TO CLIENT (after subsidy)" : "NET TOTAL (incl. GST)"}
             </td>
             <td style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: ACCENT, fontWeight: 700, fontSize: 15, textAlign: "right" }}>
               {inrFull(c.netAfterSubsidy)}
@@ -552,10 +564,10 @@ function P5({ f, s }: { f: QuoteForm; s: AppSettings }) {
 }
 
 /* ─── Full Document ─── */
-function QuotationDocument({ f, c, s }: { f: QuoteForm; c: Calc; s: AppSettings }) {
+function QuotationDocument({ f, c, s, showSiteDetails }: { f: QuoteForm; c: Calc; s: AppSettings; showSiteDetails: boolean }) {
   return (
     <div id="quotation-document">
-      <Page s={s}><P1 f={f} c={c} s={s} /></Page>
+      <Page s={s}><P1 f={f} c={c} s={s} showSiteDetails={showSiteDetails} /></Page>
       <Page s={s}><P2 f={f} c={c} /></Page>
       <Page s={s}><P3 f={f} c={c} /></Page>
       <Page s={s}><P4 /></Page>
@@ -595,6 +607,7 @@ function SelectField({ label, name, value, onChange, options }: {
 
 /* ─── Inner Component ─── */
 function QuotePageInner() {
+  const [showSiteDetails, setShowSiteDetails] = useState(true)
   const today = new Date().toISOString().split("T")[0];
   const valid = new Date(); valid.setDate(valid.getDate() + 30);
   const searchParams = useSearchParams();
@@ -621,7 +634,7 @@ function QuotePageInner() {
     contactPhone: searchParams.get("phone") ?? "",
     systemCapacity: Number(searchParams.get("system_size")) || 15,
     ratePerWp: 52,
-    subsidyPerKw: 0,
+    subsidyTotal: 0,
     monthlyBill: 8000,
     gridRate: 9,
     roofType: "RCC Flat",
@@ -751,7 +764,24 @@ function QuotePageInner() {
               <SelectField label="Project Type" name="projectType" value={f.projectType} onChange={onSelect} options={["CAPEX (EPC)","OPEX / PPA","AMC","Hybrid"]} />
             </div>
           </div>
-
+          {/* Toggle */}
+          <div className="bg-white rounded-2xl border border-gray-100 p-5">
+            <h2 className="text-sm font-semibold text-gray-700 mb-4 flex items-center gap-2">
+              <span className="w-1.5 h-4 rounded bg-amber-500 inline-block" />
+              Proposal Options
+            </h2>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-700">Show Site Details</p>
+                <p className="text-xs text-gray-400 mt-0.5">Roof type, floors, shading on cover page</p>
+              </div>
+              <button
+                onClick={() => setShowSiteDetails(p => !p)}
+                className={`w-12 h-6 rounded-full transition-all relative ${showSiteDetails ? 'bg-blue-600' : 'bg-gray-200'}`}>
+                <span className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${showSiteDetails ? 'left-7' : 'left-1'}`} />
+              </button>
+            </div>
+          </div>
           {/* System & Pricing */}
           <div className="bg-white rounded-2xl border border-gray-100 p-5">
             <h2 className="text-sm font-semibold text-gray-700 mb-4 flex items-center gap-2">
@@ -761,7 +791,7 @@ function QuotePageInner() {
             <div className="grid grid-cols-2 gap-3">
               <Field label="System Capacity (kWp)" name="systemCapacity" type="number" value={f.systemCapacity} onChange={onChange} />
               <Field label="Rate (Rs./Wp excl. GST)" name="ratePerWp" type="number" value={f.ratePerWp} onChange={onChange} />
-              <Field label="Govt. Subsidy (Rs./kWp) — 0 if none" name="subsidyPerKw" type="number" value={f.subsidyPerKw} onChange={onChange} placeholder="18000" />
+              <Field label="Govt. Subsidy Total (₹) — 0 if none" name="subsidyTotal" type="number" value={f.subsidyTotal} onChange={onChange} placeholder="270000" />
               <Field label="Battery Capacity (kWh) — 0 if none" name="batteryKwh" type="number" value={f.batteryKwh} onChange={onChange} placeholder="0" />
               {f.projectType === "OPEX / PPA" && (
                 <Field label="PPA Rate (Rs./kWh)" name="ppaRate" type="number" value={f.ppaRate} onChange={onChange} />
@@ -792,7 +822,7 @@ function QuotePageInner() {
                 ["Excl. GST", inrFull(c.exGst)],
                 ["GST @ 8.9%", inrFull(c.gst)],
                 ["Net Total", inrFull(c.net)],
-                ...(f.subsidyPerKw > 0 ? [["Subsidy", `− ${inrFull(c.subsidy)}`], ["Net Payable", inrFull(c.netAfterSubsidy)]] as [string,string][] : []),
+                ...(f.subsidyTotal > 0 ? [["Subsidy", `− ${inrFull(c.subsidy)}`], ["Net Payable", inrFull(c.netAfterSubsidy)]] as [string,string][] : []),
                 ["Year 1 Savings", inrFull(c.annualSavingsY1)],
                 ["Payback", `${c.paybackYears} years`],
                 ["25-yr Returns", lakh(totalSavings25(f, c.gen))],
@@ -814,7 +844,7 @@ function QuotePageInner() {
         {/* PDF Preview */}
         <div className="overflow-auto rounded-2xl border border-gray-200" style={{ maxHeight: "88vh", background: "#e5e7eb" }}>
           <div style={{ padding: 16 }}>
-           <QuotationDocument f={f} c={c} s={settings} />
+           <QuotationDocument f={f} c={c} s={settings} showSiteDetails={showSiteDetails} />
           </div>
         </div>
       </div>
