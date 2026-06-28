@@ -207,7 +207,7 @@ function P1({ f, c, s, showSiteDetails }: { f: QuoteForm; c: Calc; s: AppSetting
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 }}>
           <div style={{ background: GRAY, borderRadius: 8, padding: "12px 14px" }}>
             <div style={{ fontSize: 9, color: "#888", fontWeight: 600, letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 8 }}>Proposal Details</div>
-            {[["No.", f.proposalNo], ["Date", fmtDate(f.date)], ["Valid Until", fmtDate(f.validUntil)], ["Project Type", f.projectType]].map(([k, v]) => (
+            {[["No.", f.proposalNo], ["Date", fmtDate(f.date)], ["Valid Until", fmtDate(f.validUntil)]].map(([k, v]) => (
               <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, paddingBottom: 4, borderBottom: "1px solid #e5e7eb", marginBottom: 4 }}>
                 <span style={{ color: "#666" }}>{k}</span>
                 <span style={{ fontWeight: 600, color: NAVY }}>{v}</span>
@@ -227,7 +227,7 @@ function P1({ f, c, s, showSiteDetails }: { f: QuoteForm; c: Calc; s: AppSetting
       ) : (
         <div style={{ background: GRAY, borderRadius: 8, padding: "12px 14px", marginTop: 10 }}>
           <div style={{ fontSize: 9, color: "#888", fontWeight: 600, letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 8 }}>Proposal Details</div>
-          {[["No.", f.proposalNo], ["Date", fmtDate(f.date)], ["Valid Until", fmtDate(f.validUntil)], ["Project Type", f.projectType]].map(([k, v]) => (
+          {[["No.", f.proposalNo], ["Date", fmtDate(f.date)], ["Valid Until", fmtDate(f.validUntil)]].map(([k, v]) => (
             <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, paddingBottom: 4, borderBottom: "1px solid #e5e7eb", marginBottom: 4 }}>
               <span style={{ color: "#666" }}>{k}</span>
               <span style={{ fontWeight: 600, color: NAVY }}>{v}</span>
@@ -761,7 +761,7 @@ function QuotePageInner() {
               <SelectField label="Roof Type" name="roofType" value={f.roofType} onChange={onSelect} options={["RCC Flat","Mangalore Tile","GI Sheet","Trapezoidal","Terrace"]} />
               <SelectField label="Shadow" name="shadow" value={f.shadow} onChange={onSelect} options={["None","Minimal","Moderate","Heavy"]} />
               <Field label="Floors (e.g. G+4)" name="floors" value={f.floors} onChange={onChange} placeholder="G+4" />
-              <SelectField label="Project Type" name="projectType" value={f.projectType} onChange={onSelect} options={["CAPEX (EPC)","OPEX / PPA","AMC","Hybrid"]} />
+              {/* <SelectField label="Project Type" name="projectType" value={f.projectType} onChange={onSelect} options={["CAPEX (EPC)","OPEX / PPA","AMC","Hybrid"]} /> */}
             </div>
           </div>
           {/* Toggle */}
