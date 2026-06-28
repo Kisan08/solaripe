@@ -104,8 +104,8 @@ function savingsTable(f: QuoteForm, gen: number) {
 type Calc = ReturnType<typeof compute>;
 
 /* ─── PDF Base Styles ─── */
-const BASE: CSSProperties = { padding: "7px 12px", border: "1px solid #d0d7e2", fontSize: 13 };
-const TH: CSSProperties   = { ...BASE, background: NAVY, color: "white", fontWeight: 700, textAlign: "left" };
+const BASE: CSSProperties = { padding: "7px 12px", border: "1px solid #d0d7e2", fontSize: 14 };
+const TH: CSSProperties   = { ...BASE, background: NAVY, color: "white", fontWeight: 700, textAlign: "left", fontSize: 14 };
 const TD: CSSProperties   = { ...BASE };
 const LB: CSSProperties   = { ...BASE, background: LIGHT, fontWeight: 600, color: NAVY };
 
@@ -160,7 +160,7 @@ function SectionTitle({ title, sub }: { title: string; sub?: string }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "14px 0 8px" }}>
       <div style={{ width: 4, height: 20, background: BLUE2, borderRadius: 2 }} />
-      <span style={{ fontWeight: 700, fontSize: 12.5, color: NAVY, letterSpacing: 0.3 }}>{title.toUpperCase()}</span>
+      <span style={{ fontWeight: 700, fontSize: 15, color: NAVY, letterSpacing: 0.3 }}>{title.toUpperCase()}</span>
       {sub && <span style={{ fontSize: 10, color: "#888", fontStyle: "italic" }}>— {sub}</span>}
     </div>
   );
@@ -170,7 +170,7 @@ function KpiCard({ label, value, sub, color = BLUE2, bg = LIGHT }: { label: stri
   return (
     <div style={{ background: bg, border: `1px solid ${color}30`, borderRadius: 8, padding: "12px 14px", textAlign: "center" }}>
       <div style={{ fontSize: 9, color: "#888", fontWeight: 600, letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 4 }}>{label}</div>
-      <div style={{ fontSize: 20, fontWeight: 700, color }}>{value}</div>
+      <div style={{ fontSize: 24, fontWeight: 700, color }}>{value}</div>
       {sub && <div style={{ fontSize: 9, color: "#666", marginTop: 3 }}>{sub}</div>}
     </div>
   );
@@ -186,7 +186,7 @@ function P1({ f, c, s, showSiteDetails }: { f: QuoteForm; c: Calc; s: AppSetting
         <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to right, rgba(15,30,61,0.85) 0%, rgba(15,30,61,0.3) 100%)" }} />
         <div style={{ position: "absolute", bottom: 20, left: 20, color: "white" }}>
           <div style={{ fontSize: 10, letterSpacing: 2, opacity: 0.8, marginBottom: 4 }}>TECHNO-COMMERCIAL PROPOSAL</div>
-          <div style={{ fontSize: 22, fontWeight: 700, lineHeight: 1.2 }}>{f.clientName || "Client Name"}</div>
+          <div style={{ fontSize: 26, fontWeight: 700, lineHeight: 1.2 }}>{f.clientName || "Client Name"}</div>
           <div style={{ fontSize: 12, opacity: 0.85, marginTop: 4 }}>{f.siteAddress || "Site Address"}</div>
         </div>
         <div style={{ position: "absolute", top: 20, right: 20, background: ACCENT, color: NAVY, padding: "6px 14px", borderRadius: 6, fontWeight: 700, fontSize: 13 }}>
@@ -247,7 +247,7 @@ function P1({ f, c, s, showSiteDetails }: { f: QuoteForm; c: Calc; s: AppSetting
           ].map(s => (
             <div key={s.t} style={{ textAlign: "center" }}>
               <div style={{ fontSize: 18 }}>{s.icon}</div>
-              <div style={{ color: "white", fontWeight: 700, fontSize: 11, marginTop: 3 }}>{s.t}</div>
+              <div style={{ color: "white", fontWeight: 700, fontSize: 14, marginTop: 3 }}>{s.t}</div>
               <div style={{ color: "#aac9f0", fontSize: 9, marginTop: 2 }}>{s.d}</div>
             </div>
           ))}
@@ -332,14 +332,27 @@ function P2({ f, c }: { f: QuoteForm; c: Calc }) {
               <td style={{ ...TD, textAlign: "right", fontWeight: row.bold ? 700 : 400 }}>{row.a}</td>
             </tr>
           ))}
-          <tr style={{ background: NAVY }}>
-            <td colSpan={3} style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: "white", fontWeight: 700, fontSize: 12 }}>
-              {f.subsidyTotal > 0 ? "NET COST TO CLIENT (after subsidy)" : "NET TOTAL (incl. GST)"}
+          {/* Always show Net Total highlighted */}
+        <tr style={{ background: NAVY }}>
+          <td colSpan={3} style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: "white", fontWeight: 700, fontSize: 12 }}>
+            NET TOTAL (incl. GST)
+          </td>
+          <td style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: ACCENT, fontWeight: 700, fontSize: 15, textAlign: "right" }}>
+            {inrFull(c.net)}
+          </td>
+        </tr>
+
+        {/* Show subsidy savings as informational below */}
+        {f.subsidyTotal > 0 && (
+          <tr style={{ background: "#E6F4FF" }}>
+            <td colSpan={3} style={{ padding: "8px 12px", border: "1px solid #d0d7e2", color: "#0369a1", fontSize: 11 }}>
+              🏛 After PM Surya Ghar Subsidy of {inrFull(f.subsidyTotal)} — Net payable
             </td>
-            <td style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: ACCENT, fontWeight: 700, fontSize: 15, textAlign: "right" }}>
+            <td style={{ padding: "8px 12px", border: "1px solid #d0d7e2", color: "#0369a1", fontWeight: 600, fontSize: 12, textAlign: "right" }}>
               {inrFull(c.netAfterSubsidy)}
             </td>
           </tr>
+        )}
         </tbody>
       </table>
 
