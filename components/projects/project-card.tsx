@@ -1,7 +1,8 @@
 "use client"
 
+import Link from "next/link"
 import { motion } from "framer-motion"
-import { MapPin, Zap, Pencil } from "lucide-react"
+import { MapPin, Zap, Pencil, PenTool } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { projectTypeBadge, statusBadge } from "@/lib/badges"
@@ -129,6 +130,15 @@ export function ProjectCard({
             {formatINRCompact(project.total_value)}
           </span>
         </div>
+
+        {/* NEW — Open in Designer */}
+        <Link
+          href={`/design?projectId=${project.id}`}
+          className="mt-3 inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-border text-sm font-medium text-foreground transition-colors hover:bg-secondary"
+        >
+          <PenTool className="size-4" />
+          Open in Designer
+        </Link>
       </Card>
     </motion.div>
   )

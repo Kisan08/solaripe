@@ -7,16 +7,29 @@ import { Sun } from "lucide-react"
 import { NAV_ITEMS } from "@/lib/nav"
 import { cn } from "@/lib/utils"
 
+// Collapsed width shows icons only; hovering the rail expands it to reveal
+// labels, matching the SeaArt-style reference. The rail is `fixed` and
+// OVERLAYS page content when expanded (like VS Code's activity bar or
+// Notion's collapsed sidebar) rather than pushing content over — reflowing
+// the whole page's layout on hover causes janky content-shift, whereas an
+// overlay expansion feels instant and doesn't disturb whatever's underneath.
+// AppShell's content padding matches the COLLAPSED width permanently.
 export function Sidebar() {
   const pathname = usePathname()
 
   return (
-    <aside className="fixed inset-y-0 left-0 z-30 hidden w-[220px] flex-col border-r border-sidebar-border bg-sidebar md:flex">
-      <div className="flex h-16 items-center gap-2.5 px-5">
-        <div className="flex size-8 items-center justify-center rounded-lg bg-primary">
+    <aside
+      className={cn(
+        "app-sidebar-rail group fixed inset-y-0 left-0 z-30 hidden flex-col overflow-hidden",
+        "border-r border-sidebar-border bg-sidebar md:flex",
+        "w-[68px] hover:w-[220px] transition-[width] duration-200 ease-out",
+      )}
+    >
+      <div className="flex h-16 shrink-0 items-center gap-2.5 px-[22px]">
+        <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary">
           <Sun className="size-5 text-primary-foreground" aria-hidden="true" />
         </div>
-        <div className="flex flex-col leading-none">
+        <div className="flex flex-col leading-none whitespace-nowrap opacity-0 transition-opacity duration-150 group-hover:opacity-100">
           <span className="text-base font-bold tracking-tight text-foreground">
             Solaripe
           </span>
@@ -37,6 +50,7 @@ export function Sidebar() {
             <Link
               key={item.href}
               href={item.href}
+              title={item.label}
               className={cn(
                 "relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
                 active
@@ -51,19 +65,21 @@ export function Sidebar() {
                   transition={{ type: "spring", stiffness: 400, damping: 32 }}
                 />
               )}
-              <Icon className="relative z-10 size-[18px]" aria-hidden="true" />
-              <span className="relative z-10">{item.label}</span>
+              <Icon className="relative z-10 size-[18px] shrink-0" aria-hidden="true" />
+              <span className="relative z-10 whitespace-nowrap opacity-0 transition-opacity duration-150 group-hover:opacity-100">
+                {item.label}
+              </span>
             </Link>
           )
         })}
       </nav>
 
-      <div className="border-t border-sidebar-border p-4">
+      <div className="shrink-0 border-t border-sidebar-border p-4">
         <div className="flex items-center gap-3 rounded-lg bg-secondary px-3 py-2.5">
-          <div className="flex size-8 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+          <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
             SE
           </div>
-          <div className="flex flex-col leading-tight">
+          <div className="flex flex-col leading-tight whitespace-nowrap opacity-0 transition-opacity duration-150 group-hover:opacity-100">
             <span className="text-xs font-semibold text-foreground">
               SunEdge Energy
             </span>

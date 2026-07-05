@@ -1,5 +1,4 @@
 "use client";
-import Link from "next/link";
 import { useState, useEffect, useRef } from "react";
 
 type CallStatus =
@@ -221,13 +220,13 @@ export default function CRMPage() {
   const showReminder = !reminderDismissed && (interestedLeads.length > 0 || callBackLeads.length > 0);
 
   return (
-    <div style={{ minHeight: "100vh", backgroundColor: "#F1F5F9", fontFamily: "Calibri, sans-serif" }}>
+    <div style={{ minHeight: "100vh", backgroundColor: "#F1F5F9" }}>
 
       <style>{`
         .crm-stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 16px; }
         .crm-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; background: #fff; border-radius: 10px; padding: 14px 16px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); margin-bottom: 16px; position: relative; z-index: 2; }
-        .crm-search { border: 1px solid #D1D5DB; border-radius: 7px; padding: 8px 12px; font-size: 13px; width: 200px; outline: none; font-family: Calibri, sans-serif; position: relative; z-index: 1; }
-        .crm-select { border: 1px solid #D1D5DB; border-radius: 7px; padding: 8px 10px; font-size: 13px; cursor: pointer; font-family: Calibri, sans-serif; background: #fff; color: #374151; -webkit-appearance: menulist; position: relative; z-index: 1; }
+        .crm-search { border: 1px solid #D1D5DB; border-radius: 7px; padding: 8px 12px; font-size: 13px; width: 200px; outline: none; position: relative; z-index: 1; }
+        .crm-select { border: 1px solid #D1D5DB; border-radius: 7px; padding: 8px 10px; font-size: 13px; cursor: pointer; background: #fff; color: #374151; -webkit-appearance: menulist; position: relative; z-index: 1; }
         .crm-select option { color: #374151; background: #fff; }
         .crm-card { background: #fff; border-radius: 10px; padding: 14px 16px; margin-bottom: 10px; box-shadow: 0 1px 4px rgba(0,0,0,0.06); display: grid; gap: 8px; }
         .crm-card.interested { border-left: 4px solid #065F46; background: #F0FDF4; }
@@ -244,8 +243,6 @@ export default function CRMPage() {
           .crm-spacer { display: none; }
           .crm-desktop-table { display: none !important; }
           .crm-mobile-list { display: block !important; }
-          .crm-header-title { font-size: 15px !important; }
-          .crm-header-sub { display: none; }
         }
         @media (min-width: 641px) {
           .crm-mobile-list { display: none !important; }
@@ -266,17 +263,13 @@ export default function CRMPage() {
         </div>
       )}
 
-      {/* Header */}
-      <div style={{ backgroundColor: "#1A4F8A", color: "#fff", padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo.png" alt="OPS" style={{ height: 36, borderRadius: 6 }} />
-          <div>
-            <div className="crm-header-title" style={{ fontSize: 16, fontWeight: 700 }}>Omkar Power Solutions</div>
-            <div className="crm-header-sub" style={{ fontSize: 12, opacity: 0.8 }}>CRM — AI Calling Dashboard</div>
-          </div>
-        </div>
-        <Link href="/" style={{ color: "#F5A623", fontSize: 13, fontWeight: 600, textDecoration: "none" }}>← Home</Link>
+      {/* Page header — matches the plain title + subtitle pattern used on
+          other pages (Dashboard, Leads, Projects) instead of the old
+          hardcoded blue branding bar with its own "Home" link. Navigation
+          now lives entirely in the shared sidebar. */}
+      <div style={{ padding: "24px 20px 16px", borderBottom: "1px solid #E2E8F0", background: "#fff" }}>
+        <h1 style={{ fontSize: 22, fontWeight: 700, color: "#0F172A", margin: 0 }}>AI Calling</h1>
+        <p style={{ fontSize: 13, color: "#64748B", margin: "4px 0 0" }}>Import leads and let the AI caller work through your pending list.</p>
       </div>
 
       <div style={{ maxWidth: 1200, margin: "0 auto", padding: "16px 12px" }}>

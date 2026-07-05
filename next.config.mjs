@@ -1,5 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  reactStrictMode: false,
+  transpilePackages: ['konva', 'react-konva', 'three'],
   typescript: {
     ignoreBuildErrors: true,
   },
@@ -7,5 +9,4 @@ const nextConfig = {
     unoptimized: true,
   },
 }
-
 export default nextConfig
