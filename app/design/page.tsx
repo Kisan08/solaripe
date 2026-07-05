@@ -9,6 +9,7 @@ import { SolarDesign3D } from '../../components/design/SolarDesign3D';
 import { AddressSearch } from '../../components/map/AddressSearch';
 import { SunPathAnalysis } from '../../components/design/SunPathAnalysis';
 import { getOptimalOrientation } from '../../utils/SolarAPIService';
+import { supabase } from '../../lib/supabase';
 
 /* ── Theme ── */
 const C = {
@@ -165,7 +166,32 @@ export default function DesignPage() {
   useEffect(() => {
     const pid = searchParams.get('projectId');
     if (pid) {
-      loadFromSupabase(pid);
+      (async () => {
+        // loadFromSupabase pulls roofs/panels/obstacles from the DESIGNS
+        // table — it has nothing to do with the project's own identity.
+        await loadFromSupabase(pid);
+        // The client's real name & address live on the PROJECT record itself
+        // (see ProjectCard's "Open in Designer" link — it only ever passes
+        // ?projectId=, never the name/address as params). Fetch that record
+        // directly and let it win over whatever the saved design's own
+        // project_info snapshot had, since the project record is the
+        // authoritative source of truth for who this design is actually for.
+        try {
+          const { data, error } = await supabase
+            .from('projects')
+            .select('client_name, address')
+            .eq('id', pid)
+            .single();
+          if (!error && data) {
+            updateProject({
+              clientName: data.client_name || 'New Client',
+              address: data.address || 'Enter address...',
+            });
+          }
+        } catch (err) {
+          console.error('Could not load project name/address:', err);
+        }
+      })();
     } else {
       const newId = makeProjectId();
       setProjectId(newId);
