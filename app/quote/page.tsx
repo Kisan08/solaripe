@@ -183,7 +183,10 @@ function KpiCard({ label, value, sub, color = BLUE2, bg = LIGHT }: { label: stri
    Fix: wrapped in a flex column with justifyContent: 'space-between' so the
    existing gaps between blocks (hero → client name → KPIs → details →
    "why solar" → partner logos) stretch to fill the full page height instead
-   of leaving dead space at the bottom. Partner logos also enlarged. */
+   of leaving dead space at the bottom. Partner logos also enlarged.
+   Contrast fix: hero overlay darkened from rgba(15,30,61,0.6) to
+   rgba(15,30,61,0.78) and the "TECHNO-COMMERCIAL PROPOSAL" label brought to
+   full opacity — both were washing out against bright sky photos. */
 function P1({ f, c, s, showSiteDetails }: { f: QuoteForm; c: Calc; s: AppSettings; showSiteDetails: boolean }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", flex: 1, justifyContent: "space-between", gap: 0 }}>
@@ -191,9 +194,9 @@ function P1({ f, c, s, showSiteDetails }: { f: QuoteForm; c: Calc; s: AppSetting
         {/* Hero */}
         <div style={{ position: "relative", marginTop: 8, borderRadius: 8, overflow: "hidden" }}>
           <img src="/solar_cover.jpg" alt={s.name} style={{ width: "100%", height: 170, objectFit: "cover", objectPosition: "center top", display: "block" }} />
-          <div style={{ position: "absolute", inset: 0, background: "rgba(15,30,61,0.6)" }} />
+          <div style={{ position: "absolute", inset: 0, background: "rgba(15,30,61,0.78)" }} />
           <div style={{ position: "absolute", bottom: 14, left: 20, color: "white" }}>
-            <div style={{ fontSize: FONT_S, letterSpacing: 2, opacity: 0.85 }}>TECHNO-COMMERCIAL PROPOSAL</div>
+            <div style={{ fontSize: FONT_S, letterSpacing: 2, opacity: 1, fontWeight: 700 }}>TECHNO-COMMERCIAL PROPOSAL</div>
           </div>
           <div style={{ position: "absolute", bottom: 14, right: 16, background: ACCENT, color: NAVY, padding: "6px 14px", borderRadius: 6, fontWeight: 700, fontSize: FONT_L }}>
             {f.systemCapacity} kWp
@@ -689,6 +692,7 @@ function QuotePageInner() {
   }, [])
 
   const [busy, setBusy] = useState(false);
+  const [shareHint, setShareHint] = useState<string | null>(null);
   const c = compute(f);
 
   const onChange = (e: ChangeEvent<HTMLInputElement>) => {
@@ -724,8 +728,27 @@ function QuotePageInner() {
     finally { setBusy(false); }
   };
 
+  // Rewritten to fix the "blob: link shared instead of the PDF" issue.
+  //
+  // Root cause: the previous version gated navigator.share behind a
+  // regex test on navigator.userAgent. That test is unreliable (many
+  // mobile browsers — iPadOS Safari in particular — don't match it), so
+  // it silently fell into the "else" branch: pdf.save() downloads the
+  // file, which on mobile opens the PDF in a browser tab at a blob:
+  // address. If the browser's own share icon on THAT tab gets tapped
+  // (not this app's WhatsApp button), the browser shares its tab's
+  // blob: URL as a plain link — which is dead the moment it leaves that
+  // browser, since blob: URLs only exist inside the tab that created
+  // them. That's exactly the broken link in the screenshot.
+  //
+  // Fix: try the real file-share path directly (Web Share API's
+  // canShare is a much more reliable capability check than UA
+  // sniffing). If it's genuinely unsupported, download the PDF and show
+  // an explicit on-screen instruction to attach it manually inside
+  // WhatsApp — never rely on sharing the browser tab itself.
   const shareWhatsApp = async () => {
     setBusy(true);
+    setShareHint(null);
     try {
       const pdf = await buildPdf();
       const fileName = `Proposal_${f.clientName || "Client"}_${f.systemCapacity}KW.pdf`;
@@ -749,16 +772,34 @@ function QuotePageInner() {
       ].join("\n");
 
       const file = new File([pdf.output("blob")], fileName, { type: "application/pdf" });
-      if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) && navigator.canShare?.({ files: [file] })) {
+      const canShareFile = typeof navigator !== "undefined" && !!navigator.canShare?.({ files: [file] });
+
+      if (canShareFile) {
+        // This is the only path that actually sends the real PDF file.
         await navigator.share({ files: [file], text: msg });
       } else {
+        // Genuine fallback for desktop or browsers without file sharing:
+        // download the PDF, open WhatsApp with the text only, and tell
+        // the user exactly what to do next — don't leave them to
+        // improvise by sharing the downloaded tab's URL.
         pdf.save(fileName);
-        await new Promise(res => setTimeout(res, 1000));
         const phone = f.contactPhone.replace(/\D/g, "");
-        window.open(phone.length >= 10 ? `https://wa.me/91${phone.slice(-10)}?text=${encodeURIComponent(msg)}` : `https://wa.me/?text=${encodeURIComponent(msg)}`, "_blank");
+        window.open(
+          phone.length >= 10
+            ? `https://wa.me/91${phone.slice(-10)}?text=${encodeURIComponent(msg)}`
+            : `https://wa.me/?text=${encodeURIComponent(msg)}`,
+          "_blank"
+        );
+        setShareHint(
+          "Your browser can't attach the file automatically. The PDF has been downloaded, and WhatsApp opened with the message text — in WhatsApp, tap the attachment (📎) icon, choose Document, and select the downloaded PDF from your Downloads folder. Don't share the browser tab or its link — that link won't open for the client."
+        );
       }
-    } catch (err) { console.error(err); alert("Could not share. Download PDF manually."); }
-    finally { setBusy(false); }
+    } catch (err) {
+      console.error(err);
+      alert("Could not share. Try Download PDF and attach it manually in WhatsApp.");
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -782,6 +823,11 @@ function QuotePageInner() {
             </button>
           </div>
         </div>
+        {shareHint && (
+          <div className="max-w-7xl mx-auto mt-3 text-xs leading-relaxed text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
+            {shareHint}
+          </div>
+        )}
       </div>
 
       <div className="max-w-7xl mx-auto px-6 py-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
