@@ -100,11 +100,11 @@ function savingsTable(f: QuoteForm, gen: number) {
 type Calc = ReturnType<typeof compute>;
 
 /* ─── Uniform PDF styles — ONE font size everywhere: 13px ─── */
-const FONT   = 13;
-const FONT_S = 11;
-const FONT_L = 15;
+const FONT   = 15; // was 13 — prints at ~10pt at this page width, too small for comfortable reading
+const FONT_S = 13; // was 11
+const FONT_L = 17; // was 15
 
-const BASE: CSSProperties = { padding: "8px 12px", border: "1px solid #d0d7e2", fontSize: FONT, lineHeight: 1.5 };
+const BASE: CSSProperties = { padding: "10px 14px", border: "1px solid #d0d7e2", fontSize: FONT, lineHeight: 1.6 };
 const TH: CSSProperties   = { ...BASE, background: NAVY, color: "white", fontWeight: 700, textAlign: "left" };
 const TD: CSSProperties   = { ...BASE };
 const LB: CSSProperties   = { ...BASE, background: LIGHT, fontWeight: 600, color: NAVY };
@@ -119,7 +119,7 @@ function PdfHeader({ s }: { s: AppSettings }) {
           <div style={{ color: NAVY, fontWeight: 800, fontSize: 17, letterSpacing: 0.5, marginBottom: 3 }}>
             {s.name.toUpperCase()}
           </div>
-          <div style={{ color: "#555", fontSize: FONT_S, fontStyle: "italic", marginBottom: 3 }}>
+          <div style={{ color: "#555", fontSize: FONT_S, marginBottom: 3 }}>
             Engineering · Procurement · Construction (EPC) – Solar Division
           </div>
           <div style={{ display: "flex", gap: 16, fontSize: FONT_S, color: "#444" }}>
@@ -131,7 +131,7 @@ function PdfHeader({ s }: { s: AppSettings }) {
       </div>
       <div style={{ textAlign: "right" }}>
         <img src="/waaree_logo.png" alt="Waaree" style={{ height: 46, objectFit: "contain", display: "block" }} />
-        <div style={{ fontSize: 9, color: "#999", marginTop: 4, fontStyle: "italic" }}>Authorized Partner</div>
+        <div style={{ fontSize: 9, color: "#4B4B4B", marginTop: 4 }}>Authorized Partner</div>
       </div>
     </div>
   );
@@ -139,7 +139,7 @@ function PdfHeader({ s }: { s: AppSettings }) {
 
 function PdfFooter({ s }: { s: AppSettings }) {
   return (
-    <div style={{ borderTop: "1px solid #ddd", paddingTop: 6, marginTop: "auto", textAlign: "center", color: "#888", fontSize: FONT_S }}>
+    <div style={{ borderTop: "1px solid #ddd", paddingTop: 6, marginTop: "auto", textAlign: "center", color: "#555", fontSize: FONT_S }}>
       {s.name} &nbsp;|&nbsp; {s.phone} &nbsp;|&nbsp; {s.email} &nbsp;|&nbsp; Confidential
     </div>
   );
@@ -153,7 +153,7 @@ function Page({ children, s }: { children: ReactNode; s: AppSettings }) {
       boxSizing: "border-box", display: "flex", flexDirection: "column", pageBreakAfter: "always",
     }}>
       <PdfHeader s={s} />
-      <div style={{ flex: 1, paddingTop: 6 }}>{children}</div>
+      <div style={{ flex: 1, paddingTop: 6, display: "flex", flexDirection: "column" }}>{children}</div>
       <PdfFooter s={s} />
     </div>
   );
@@ -164,7 +164,7 @@ function SectionTitle({ title, sub }: { title: string; sub?: string }) {
     <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "14px 0 8px" }}>
       <div style={{ width: 5, height: 22, background: BLUE2, borderRadius: 2 }} />
       <span style={{ fontWeight: 700, fontSize: FONT_L, color: NAVY, letterSpacing: 0.3 }}>{title.toUpperCase()}</span>
-      {sub && <span style={{ fontSize: FONT_S, color: "#888", fontStyle: "italic" }}>— {sub}</span>}
+      {sub && <span style={{ fontSize: FONT_S, color: "#555" }}>— {sub}</span>}
     </div>
   );
 }
@@ -172,35 +172,41 @@ function SectionTitle({ title, sub }: { title: string; sub?: string }) {
 function KpiCard({ label, value, sub, color = BLUE2, bg = LIGHT }: { label: string; value: string; sub?: string; color?: string; bg?: string }) {
   return (
     <div style={{ background: bg, border: `1px solid ${color}30`, borderRadius: 8, padding: "12px 10px", textAlign: "center" }}>
-      <div style={{ fontSize: FONT_S, color: "#666", fontWeight: 600, letterSpacing: 0.4, textTransform: "uppercase", marginBottom: 5 }}>{label}</div>
+      <div style={{ fontSize: FONT_S, color: "#4B4B4B", fontWeight: 600, letterSpacing: 0.4, textTransform: "uppercase", marginBottom: 5 }}>{label}</div>
       <div style={{ fontSize: 20, fontWeight: 700, color, lineHeight: 1.2 }}>{value}</div>
-      {sub && <div style={{ fontSize: FONT_S, color: "#666", marginTop: 4 }}>{sub}</div>}
+      {sub && <div style={{ fontSize: FONT_S, color: "#4B4B4B", marginTop: 4 }}>{sub}</div>}
     </div>
   );
 }
 
-/* ─── PAGE 1 — Cover ─── */
+/* ─── PAGE 1 — Cover ───
+   Fix: wrapped in a flex column with justifyContent: 'space-between' so the
+   existing gaps between blocks (hero → client name → KPIs → details →
+   "why solar" → partner logos) stretch to fill the full page height instead
+   of leaving dead space at the bottom. Partner logos also enlarged. */
 function P1({ f, c, s, showSiteDetails }: { f: QuoteForm; c: Calc; s: AppSettings; showSiteDetails: boolean }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: 0 }}>
-      {/* Hero */}
-      <div style={{ position: "relative", marginTop: 8, borderRadius: 8, overflow: "hidden" }}>
-        <img src="/solar_cover.jpg" alt={s.name} style={{ width: "100%", height: 170, objectFit: "cover", objectPosition: "center top", display: "block" }} />
-        <div style={{ position: "absolute", inset: 0, background: "rgba(15,30,61,0.6)" }} />
-        <div style={{ position: "absolute", bottom: 14, left: 20, color: "white" }}>
-          <div style={{ fontSize: FONT_S, letterSpacing: 2, opacity: 0.85 }}>TECHNO-COMMERCIAL PROPOSAL</div>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", flex: 1, justifyContent: "space-between", gap: 0 }}>
+      <div>
+        {/* Hero */}
+        <div style={{ position: "relative", marginTop: 8, borderRadius: 8, overflow: "hidden" }}>
+          <img src="/solar_cover.jpg" alt={s.name} style={{ width: "100%", height: 170, objectFit: "cover", objectPosition: "center top", display: "block" }} />
+          <div style={{ position: "absolute", inset: 0, background: "rgba(15,30,61,0.6)" }} />
+          <div style={{ position: "absolute", bottom: 14, left: 20, color: "white" }}>
+            <div style={{ fontSize: FONT_S, letterSpacing: 2, opacity: 0.85 }}>TECHNO-COMMERCIAL PROPOSAL</div>
+          </div>
+          <div style={{ position: "absolute", bottom: 14, right: 16, background: ACCENT, color: NAVY, padding: "6px 14px", borderRadius: 6, fontWeight: 700, fontSize: FONT_L }}>
+            {f.systemCapacity} kWp
+          </div>
         </div>
-        <div style={{ position: "absolute", bottom: 14, right: 16, background: ACCENT, color: NAVY, padding: "6px 14px", borderRadius: 6, fontWeight: 700, fontSize: FONT_L }}>
-          {f.systemCapacity} kWp
-        </div>
-      </div>
 
-      {/* Client name BELOW image */}
-      <div style={{ background: NAVY, borderRadius: 8, padding: "12px 16px", marginTop: 6 }}>
-        <div style={{ fontSize: 17, fontWeight: 700, color: "white", lineHeight: 1.4, wordBreak: "break-word" }}>
-          {f.clientName || "Client Name"}
+        {/* Client name BELOW image */}
+        <div style={{ background: NAVY, borderRadius: 8, padding: "12px 16px", marginTop: 6 }}>
+          <div style={{ fontSize: 17, fontWeight: 700, color: "white", lineHeight: 1.4, wordBreak: "break-word" }}>
+            {f.clientName || "Client Name"}
+          </div>
+          <div style={{ fontSize: FONT, color: "#aac9f0", marginTop: 3 }}>{f.siteAddress || "Site Address"}</div>
         </div>
-        <div style={{ fontSize: FONT, color: "#aac9f0", marginTop: 3 }}>{f.siteAddress || "Site Address"}</div>
       </div>
 
       {/* KPI strip */}
@@ -215,7 +221,7 @@ function P1({ f, c, s, showSiteDetails }: { f: QuoteForm; c: Calc; s: AppSetting
       {showSiteDetails ? (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 }}>
           <div style={{ background: GRAY, borderRadius: 8, padding: "12px 14px" }}>
-            <div style={{ fontSize: FONT_S, color: "#888", fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 8 }}>Proposal Details</div>
+            <div style={{ fontSize: FONT_S, color: "#555", fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 8 }}>Proposal Details</div>
             {[["Proposal No.", f.proposalNo], ["Date", fmtDate(f.date)], ["Valid Until", fmtDate(f.validUntil)]].map(([k, v]) => (
               <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: FONT, paddingBottom: 5, borderBottom: "1px solid #e5e7eb", marginBottom: 5 }}>
                 <span style={{ color: "#555" }}>{k}</span>
@@ -224,7 +230,7 @@ function P1({ f, c, s, showSiteDetails }: { f: QuoteForm; c: Calc; s: AppSetting
             ))}
           </div>
           <div style={{ background: GRAY, borderRadius: 8, padding: "12px 14px" }}>
-            <div style={{ fontSize: FONT_S, color: "#888", fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 8 }}>Site Details</div>
+            <div style={{ fontSize: FONT_S, color: "#555", fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 8 }}>Site Details</div>
             {[["Roof Type", f.roofType], ["Floors", f.floors], ["Shading", f.shadow], ["Contact", f.contactPhone]].map(([k, v]) => (
               <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: FONT, paddingBottom: 5, borderBottom: "1px solid #e5e7eb", marginBottom: 5 }}>
                 <span style={{ color: "#555" }}>{k}</span>
@@ -235,7 +241,7 @@ function P1({ f, c, s, showSiteDetails }: { f: QuoteForm; c: Calc; s: AppSetting
         </div>
       ) : (
         <div style={{ background: GRAY, borderRadius: 8, padding: "12px 14px", marginTop: 10 }}>
-          <div style={{ fontSize: FONT_S, color: "#888", fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 8 }}>Proposal Details</div>
+          <div style={{ fontSize: FONT_S, color: "#555", fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 8 }}>Proposal Details</div>
           {[["Proposal No.", f.proposalNo], ["Date", fmtDate(f.date)], ["Valid Until", fmtDate(f.validUntil)]].map(([k, v]) => (
             <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: FONT, paddingBottom: 5, borderBottom: "1px solid #e5e7eb", marginBottom: 5 }}>
               <span style={{ color: "#555" }}>{k}</span>
@@ -245,8 +251,8 @@ function P1({ f, c, s, showSiteDetails }: { f: QuoteForm; c: Calc; s: AppSetting
         </div>
       )}
 
-      {/* Why Solar strip — removed false claims */}
-      <div style={{ marginTop: 10, background: NAVY, borderRadius: 8, padding: "14px 16px" }}>
+      {/* Why Solar strip */}
+      <div style={{ background: NAVY, borderRadius: 8, padding: "14px 16px" }}>
         <div style={{ fontSize: FONT_S, color: ACCENT, fontWeight: 700, letterSpacing: 1, marginBottom: 10 }}>WHY GO SOLAR NOW?</div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
           {[
@@ -263,125 +269,134 @@ function P1({ f, c, s, showSiteDetails }: { f: QuoteForm; c: Calc; s: AppSetting
         </div>
       </div>
 
-      {/* Partner logos */}
-      <div style={{ marginTop: 10, display: "flex", alignItems: "center", justifyContent: "center", gap: 20 }}>
-        <img src="/waaree_logo.png" alt="Waaree" style={{ height: 34, objectFit: "contain", opacity: 0.85 }} />
-        <img src="/adani_solar.png" alt="Adani" style={{ height: 34, objectFit: "contain", opacity: 0.85 }} />
-        <img src="/premier_energies.png" alt="Premier" style={{ height: 34, objectFit: "contain", opacity: 0.85 }} />
+      {/* Partner logos — enlarged (was height:34, now 60) so this block
+          carries more visual weight at the bottom of the cover page */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 32 }}>
+        <img src="/waaree_logo.png" alt="Waaree" style={{ height: 60, objectFit: "contain", opacity: 0.9 }} />
+        <img src="/adani_solar.png" alt="Adani" style={{ height: 60, objectFit: "contain", opacity: 0.9 }} />
+        <img src="/premier_energies.png" alt="Premier" style={{ height: 60, objectFit: "contain", opacity: 0.9 }} />
       </div>
     </div>
   );
 }
 
-/* ─── PAGE 2 — System + Pricing ─── */
+/* ─── PAGE 2 — System + Pricing ───
+   Fix v2: space-between stretched gaps to consume ALL leftover page space,
+   which ballooned into "too much" when content was shorter than the page.
+   Switched to a fixed, moderate gap instead — predictable spacing that
+   doesn't grow or shrink based on how much room happens to be left. */
 function P2({ f, c }: { f: QuoteForm; c: Calc }) {
   return (
-    <>
-      <SectionTitle title="System Design" sub="Technical configuration" />
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 12 }}>
-        <KpiCard label="Solar Panels" value={`${c.panels}`} sub="Waaree 580 Wp TOPCon" color={BLUE2} bg="#EEF5FF" />
-        <KpiCard label="Inverter" value={`${f.systemCapacity} kW`} sub="Waaree String" color={NAVY} bg={LIGHT} />
-        <KpiCard label="AC Generation" value={`${c.gen.toLocaleString("en-IN")}`} sub="kWh / year" color={GREEN} bg={GREEN_L} />
-        <KpiCard label="Performance Ratio" value="75%" sub="GHI: 1,850 kWh/m2" color="#7C3AED" bg="#F3EEFF" />
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", flex: 1, gap: 22 }}>
+      <div>
+        <SectionTitle title="System Design" sub="Technical configuration" />
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 12 }}>
+          <KpiCard label="Solar Panels" value={`${c.panels}`} sub="Waaree 580 Wp TOPCon" color={BLUE2} bg="#EEF5FF" />
+          <KpiCard label="Inverter" value={`${f.systemCapacity} kW`} sub="Waaree String" color={NAVY} bg={LIGHT} />
+          <KpiCard label="AC Generation" value={`${c.gen.toLocaleString("en-IN")}`} sub="kWh / year" color={GREEN} bg={GREEN_L} />
+          <KpiCard label="Performance Ratio" value="75%" sub="GHI: 1,850 kWh/m2" color="#7C3AED" bg="#F3EEFF" />
+        </div>
+
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <tbody>
+            {[
+              ["Module", "Waaree / Premier TOPCon Bifacial 580 Wp | BIS Compliant", "Structure", "Hot-Dip Galvanized (HDG) | 15-yr warranty"],
+              ["Inverter", `Waaree String ${f.systemCapacity} kW | Grid-tied`, "DC Cable", "4 mm2 Tinned Cu | EN-50618 (Waasol)"],
+              ["Degradation", "0.45% YoY from Year 2", "Timeline", "60-70 days from PO & Advance"],
+              ["Earthing", "Chemical Earth Pits per IS 3043", "Lightning Arrester", "Conventional LA per IEC-62305"],
+            ].map((row, i) => (
+              <tr key={i}>
+                <td style={{ ...LB, width: "16%" }}>{row[0]}</td>
+                <td style={{ ...TD, width: "34%" }}>{row[1]}</td>
+                <td style={{ ...LB, width: "16%" }}>{row[2]}</td>
+                <td style={{ ...TD, width: "34%" }}>{row[3]}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        {f.batteryKwh > 0 && (
+          <>
+            <SectionTitle title="Battery / Hybrid Configuration" />
+            <div style={{ background: "#FFF8EE", border: `1px solid ${ACCENT}40`, borderRadius: 8, padding: "10px 14px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+                <KpiCard label="Battery Capacity" value={`${f.batteryKwh} kWh`} sub="LiFePO4" color={ACCENT} bg="white" />
+                <KpiCard label="Backup Hours" value={`~${Math.round(f.batteryKwh / (f.systemCapacity * 0.4))} hrs`} sub="Estimated" color={ACCENT} bg="white" />
+                <KpiCard label="Battery Type" value="LiFePO4" sub="10-yr warranty" color={ACCENT} bg="white" />
+              </div>
+            </div>
+          </>
+        )}
       </div>
 
-      <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 14 }}>
-        <tbody>
-          {[
-            ["Module", "Waaree / Premier TOPCon Bifacial 580 Wp | BIS Compliant", "Structure", "Hot-Dip Galvanized (HDG) | 15-yr warranty"],
-            ["Inverter", `Waaree String ${f.systemCapacity} kW | Grid-tied`, "DC Cable", "4 mm2 Tinned Cu | EN-50618 (Waasol)"],
-            ["Degradation", "0.45% YoY from Year 2", "Timeline", "60-70 days from PO & Advance"],
-            ["Earthing", "Chemical Earth Pits per IS 3043", "Lightning Arrester", "Conventional LA per IEC-62305"],
-          ].map((row, i) => (
-            <tr key={i}>
-              <td style={{ ...LB, width: "16%" }}>{row[0]}</td>
-              <td style={{ ...TD, width: "34%" }}>{row[1]}</td>
-              <td style={{ ...LB, width: "16%" }}>{row[2]}</td>
-              <td style={{ ...TD, width: "34%" }}>{row[3]}</td>
+      <div>
+        <SectionTitle title="Pricing Breakdown" sub="CAPEX model" />
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead>
+            <tr>
+              <th style={{ ...TH, width: "5%", textAlign: "center" }}>#</th>
+              <th style={TH}>Description</th>
+              <th style={{ ...TH, width: "30%" }}>Rate / Details</th>
+              <th style={{ ...TH, width: "20%", textAlign: "right" }}>Amount</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {[
+              { n: "1", d: "System Capacity", r: `${f.systemCapacity} kWp`, a: "", bold: false, bg: "#fff" },
+              { n: "2", d: "Solar + Infrastructure (excl. GST)", r: `Rs. ${f.ratePerWp} / Wp x ${(f.systemCapacity*1000).toLocaleString("en-IN")} Wp`, a: inrFull(c.exGst), bold: false, bg: "#F5F9FF" },
+              { n: "3", d: "GST @ 8.9%", r: "", a: inrFull(c.gst), bold: false, bg: "#fff" },
+              { n: "4", d: "Total (incl. GST)", r: "", a: inrFull(c.net), bold: true, bg: "#EEF5FF" },
+              ...(f.subsidyTotal > 0 ? [{ n: "5", d: "PM Surya Ghar Subsidy", r: "Direct subsidy amount", a: `- ${inrFull(c.subsidy)}`, bold: false, bg: "#E6F4FF" }] : []),
+            ].map(row => (
+              <tr key={row.n} style={{ background: row.bg }}>
+                <td style={{ ...TD, textAlign: "center" }}>{row.n}</td>
+                <td style={{ ...TD, fontWeight: row.bold ? 700 : 400, color: row.bold ? BLUE2 : "inherit" }}>{row.d}</td>
+                <td style={{ ...TD, color: "#4B4B4B" }}>{row.r}</td>
+                <td style={{ ...TD, textAlign: "right", fontWeight: row.bold ? 700 : 400 }}>{row.a}</td>
+              </tr>
+            ))}
+            <tr style={{ background: NAVY }}>
+              <td colSpan={3} style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: "white", fontWeight: 700, fontSize: FONT_L }}>
+                NET TOTAL (incl. GST)
+              </td>
+              <td style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: ACCENT, fontWeight: 700, fontSize: 16, textAlign: "right" }}>
+                {inrFull(c.net)}
+              </td>
+            </tr>
+            {f.subsidyTotal > 0 && (
+              <tr style={{ background: "#E6F4FF" }}>
+                <td colSpan={3} style={{ padding: "8px 12px", border: "1px solid #d0d7e2", color: "#0369a1", fontSize: FONT }}>
+                  After PM Surya Ghar Subsidy of {inrFull(f.subsidyTotal)} - Net effective cost to society
+                </td>
+                <td style={{ padding: "8px 12px", border: "1px solid #d0d7e2", color: "#0369a1", fontWeight: 600, fontSize: FONT_L, textAlign: "right" }}>
+                  {inrFull(c.netAfterSubsidy)}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
 
-      {f.batteryKwh > 0 && (
-        <>
-          <SectionTitle title="Battery / Hybrid Configuration" />
-          <div style={{ background: "#FFF8EE", border: `1px solid ${ACCENT}40`, borderRadius: 8, padding: "10px 14px", marginBottom: 12 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
-              <KpiCard label="Battery Capacity" value={`${f.batteryKwh} kWh`} sub="LiFePO4" color={ACCENT} bg="white" />
-              <KpiCard label="Backup Hours" value={`~${Math.round(f.batteryKwh / (f.systemCapacity * 0.4))} hrs`} sub="Estimated" color={ACCENT} bg="white" />
-              <KpiCard label="Battery Type" value="LiFePO4" sub="10-yr warranty" color={ACCENT} bg="white" />
+      <div>
+        <SectionTitle title="Payment Schedule" sub="Milestone-based" />
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+          {[
+            { l: "T-1 | 30%", d: "Advance on PO", a: c.t1 },
+            { l: "T-2 | 40%", d: "Material Delivery", a: c.t2 },
+            { l: "T-3 | 20%", d: "Installation & Commissioning", a: c.t3 },
+            { l: "T-4 | 10%", d: "Net Meter & Handover", a: c.t4 },
+          ].map((m, i) => (
+            <div key={i} style={{ background: i === 0 ? NAVY : GRAY, borderRadius: 8, padding: "10px 12px", textAlign: "center", border: `1px solid ${i === 0 ? NAVY : "#e5e7eb"}` }}>
+              <div style={{ fontSize: FONT_S, fontWeight: 700, color: i === 0 ? ACCENT : BLUE2, letterSpacing: 0.5 }}>{m.l}</div>
+              <div style={{ fontSize: FONT_L, fontWeight: 700, color: i === 0 ? "white" : NAVY, margin: "6px 0 4px" }}>{inrFull(m.a)}</div>
+              <div style={{ fontSize: FONT_S, color: i === 0 ? "#aac9f0" : "#4B4B4B" }}>{m.d}</div>
             </div>
-          </div>
-        </>
-      )}
-
-      <SectionTitle title="Pricing Breakdown" sub="CAPEX model" />
-      <table style={{ width: "100%", borderCollapse: "collapse" }}>
-        <thead>
-          <tr>
-            <th style={{ ...TH, width: "5%", textAlign: "center" }}>#</th>
-            <th style={TH}>Description</th>
-            <th style={{ ...TH, width: "30%" }}>Rate / Details</th>
-            <th style={{ ...TH, width: "20%", textAlign: "right" }}>Amount</th>
-          </tr>
-        </thead>
-        <tbody>
-          {[
-            { n: "1", d: "System Capacity", r: `${f.systemCapacity} kWp`, a: "", bold: false, bg: "#fff" },
-            { n: "2", d: "Solar + Infrastructure (excl. GST)", r: `Rs. ${f.ratePerWp} / Wp x ${(f.systemCapacity*1000).toLocaleString("en-IN")} Wp`, a: inrFull(c.exGst), bold: false, bg: "#F5F9FF" },
-            { n: "3", d: "GST @ 8.9%", r: "", a: inrFull(c.gst), bold: false, bg: "#fff" },
-            { n: "4", d: "Total (incl. GST)", r: "", a: inrFull(c.net), bold: true, bg: "#EEF5FF" },
-            ...(f.subsidyTotal > 0 ? [{ n: "5", d: "PM Surya Ghar Subsidy", r: "Direct subsidy amount", a: `- ${inrFull(c.subsidy)}`, bold: false, bg: "#E6F4FF" }] : []),
-          ].map(row => (
-            <tr key={row.n} style={{ background: row.bg }}>
-              <td style={{ ...TD, textAlign: "center" }}>{row.n}</td>
-              <td style={{ ...TD, fontWeight: row.bold ? 700 : 400, color: row.bold ? BLUE2 : "inherit" }}>{row.d}</td>
-              <td style={{ ...TD, color: "#666" }}>{row.r}</td>
-              <td style={{ ...TD, textAlign: "right", fontWeight: row.bold ? 700 : 400 }}>{row.a}</td>
-            </tr>
           ))}
-          {/* NET TOTAL always highlighted */}
-          <tr style={{ background: NAVY }}>
-            <td colSpan={3} style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: "white", fontWeight: 700, fontSize: FONT_L }}>
-              NET TOTAL (incl. GST)
-            </td>
-            <td style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: ACCENT, fontWeight: 700, fontSize: 16, textAlign: "right" }}>
-              {inrFull(c.net)}
-            </td>
-          </tr>
-          {/* Subsidy info row — informational only */}
-          {f.subsidyTotal > 0 && (
-            <tr style={{ background: "#E6F4FF" }}>
-              <td colSpan={3} style={{ padding: "8px 12px", border: "1px solid #d0d7e2", color: "#0369a1", fontSize: FONT }}>
-                After PM Surya Ghar Subsidy of {inrFull(f.subsidyTotal)} - Net effective cost to society
-              </td>
-              <td style={{ padding: "8px 12px", border: "1px solid #d0d7e2", color: "#0369a1", fontWeight: 600, fontSize: FONT_L, textAlign: "right" }}>
-                {inrFull(c.netAfterSubsidy)}
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
-
-      <SectionTitle title="Payment Schedule" sub="Milestone-based" />
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
-        {[
-          { l: "T-1 | 30%", d: "Advance on PO", a: c.t1 },
-          { l: "T-2 | 40%", d: "Material Delivery", a: c.t2 },
-          { l: "T-3 | 20%", d: "Installation & Commissioning", a: c.t3 },
-          { l: "T-4 | 10%", d: "Net Meter & Handover", a: c.t4 },
-        ].map((m, i) => (
-          <div key={i} style={{ background: i === 0 ? NAVY : GRAY, borderRadius: 8, padding: "10px 12px", textAlign: "center", border: `1px solid ${i === 0 ? NAVY : "#e5e7eb"}` }}>
-            <div style={{ fontSize: FONT_S, fontWeight: 700, color: i === 0 ? ACCENT : BLUE2, letterSpacing: 0.5 }}>{m.l}</div>
-            <div style={{ fontSize: FONT_L, fontWeight: 700, color: i === 0 ? "white" : NAVY, margin: "6px 0 4px" }}>{inrFull(m.a)}</div>
-            <div style={{ fontSize: FONT_S, color: i === 0 ? "#aac9f0" : "#666" }}>{m.d}</div>
-          </div>
-        ))}
+        </div>
       </div>
 
       {f.projectType === "OPEX / PPA" && f.ppaRate > 0 && (
-        <>
+        <div>
           <SectionTitle title="OPEX / PPA Model" sub="Alternative to CAPEX" />
           <div style={{ background: "#F3EEFF", border: "1px solid #7C3AED30", borderRadius: 8, padding: "12px 16px" }}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
@@ -393,9 +408,9 @@ function P2({ f, c }: { f: QuoteForm; c: Calc }) {
               Under the OPEX model, {company.name} owns, operates and maintains the solar plant. You pay only for units generated at Rs. {f.ppaRate}/kWh — saving Rs. {(f.gridRate - f.ppaRate).toFixed(2)}/kWh vs current grid rate. Zero CAPEX investment required.
             </div>
           </div>
-        </>
+        </div>
       )}
-    </>
+    </div>
   );
 }
 
@@ -418,12 +433,12 @@ function P3({ f, c }: { f: QuoteForm; c: Calc }) {
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: FONT }}>
         <thead>
           <tr style={{ background: NAVY, color: "white" }}>
-            <th style={{ padding: "7px 8px", border: "1px solid #d0d7e2", textAlign: "center", width: "6%" }}>Year</th>
-            <th style={{ padding: "7px 8px", border: "1px solid #d0d7e2", textAlign: "right" }}>Generation (kWh)</th>
-            <th style={{ padding: "7px 8px", border: "1px solid #d0d7e2", textAlign: "right" }}>Grid Rate (Rs.)</th>
-            <th style={{ padding: "7px 8px", border: "1px solid #d0d7e2", textAlign: "right" }}>Annual Savings</th>
-            <th style={{ padding: "7px 8px", border: "1px solid #d0d7e2", textAlign: "right" }}>Cumulative</th>
-            <th style={{ padding: "7px 8px", border: "1px solid #d0d7e2", textAlign: "right" }}>Net Profit / (Loss)</th>
+            <th style={{ padding: "9px 11px", border: "1px solid #d0d7e2", textAlign: "center", width: "6%" }}>Year</th>
+            <th style={{ padding: "9px 11px", border: "1px solid #d0d7e2", textAlign: "right" }}>Generation (kWh)</th>
+            <th style={{ padding: "9px 11px", border: "1px solid #d0d7e2", textAlign: "right" }}>Grid Rate (Rs.)</th>
+            <th style={{ padding: "9px 11px", border: "1px solid #d0d7e2", textAlign: "right" }}>Annual Savings</th>
+            <th style={{ padding: "9px 11px", border: "1px solid #d0d7e2", textAlign: "right" }}>Cumulative</th>
+            <th style={{ padding: "9px 11px", border: "1px solid #d0d7e2", textAlign: "right" }}>Net Profit / (Loss)</th>
           </tr>
         </thead>
         <tbody>
@@ -432,28 +447,28 @@ function P3({ f, c }: { f: QuoteForm; c: Calc }) {
             const isProfitable = r.profit > 0;
             return (
               <tr key={r.y} style={{ background: isPayback ? "#FFFBEB" : r.y % 2 === 0 ? "#F5F9FF" : "#fff" }}>
-                <td style={{ padding: "6px 8px", border: "1px solid #d0d7e2", textAlign: "center", fontWeight: isPayback ? 700 : 400, color: isPayback ? ACCENT : "inherit" }}>
+                <td style={{ padding: "8px 11px", border: "1px solid #d0d7e2", textAlign: "center", fontWeight: isPayback ? 700 : 400, color: isPayback ? ACCENT : "inherit" }}>
                   {r.y}{isPayback ? " *" : ""}
                 </td>
-                <td style={{ padding: "6px 8px", border: "1px solid #d0d7e2", textAlign: "right" }}>{r.genY.toLocaleString("en-IN")}</td>
-                <td style={{ padding: "6px 8px", border: "1px solid #d0d7e2", textAlign: "right" }}>{r.gridRate.toFixed(2)}</td>
-                <td style={{ padding: "6px 8px", border: "1px solid #d0d7e2", textAlign: "right", fontWeight: 600, color: GREEN }}>{inr(r.savings)}</td>
-                <td style={{ padding: "6px 8px", border: "1px solid #d0d7e2", textAlign: "right", fontWeight: 600 }}>{inr(r.cumSavings)}</td>
-                <td style={{ padding: "6px 8px", border: "1px solid #d0d7e2", textAlign: "right", fontWeight: 700, color: isProfitable ? GREEN : RED }}>
+                <td style={{ padding: "8px 11px", border: "1px solid #d0d7e2", textAlign: "right" }}>{r.genY.toLocaleString("en-IN")}</td>
+                <td style={{ padding: "8px 11px", border: "1px solid #d0d7e2", textAlign: "right" }}>{r.gridRate.toFixed(2)}</td>
+                <td style={{ padding: "8px 11px", border: "1px solid #d0d7e2", textAlign: "right", fontWeight: 600, color: GREEN }}>{inr(r.savings)}</td>
+                <td style={{ padding: "8px 11px", border: "1px solid #d0d7e2", textAlign: "right", fontWeight: 600 }}>{inr(r.cumSavings)}</td>
+                <td style={{ padding: "8px 11px", border: "1px solid #d0d7e2", textAlign: "right", fontWeight: 700, color: isProfitable ? GREEN : RED }}>
                   {isProfitable ? "+" : ""}{inr(r.profit)}
                 </td>
               </tr>
             );
           })}
           <tr style={{ background: NAVY }}>
-            <td colSpan={3} style={{ padding: "8px 10px", border: "1px solid #d0d7e2", color: "white", fontWeight: 700, fontSize: FONT_L }}>TOTAL 25-YEAR SAVINGS</td>
-            <td style={{ padding: "8px 10px", border: "1px solid #d0d7e2", color: ACCENT, fontWeight: 700, textAlign: "right" }}>{inr(total25)}</td>
-            <td style={{ padding: "8px 10px", border: "1px solid #d0d7e2", color: ACCENT, fontWeight: 700, textAlign: "right" }}>{inr(total25)}</td>
-            <td style={{ padding: "8px 10px", border: "1px solid #d0d7e2", color: "#4ade80", fontWeight: 700, textAlign: "right" }}>+{inr(total25 - c.netAfterSubsidy)}</td>
+            <td colSpan={3} style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: "white", fontWeight: 700, fontSize: FONT_L }}>TOTAL 25-YEAR SAVINGS</td>
+            <td style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: ACCENT, fontWeight: 700, textAlign: "right" }}>{inr(total25)}</td>
+            <td style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: ACCENT, fontWeight: 700, textAlign: "right" }}>{inr(total25)}</td>
+            <td style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: "#4ade80", fontWeight: 700, textAlign: "right" }}>+{inr(total25 - c.netAfterSubsidy)}</td>
           </tr>
         </tbody>
       </table>
-      <div style={{ marginTop: 8, fontSize: FONT_S, color: "#888", fontStyle: "italic" }}>
+      <div style={{ marginTop: 8, fontSize: FONT_S, color: "#555" }}>
         * Payback year highlighted. Assumes {GRID_RISE*100}% annual grid tariff escalation and {DEGRADE*100}% panel degradation from Year 2. Actual savings may vary based on usage and local tariff.
       </div>
     </>
@@ -476,7 +491,7 @@ function P4() {
         ].map((w, i) => (
           <div key={i} style={{ border: `1px solid ${w.color}30`, borderRadius: 8, padding: "10px 12px", background: "#FAFCFF" }}>
             <div style={{ fontWeight: 700, color: NAVY, fontSize: FONT }}>{w.item}</div>
-            <div style={{ fontSize: FONT_S, color: "#666", marginTop: 2 }}>{w.cov}</div>
+            <div style={{ fontSize: FONT_S, color: "#4B4B4B", marginTop: 2 }}>{w.cov}</div>
             <div style={{ fontSize: FONT_L, fontWeight: 700, color: w.color, marginTop: 6 }}>{w.period}</div>
           </div>
         ))}
@@ -532,17 +547,22 @@ function P4() {
   );
 }
 
-/* ─── PAGE 5 — Signatures + Clients ─── */
+/* ─── PAGE 5 — Signatures + Clients ───
+   Fix: client logos enlarged (~30-40% bigger across the board) so they
+   genuinely fill the bottom of the page, plus wrapped in a flex column
+   with justifyContent: 'space-between' for full-page spacing. */
 function P5({ f, s }: { f: QuoteForm; s: AppSettings }) {
   return (
-    <>
-      <SectionTitle title="Terms and Acceptance" />
-      <div style={{ background: LIGHT, border: `1px solid ${BLUE2}`, borderRadius: 8, padding: "10px 16px", fontSize: FONT, lineHeight: 1.6, marginBottom: 14 }}>
-        By signing below, both parties agree to the Techno-Commercial Proposal terms.{" "}
-        <span style={{ color: RED, fontWeight: 600 }}>Payments as per milestone schedule. GST as applicable. Proposal valid for 30 days from date above.</span>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", flex: 1, justifyContent: "space-between" }}>
+      <div>
+        <SectionTitle title="Terms and Acceptance" />
+        <div style={{ background: LIGHT, border: `1px solid ${BLUE2}`, borderRadius: 8, padding: "10px 16px", fontSize: FONT, lineHeight: 1.6 }}>
+          By signing below, both parties agree to the Techno-Commercial Proposal terms.{" "}
+          <span style={{ color: RED, fontWeight: 600 }}>Payments as per milestone schedule. GST as applicable. Proposal valid for 30 days from date above.</span>
+        </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         {[
           { title: `FOR ${s.name.toUpperCase()}`, name: s.proprietor || company.proprietor, designation: "Proprietor" },
           { title: `ACCEPTED BY - ${f.clientName?.toUpperCase() || "CLIENT"}`, name: f.clientName || "___________________", designation: "___________________" },
@@ -551,33 +571,35 @@ function P5({ f, s }: { f: QuoteForm; s: AppSettings }) {
             <div style={{ background: i === 0 ? NAVY : BLUE2, color: "white", padding: "8px 14px", fontWeight: 700, fontSize: FONT }}>{sig.title}</div>
             <div style={{ padding: "40px 16px 16px" }}>
               <div style={{ borderTop: "1px solid #aaa", paddingTop: 8, fontSize: FONT }}>
-                <div style={{ color: "#666" }}>Authorised Signatory</div>
+                <div style={{ color: "#4B4B4B" }}>Authorised Signatory</div>
                 <div style={{ fontWeight: 700, marginTop: 4 }}>Name: {sig.name}</div>
                 <div style={{ marginTop: 2 }}>Designation: {sig.designation}</div>
-                <div style={{ marginTop: 8, color: "#666" }}>Date: _______________</div>
-                <div style={{ marginTop: 6, color: "#666" }}>Seal:</div>
+                <div style={{ marginTop: 8, color: "#4B4B4B" }}>Date: _______________</div>
+                <div style={{ marginTop: 6, color: "#4B4B4B" }}>Seal:</div>
               </div>
             </div>
           </div>
         ))}
       </div>
 
-      <SectionTitle title="Our Clients" sub="Trusted by leading developers" />
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 16, flexWrap: "wrap", padding: "8px 0" }}>
-        <img src="/client_hiranandani.jpeg" alt="Hiranandani" style={{ height: 55, objectFit: "contain" }} />
-        <img src="/client_mahavir.jpeg" alt="Mahavir" style={{ height: 42, objectFit: "contain" }} />
-        <img src="/client_jpinfra.jpeg" alt="JP Infra" style={{ height: 46, objectFit: "contain" }} />
-        <img src="/client_lodha.jpeg" alt="Lodha" style={{ height: 42, objectFit: "contain" }} />
-        <img src="/client_triveni.jpeg" alt="Triveni" style={{ height: 55, objectFit: "contain" }} />
-        <img src="/client_regency.jpeg" alt="Regency" style={{ height: 50, objectFit: "contain" }} />
-        <img src="/client_mohan.jpeg" alt="Mohan Group" style={{ height: 55, objectFit: "contain" }} />
+      <div>
+        <SectionTitle title="Our Clients" sub="Trusted by leading developers" />
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 30, flexWrap: "wrap", padding: "20px 0" }}>
+          <img src="/client_hiranandani.jpeg" alt="Hiranandani" style={{ height: 98, objectFit: "contain" }} />
+          <img src="/client_mahavir.jpeg" alt="Mahavir" style={{ height: 76, objectFit: "contain" }} />
+          <img src="/client_jpinfra.jpeg" alt="JP Infra" style={{ height: 84, objectFit: "contain" }} />
+          <img src="/client_lodha.jpeg" alt="Lodha" style={{ height: 76, objectFit: "contain" }} />
+          <img src="/client_triveni.jpeg" alt="Triveni" style={{ height: 98, objectFit: "contain" }} />
+          <img src="/client_regency.jpeg" alt="Regency" style={{ height: 90, objectFit: "contain" }} />
+          <img src="/client_mohan.jpeg" alt="Mohan Group" style={{ height: 98, objectFit: "contain" }} />
+        </div>
       </div>
 
-      <div style={{ marginTop: 14, background: NAVY, color: "white", textAlign: "center", padding: "14px", borderRadius: 8 }}>
+      <div style={{ background: NAVY, color: "white", textAlign: "center", padding: "18px", borderRadius: 8 }}>
         <div style={{ color: ACCENT, fontWeight: 700, fontSize: FONT_L }}>Thank you for choosing {s.name}</div>
         <div style={{ color: "#aac9f0", fontSize: FONT, marginTop: 4 }}>Powering a Greener Tomorrow  |  {s.phone}  |  {s.email}</div>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -707,7 +729,6 @@ function QuotePageInner() {
     try {
       const pdf = await buildPdf();
       const fileName = `Proposal_${f.clientName || "Client"}_${f.systemCapacity}KW.pdf`;
-      // WhatsApp message — investment shown BEFORE subsidy, no emoji question marks
       const msg = [
         `Hello ${f.clientName || ""},`,
         ``,
@@ -742,7 +763,6 @@ function QuotePageInner() {
 
   return (
     <div className="min-h-screen bg-[#F4F6F9]">
-      {/* Top bar */}
       <div className="bg-white border-b border-gray-200 px-6 py-4 sticky top-0 z-10">
         <div className="flex items-center justify-between max-w-7xl mx-auto">
           <div>
@@ -760,16 +780,11 @@ function QuotePageInner() {
               style={{ background: "#25D366" }}>
               WhatsApp
             </button>
-            {/* <button onClick={() => window.print()}
-              className="px-4 py-2.5 rounded-xl text-sm font-medium border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-all">
-              Print
-            </button> */}
           </div>
         </div>
       </div>
 
       <div className="max-w-7xl mx-auto px-6 py-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Form */}
         <div className="space-y-4 lg:sticky lg:top-24 lg:max-h-[calc(100vh-120px)] lg:overflow-y-auto pr-1">
 
           <div className="bg-white rounded-2xl border border-gray-100 p-5">
@@ -878,7 +893,6 @@ function QuotePageInner() {
           </div>
         </div>
 
-        {/* PDF Preview */}
         <div className="overflow-auto rounded-2xl border border-gray-200" style={{ maxHeight: "88vh", background: "#e5e7eb" }}>
           {showPreview ? (
             <div style={{ padding: 16 }}>

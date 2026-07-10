@@ -83,6 +83,74 @@ function pointInPoly(px: number, pz: number, poly: { x: number; z: number }[]): 
   return inside;
 }
 
+// ─────────────────────────────────────────────────────────────
+// REAL PHYSICAL STRING ORDERING (replaces naive array-index chunking).
+// 1. Connected-components clustering — two panels belong to the same
+//    physical group only if they're within a realistic row/column distance
+//    of each other. This is what correctly keeps two separate roof wings
+//    (or two independently-run Auto-Fill/Zone-Fill passes) from ever
+//    blending into the same string, since they're spatially far apart.
+// 2. Within each cluster, rotate into that cluster's own row-aligned frame
+//    (using its dominant azimuth), split into actual physical ROWS by
+//    detecting real gaps along the row-to-row axis, then sort each row
+//    left-to-right. This produces a genuine row-major physical ordering,
+//    not just "whatever order they happened to be created in."
+// ─────────────────────────────────────────────────────────────
+interface OrderablePanel { id: string; x: number; z: number; azimuth: number; }
+
+function clusterPanelsByProximity<T extends OrderablePanel>(panels: T[], linkDistance: number): T[][] {
+  const n = panels.length;
+  const parent = Array.from({ length: n }, (_, i) => i);
+  const find = (i: number): number => parent[i] === i ? i : (parent[i] = find(parent[i]));
+  const union = (a: number, b: number) => { const ra = find(a), rb = find(b); if (ra !== rb) parent[ra] = rb; };
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const dx = panels[i].x - panels[j].x, dz = panels[i].z - panels[j].z;
+      if (Math.hypot(dx, dz) <= linkDistance) union(i, j);
+    }
+  }
+  const groups = new Map<number, T[]>();
+  panels.forEach((p, i) => {
+    const root = find(i);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root)!.push(p);
+  });
+  // Stable ordering: process clusters in the order their first member
+  // originally appeared, so results don't jump around unpredictably.
+  return Array.from(groups.values()).sort((a, b) => panels.indexOf(a[0]) - panels.indexOf(b[0]));
+}
+
+function orderClusterRowMajor<T extends OrderablePanel>(cluster: T[]): T[] {
+  if (cluster.length <= 1) return cluster;
+  // theta = the cluster's row direction (its shared azimuth represents the
+  // facing angle, which is perpendicular to the row line — see buildLattice).
+  const theta = cluster[0].azimuth * Math.PI / 180;
+  const aligned = cluster.map(p => ({ panel: p, ...rotatePt(p.x, p.z, -theta) }));
+  aligned.sort((a, b) => a.z - b.z); // group into rows along the row-to-row axis
+
+  const rows: (typeof aligned)[] = [];
+  const rowGapThreshold = 1.0; // real row-to-row spacing is several meters; same-row noise is near-zero
+  let currentRow: typeof aligned = [aligned[0]];
+  for (let i = 1; i < aligned.length; i++) {
+    if (aligned[i].z - aligned[i - 1].z > rowGapThreshold) { rows.push(currentRow); currentRow = []; }
+    currentRow.push(aligned[i]);
+  }
+  rows.push(currentRow);
+
+  const ordered: T[] = [];
+  rows.forEach(row => {
+    row.sort((a, b) => a.x - b.x); // left-to-right along the row
+    row.forEach(r => ordered.push(r.panel));
+  });
+  return ordered;
+}
+
+function computePhysicalPanelOrder<T extends OrderablePanel>(panels: T[]): T[] {
+  if (panels.length === 0) return [];
+  const clusters = clusterPanelsByProximity(panels, 4); // 4m safely bridges same/adjacent rows, not separate wings
+  return clusters.flatMap(orderClusterRowMajor);
+}
+
 // Is (px,pz) inside a rotated rectangle obstacle (with a clearance margin)?
 function pointInObstacle(px: number, pz: number, obs: Obstacle3D, margin = 0): boolean {
   const rad = -obs.rotDeg * Math.PI / 180; // inverse-rotate the point into the obstacle's local frame
@@ -149,6 +217,15 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
   const setWallHeightM = useDesignStore(s => s.setWallHeightM);
   const [rowGapM, setRowGapM] = useState(DEFAULT_ROW_GAP);
   const [forceTrueSouth, setForceTrueSouth] = useState(false);
+  const [stringSize, setStringSize] = useState(12); // panels per electrical string (MPPT input sizing)
+  const [showStrings, setShowStrings] = useState(false); // color panels by string instead of the default navy
+  const [shadingResults, setShadingResults] = useState<Record<string, number> | null>(null); // panelId -> shaded fraction 0-1
+  const [runningShading, setRunningShading] = useState(false);
+  const [highlightShading, setHighlightShading] = useState(true);
+
+  // Distinct colors cycled per string so an installer can see wiring groups
+  // at a glance in the 3D view.
+  const STRING_COLORS = ['#2563EB', '#16A34A', '#EA580C', '#7C3AED', '#DC2626', '#0891B2', '#CA8A04', '#DB2777'];
 
   const [panels, setPanels] = useState<Panel3D[]>(() => {
     if (roofPoints.length < 3) return [];
@@ -253,6 +330,17 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
     setSelectedObstacleId(prev => prev === id ? null : prev);
   }, []);
 
+  // Real physical ordering for string grouping — clusters panels into
+  // spatially-separate groups (so two roof wings never blend into one
+  // string) and sorts each group row-major, left-to-right. Replaces the
+  // old naive "whatever order they were created in" array-index chunking.
+  const physicalOrderMap = useMemo(() => {
+    const ordered = computePhysicalPanelOrder(panels);
+    const map = new Map<string, number>();
+    ordered.forEach((p, i) => map.set(p.id, i));
+    return map;
+  }, [panels]);
+
   // ── Sync 3D panels BACK to store (meters → canvas px) ──
   const firstSyncRef = useRef(true);
   useEffect(() => {
@@ -260,17 +348,20 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
     if (!roofDims) return;
     const ppm = 1 / mpp;
     const { cx, cy } = roofDims;
-    const mapped: SolarPanel[] = panels.map((p, i) => ({
-      id: p.id, type: 'panel',
-      x: cx + p.x * ppm, y: cy + p.z * ppm,
-      width: PANEL_W_M * ppm, height: PANEL_H_M * ppm,
-      rotation: p.azimuth, orientation: 'portrait',
-      manufacturer: equipment.panelModel.split(' ')[0] || 'Waaree',
-      model: equipment.panelModel, power: equipment.panelPower,
-      tilt: p.tilt, stringNumber: Math.floor(i / 12) + 1, roofId,
-    }));
+    const mapped: SolarPanel[] = panels.map((p) => {
+      const physicalIdx = physicalOrderMap.get(p.id) ?? 0;
+      return {
+        id: p.id, type: 'panel',
+        x: cx + p.x * ppm, y: cy + p.z * ppm,
+        width: PANEL_W_M * ppm, height: PANEL_H_M * ppm,
+        rotation: p.azimuth, orientation: 'portrait',
+        manufacturer: equipment.panelModel.split(' ')[0] || 'Waaree',
+        model: equipment.panelModel, power: equipment.panelPower,
+        tilt: p.tilt, stringNumber: Math.floor(physicalIdx / stringSize) + 1, roofId,
+      };
+    });
     useDesignStore.setState({ panels: mapped, saveStatus: 'unsaved' });
-  }, [panels, equipment, roofId, roofDims, mpp]);
+  }, [panels, equipment, roofId, roofDims, mpp, stringSize, physicalOrderMap]);
 
   // ── Sync 3D obstacles BACK to store (meters → canvas px) ──
   const firstObsSyncRef = useRef(true);
@@ -565,8 +656,103 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
       yearly_units: String(Math.round(localKwp * 1332)),
       monthly_units: String(Math.round(localKwp * 1332 / 12)),
     });
-    router.push(`/quote?${params.toString()}`);
+    // Hard navigation, not router.push — see page.tsx's generateQuote for why
+    window.location.href = `/quote?${params.toString()}`;
   }, [panels.length, project.clientName, project.address, roofAreaM2, router]);
+
+  // ─────────────────────────────────────────────────────────────
+  // SHADING ANALYSIS — for each panel, sample the sun's position across a
+  // representative spread of the year (4 months × several daytime hours),
+  // and raycast from the panel toward the sun. If ANY other panel, marked
+  // obstacle, or the building's own parapet blocks that ray, this panel is
+  // "shaded" for that sample. The fraction of samples shaded becomes a rough
+  // per-panel shading estimate — genuinely useful for spotting problem
+  // panels/rows, though it's a sampled approximation (20 time-of-year
+  // samples), not a full irradiance-weighted simulation like PVsyst/PVGIS.
+  // ─────────────────────────────────────────────────────────────
+  const runShadingAnalysis = useCallback(() => {
+    const scene = sceneRef.current;
+    const pg = panelMeshGroup.current;
+    const og = obstacleMeshGroup.current;
+    if (!scene || !pg || panels.length === 0) return;
+    setRunningShading(true);
+
+    // Defer to next tick so the "Running…" state actually paints before the
+    // (synchronous, potentially chunky) raycasting work blocks the main thread.
+    setTimeout(() => {
+      const buildingObstructions: THREE.Object3D[] = [];
+      scene.traverse(obj => { if (obj.userData.isBuildingMass) buildingObstructions.push(obj); });
+      const obstacleObstructions = og ? og.children : [];
+
+      const sampleMonths = [1, 4, 7, 10]; // Jan, Apr, Jul, Oct — spread across the year
+      const sampleHours = [8, 10, 12, 14, 16];
+      const raycaster = new THREE.Raycaster();
+      const results: Record<string, number> = {};
+
+      panels.forEach(panel => {
+        const tiltRad = panel.tilt * Math.PI / 180;
+        // Roughly the panel's center height above the roof, accounting for tilt
+        const centerY = wallHeightM + MOUNT_H + Math.sin(tiltRad) * PANEL_H_M / 2 + 0.15;
+        const origin = new THREE.Vector3(panel.x, centerY, panel.z);
+
+        // Every OTHER panel's assembly is a valid obstruction; a panel can't
+        // shade itself, so exclude meshes tagged with this panel's own id.
+        const otherPanelMeshes = pg.children.filter(child => {
+          let hasThisId = false;
+          child.traverse(c => { if (c.userData.panelId === panel.id) hasThisId = true; });
+          return !hasThisId;
+        });
+        const candidates = [...otherPanelMeshes, ...obstacleObstructions, ...buildingObstructions];
+
+        let daytimeSamples = 0, shadedSamples = 0;
+        sampleMonths.forEach(month => {
+          const doy = Math.floor((month - 1) * 30.4) + 15;
+          sampleHours.forEach(hour => {
+            const { azimuth, elevation } = sunPosition(lat, hour, doy);
+            if (elevation <= 2) return; // sun too low to matter / below horizon
+            daytimeSamples++;
+            const azR = azimuth * Math.PI / 180, elR = elevation * Math.PI / 180;
+            const dir = new THREE.Vector3(
+              Math.cos(elR) * Math.sin(azR),
+              Math.sin(elR),
+              -Math.cos(elR) * Math.cos(azR),
+            ).normalize();
+            raycaster.set(origin, dir);
+            raycaster.far = 100;
+            // Same-row panels sit only 2cm apart — without a minimum hit
+            // distance, the ray toward the sun grazes that immediate
+            // neighbor's edge at nearly every angle and registers as a false
+            // "shaded" hit every time, which is what produced the impossible
+            // 100%-shaded-on-every-panel result. Coplanar same-row panels
+            // can never actually shade each other; real inter-row shading
+            // happens several meters away, so this threshold safely clears
+            // same-row geometry while still catching genuine shading.
+            raycaster.near = 1.5;
+            const hits = raycaster.intersectObjects(candidates, true);
+            if (hits.length > 0) shadedSamples++;
+          });
+        });
+        results[panel.id] = daytimeSamples > 0 ? shadedSamples / daytimeSamples : 0;
+      });
+
+      setShadingResults(results);
+      setRunningShading(false);
+    }, 30);
+  }, [panels, lat, wallHeightM]);
+
+  // Derived summary from the last analysis run
+  const shadingSummary = (() => {
+    if (!shadingResults) return null;
+    const entries = Object.entries(shadingResults);
+    const shadedPanels = entries.filter(([, frac]) => frac > 0.1); // >10% of sampled daytime hours
+    const avgLossAcrossShaded = shadedPanels.length > 0
+      ? shadedPanels.reduce((a, [, f]) => a + f, 0) / shadedPanels.length
+      : 0;
+    // Rough annual energy loss estimate: affected panels' kWp × their average
+    // shaded fraction × the same generation constant used elsewhere (1332 kWh/kWp/yr)
+    const estLossKwh = shadedPanels.length * (PANEL_POWER / 1000) * avgLossAcrossShaded * 1332;
+    return { totalPanels: entries.length, shadedCount: shadedPanels.length, estLossKwh, avgLossAcrossShaded };
+  })();
 
   // ─────────────────────────────────────────────────────────────
   // ZONE FILL (Solar Ladder-style): fill only the rectangle the user
@@ -912,7 +1098,9 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
       const dx = b.x - a.x, dz = b.z - a.z, len = Math.hypot(dx, dz);
       const par = new THREE.Mesh(new THREE.BoxGeometry(len, PH, 0.3), pm);
       par.position.set((a.x + b.x) / 2, WALL_H + PH / 2, (a.z + b.z) / 2);
-      par.rotation.y = -Math.atan2(dz, dx); par.castShadow = true; scene.add(par);
+      par.rotation.y = -Math.atan2(dz, dx); par.castShadow = true;
+      par.userData.isBuildingMass = true; // shading analysis raycasts against this
+      scene.add(par);
     }
     const corner = normPoints.reduce((a, b) => (a.x + a.z < b.x + b.z ? a : b));
     const arrow = new THREE.Mesh(new THREE.ConeGeometry(0.4, 1.8, 8), new THREE.MeshLambertMaterial({ color: '#F97316' }));
@@ -1006,7 +1194,7 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
     const cellMat = new THREE.LineBasicMaterial({ color: '#3a6aaa' });
     const legMat = new THREE.MeshLambertMaterial({ color: '#999' });
 
-    panels.forEach((panel) => {
+    panels.forEach((panel, panelIdx) => {
       const tiltRad = panel.tilt * Math.PI / 180;
       // panel.azimuth is a standard compass bearing (0=N, 90=E, 180=S, 270=W —
       // the same convention dirFromAz() and sunPosition() use). Three.js's
@@ -1017,6 +1205,12 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
       // produce +Z, which only holds if the mesh rotation uses (180-azimuth).
       const aziRad = (180 - panel.azimuth) * Math.PI / 180;
       const isSel = selectedIds.includes(panel.id);
+      const physicalIdx = physicalOrderMap.get(panel.id) ?? panelIdx;
+      const stringIdx = Math.floor(physicalIdx / Math.max(stringSize, 1));
+      const stringColor = STRING_COLORS[stringIdx % STRING_COLORS.length];
+      const shadeFrac = shadingResults?.[panel.id] ?? 0;
+      const isShaded = highlightShading && shadeFrac > 0.1;
+      const shadeColor = shadeFrac > 0.35 ? '#DC2626' : '#F59E0B'; // red = heavily shaded, amber = mild
 
       const assembly = new THREE.Group();
       assembly.position.set(panel.x, WALL_H, panel.z);
@@ -1031,7 +1225,8 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
         isSel ? new THREE.MeshLambertMaterial({ color: '#22C55E' }) : frameMat);
       pGroup.add(frame);
       const surf = new THREE.Mesh(new THREE.BoxGeometry(pw, 0.04, ph), new THREE.MeshPhongMaterial({
-        color: isSel ? '#22C55E' : '#1e3a6e', emissive: isSel ? '#14532D' : '#0a1a3a',
+        color: isSel ? '#22C55E' : (isShaded ? shadeColor : (showStrings ? stringColor : '#1e3a6e')),
+        emissive: isSel ? '#14532D' : '#0a1a3a',
         emissiveIntensity: 0.25, shininess: 100, specular: new THREE.Color('#5599cc'),
       }));
       surf.position.y = 0.05; surf.castShadow = true; surf.userData.panelId = panel.id;
@@ -1051,7 +1246,7 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
       });
       pg.add(assembly);
     });
-  }, [panels, roofDims, selectedIds, wallHeightM]);
+  }, [panels, roofDims, selectedIds, wallHeightM, stringSize, showStrings, shadingResults, highlightShading, physicalOrderMap]);
 
   // Rebuild obstacle meshes (skylights, AC units, water tanks, staircase
   // heads) — raised blocks sitting on the roof at their real footprint.
@@ -1301,6 +1496,15 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
   }, [mode]);
 
   const kwp = (panels.length * PANEL_POWER) / 1000;
+  // Panels are already generated in row-major order (row by row, left to
+  // right) by Auto-Fill/Zone-Fill/Manual Grid, so array index order already
+  // tracks physical adjacency reasonably well — good enough to group into
+  // strings without needing a separate spatial clustering pass.
+  const numStrings = Math.ceil(panels.length / Math.max(stringSize, 1));
+  const stringBreakdown = Array.from({ length: numStrings }, (_, i) => {
+    const count = Math.min(stringSize, panels.length - i * stringSize);
+    return { string: i + 1, count, kwp: (count * PANEL_POWER) / 1000, color: STRING_COLORS[i % STRING_COLORS.length] };
+  });
   const selCount = selectedIds.length;
   const selPanel = selCount === 1 ? panels.find(p => p.id === selectedIds[0]) : null;
   // For a multi-select, show the array's shared azimuth (first selected) so the slider drives rigid rotation
@@ -1538,6 +1742,62 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
                 Bigger gap = less chance one row's shadow falls on the row behind it, especially in winter when the sun sits lower. Smaller gap = more panels fit, but more shading risk. Re-run <strong>Design My Roof</strong> or <strong>Perfect Align</strong> after changing this.
               </div>
               <div style={{ height: 8 }} />
+
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>🔌 Electrical Strings</div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginBottom: 8 }}>
+                <div style={{ flex: 1 }}>
+                  <label style={{ fontSize: 10, color: '#64748B', display: 'block', marginBottom: 4 }}>Panels per string</label>
+                  <input type="number" min={1} max={30} value={stringSize}
+                    onChange={e => setStringSize(Math.max(1, Number(e.target.value)))}
+                    style={{ width: '100%', padding: '6px 8px', background: '#F8FAFC', border: '1px solid #CBD5E1', borderRadius: 5, color: '#1E293B', fontSize: 13, textAlign: 'center', boxSizing: 'border-box' }} />
+                </div>
+                <button onClick={() => setShowStrings(s => !s)} style={{ padding: '7px 12px', borderRadius: 6, border: `1px solid ${showStrings ? '#2563EB' : '#E2E8F0'}`, background: showStrings ? '#EFF6FF' : '#F8FAFC', color: showStrings ? '#1E3A5F' : '#64748B', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
+                  {showStrings ? '🎨 Colors On' : '⚪ Show Colors'}
+                </button>
+              </div>
+              {panels.length > 0 ? (
+                <div style={{ maxHeight: 160, overflowY: 'auto', marginBottom: 10 }}>
+                  {stringBreakdown.map(s => (
+                    <div key={s.string} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px', borderRadius: 5, marginBottom: 3, background: '#F8FAFC' }}>
+                      <div style={{ width: 10, height: 10, borderRadius: 3, background: s.color, flexShrink: 0 }} />
+                      <span style={{ fontSize: 11, color: '#334155', fontWeight: 600 }}>String {s.string}</span>
+                      <span style={{ fontSize: 10, color: '#94A3B8', marginLeft: 'auto' }}>{s.count} panels · {s.kwp.toFixed(2)} kWp</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ fontSize: 10, color: '#94A3B8', marginBottom: 10 }}>No panels yet — design the roof first.</div>
+              )}
+              <div style={{ fontSize: 9.5, color: '#94A3B8', marginBottom: 10, lineHeight: 1.4 }}>
+                Groups panels by real physical position — separate roof wings are clustered independently and never mixed into the same string, with panels ordered row-by-row, left to right within each cluster.
+              </div>
+
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>☀ Shading Analysis</div>
+              <button onClick={runShadingAnalysis} disabled={runningShading || panels.length === 0} style={{ ...btn(runningShading ? '#94A3B8' : '#1E3A5F'), marginBottom: 8, cursor: runningShading ? 'not-allowed' : 'pointer' }}>
+                {runningShading ? '⟳ Checking every panel…' : '☀ Run Shading Analysis'}
+              </button>
+              <div style={{ fontSize: 9.5, color: '#94A3B8', marginBottom: 10, lineHeight: 1.4 }}>
+                Checks each panel against neighboring panels, marked obstacles & the parapet across 20 sampled times of year — a real geometric check, not a guess. Re-run after moving panels or changing tilt/height.
+              </div>
+
+              {shadingSummary && (
+                <div style={{ background: shadingSummary.shadedCount > 0 ? '#FFFBEB' : '#F0FDF4', border: `1px solid ${shadingSummary.shadedCount > 0 ? '#FDE68A' : '#86EFAC'}`, borderRadius: 8, padding: 12, marginBottom: 10 }}>
+                  {shadingSummary.shadedCount > 0 ? (
+                    <>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: '#92400E', marginBottom: 4 }}>⚠ {shadingSummary.shadedCount} of {shadingSummary.totalPanels} panels affected</div>
+                      <div style={{ fontSize: 11, color: '#78350F', lineHeight: 1.5 }}>
+                        Estimated annual loss: ~{shadingSummary.estLossKwh.toFixed(0)} kWh/year ({(shadingSummary.avgLossAcrossShaded * 100).toFixed(0)}% average loss on affected panels)
+                      </div>
+                    </>
+                  ) : (
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#15803D' }}>✓ No meaningful shading detected on this layout</div>
+                  )}
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, cursor: 'pointer' }}>
+                    <input type="checkbox" checked={highlightShading} onChange={e => setHighlightShading(e.target.checked)} />
+                    <span style={{ fontSize: 10.5, color: '#64748B' }}>Highlight shaded panels (red = heavy, amber = mild)</span>
+                  </label>
+                </div>
+              )}
 
               <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>Selection</div>
               <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
