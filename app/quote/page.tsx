@@ -193,10 +193,43 @@ function P1({ f, c, s, showSiteDetails }: { f: QuoteForm; c: Calc; s: AppSetting
       <div>
         {/* Hero */}
         <div style={{ position: "relative", marginTop: 8, borderRadius: 8, overflow: "hidden" }}>
-          <img src="/solar_cover.jpg" alt={s.name} style={{ width: "100%", height: 170, objectFit: "cover", objectPosition: "center top", display: "block" }} />
-          <div style={{ position: "absolute", inset: 0, background: "rgba(15,30,61,0.78)" }} />
-          <div style={{ position: "absolute", bottom: 14, left: 20, color: "white" }}>
-            <div style={{ fontSize: FONT_S, letterSpacing: 2, opacity: 1, fontWeight: 700 }}>TECHNO-COMMERCIAL PROPOSAL</div>
+          <img
+            src="/solar_cover.jpg"
+            alt={s.name}
+            style={{
+              width: "100%",
+              height: 190,
+              objectFit: "cover",
+              objectPosition: "center center",
+              display: "block",
+              filter: "saturate(1.06) contrast(1.03) brightness(1.02)",
+            }}
+          />
+          {/* Very light overlay only for subtle text readability.
+              The previous rgba(15,30,61,0.78) was making the image look heavily faded. */}
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              background:
+                "linear-gradient(90deg, rgba(8,18,45,0.08) 0%, rgba(8,18,45,0.03) 55%, rgba(8,18,45,0.12) 100%)",
+            }}
+          />
+          <div
+            style={{
+              position: "absolute",
+              bottom: 12,
+              left: 16,
+              color: "white",
+              background: "rgba(8,18,45,0.58)",
+              padding: "5px 10px",
+              borderRadius: 5,
+              backdropFilter: "blur(2px)",
+            }}
+          >
+            <div style={{ fontSize: FONT_S, letterSpacing: 1.8, fontWeight: 700 }}>
+              TECHNO-COMMERCIAL PROPOSAL
+            </div>
           </div>
           <div style={{ position: "absolute", bottom: 14, right: 16, background: ACCENT, color: NAVY, padding: "6px 14px", borderRadius: 6, fontWeight: 700, fontSize: FONT_L }}>
             {f.systemCapacity} kWp
