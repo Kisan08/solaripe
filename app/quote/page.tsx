@@ -738,27 +738,114 @@ function QuotePageInner() {
     setF(p => ({ ...p, [e.target.name]: e.target.value }));
   };
 
+  const waitForImages = async () => {
+    const images = Array.from(
+      document.querySelectorAll<HTMLImageElement>("#quotation-document img")
+    );
+
+    await Promise.all(
+      images.map(
+        (image) =>
+          new Promise<void>((resolve) => {
+            if (image.complete && image.naturalWidth > 0) {
+              resolve();
+              return;
+            }
+
+            const finish = () => resolve();
+            image.addEventListener("load", finish, { once: true });
+            image.addEventListener("error", finish, { once: true });
+          })
+      )
+    );
+  };
+
   const buildPdf = async () => {
     const html2canvas = (await import("html2canvas")).default;
     const jsPDF = (await import("jspdf")).default;
     const pages = document.querySelectorAll<HTMLElement>(".quote-page");
-    const pdf = new jsPDF("p", "mm", "a4");
-    const pw = pdf.internal.pageSize.getWidth();
-    const ph = pdf.internal.pageSize.getHeight();
-    for (let i = 0; i < pages.length; i++) {
-      const canvas = await html2canvas(pages[i], { scale: 2, useCORS: true, logging: false, backgroundColor: "#ffffff", windowWidth: 794 });
-      const img = canvas.toDataURL("image/png");
-      const ih = (canvas.height * pw) / canvas.width;
-      if (i > 0) pdf.addPage();
-      pdf.addImage(img, "PNG", 0, ih < ph ? (ph - ih) / 2 : 0, pw, Math.min(ih, ph));
+
+    if (!pages.length) {
+      throw new Error(
+        "PDF preview is hidden. Turn on Show PDF Preview before downloading."
+      );
     }
+
+    const pdf = new jsPDF({
+      orientation: "portrait",
+      unit: "mm",
+      format: "a4",
+      compress: true,
+      putOnlyUsedFonts: true,
+    });
+
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+
+    for (let i = 0; i < pages.length; i++) {
+      const canvas = await html2canvas(pages[i], {
+        scale: 1.35,
+        useCORS: true,
+        allowTaint: false,
+        logging: false,
+        backgroundColor: "#ffffff",
+        windowWidth: 794,
+        imageTimeout: 15000,
+        removeContainer: true,
+      });
+
+      const imageData = canvas.toDataURL("image/jpeg", 0.78);
+      const renderedHeight = (canvas.height * pageWidth) / canvas.width;
+      const finalHeight = Math.min(renderedHeight, pageHeight);
+      const y = finalHeight < pageHeight ? (pageHeight - finalHeight) / 2 : 0;
+
+      if (i > 0) {
+        pdf.addPage("a4", "portrait");
+      }
+
+      pdf.addImage(
+        imageData,
+        "JPEG",
+        0,
+        y,
+        pageWidth,
+        finalHeight,
+        undefined,
+        "MEDIUM"
+      );
+
+      canvas.width = 1;
+      canvas.height = 1;
+    }
+
+    pdf.setProperties({
+      title: `Proposal for ${f.clientName || "Client"}`,
+      subject: `${f.systemCapacity} kWp Solar Proposal`,
+      author: settings.name,
+      creator: settings.name,
+    });
+
     return pdf;
   };
 
   const downloadPDF = async () => {
     setBusy(true);
-    try { const pdf = await buildPdf(); pdf.save(`Proposal for ${f.clientName || "Client"} ${f.systemCapacity} KW.pdf`); }
-    finally { setBusy(false); }
+    try {
+      await waitForImages();
+      const pdf = await buildPdf();
+      pdf.save(
+        `Proposal for ${f.clientName || "Client"} ${f.systemCapacity} KW.pdf`
+      );
+    } catch (error) {
+      console.error("PDF generation failed:", error);
+      alert(
+        error instanceof Error
+          ? error.message
+          : "Could not generate the PDF. Please try again."
+      );
+    } finally {
+      setBusy(false);
+    }
   };
 
   // Rewritten to fix the "blob: link shared instead of the PDF" issue.
@@ -783,6 +870,7 @@ function QuotePageInner() {
     setBusy(true);
     setShareHint(null);
     try {
+      await waitForImages();
       const pdf = await buildPdf();
       const fileName = `Proposal_${f.clientName || "Client"}_${f.systemCapacity}KW.pdf`;
       const msg = [
