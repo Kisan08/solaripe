@@ -19,7 +19,7 @@ const PANEL_POWER = 580;
 const MOUNT_H = 0.3;       // front leg height (m)
 const COL_GAP = 0.02;      // 2 cm between panels IN a row (frames nearly touching)
 const DEFAULT_ROW_GAP = 1.0; // 1m default anti-shading gap between rows (was 0.6m — too tight, causes inter-row shading at low sun angles)
-const TX = { text: '#1E293B', muted: '#64748B', border: '#E2E8F0', navy: '#1E3A5F', blue: '#2563EB' };
+const TX = { text: 'var(--design-text)', muted: 'var(--design-muted)', border: 'var(--design-border)', navy: 'var(--design-navy)', blue: 'var(--design-primary)' };
 
 function sunPosition(lat: number, hour: number, dayOfYear: number) {
   const rad = Math.PI / 180;
@@ -120,10 +120,13 @@ function clusterPanelsByProximity<T extends OrderablePanel>(panels: T[], linkDis
   return Array.from(groups.values()).sort((a, b) => panels.indexOf(a[0]) - panels.indexOf(b[0]));
 }
 
-function orderClusterRowMajor<T extends OrderablePanel>(cluster: T[]): T[] {
-  if (cluster.length <= 1) return cluster;
-  // theta = the cluster's row direction (its shared azimuth represents the
-  // facing angle, which is perpendicular to the row line — see buildLattice).
+// Split one proximity-cluster into genuine physical ROWS: rotate into the
+// cluster's row-aligned frame (its shared azimuth), detect real row-to-row
+// gaps, and sort each row left-to-right. Shared by the electrical ordering
+// (flattened) and the 3D mount-rack builder (kept as row groups, so a whole
+// row of panels can share one continuous rail/leg structure).
+function splitClusterIntoRows<T extends OrderablePanel>(cluster: T[]): T[][] {
+  if (cluster.length <= 1) return [cluster];
   const theta = cluster[0].azimuth * Math.PI / 180;
   const aligned = cluster.map(p => ({ panel: p, ...rotatePt(p.x, p.z, -theta) }));
   aligned.sort((a, b) => a.z - b.z); // group into rows along the row-to-row axis
@@ -137,18 +140,26 @@ function orderClusterRowMajor<T extends OrderablePanel>(cluster: T[]): T[] {
   }
   rows.push(currentRow);
 
-  const ordered: T[] = [];
-  rows.forEach(row => {
-    row.sort((a, b) => a.x - b.x); // left-to-right along the row
-    row.forEach(r => ordered.push(r.panel));
-  });
-  return ordered;
+  return rows.map(row => row.slice().sort((a, b) => a.x - b.x).map(r => r.panel)); // left-to-right along the row
+}
+
+function orderClusterRowMajor<T extends OrderablePanel>(cluster: T[]): T[] {
+  return splitClusterIntoRows(cluster).flat();
 }
 
 function computePhysicalPanelOrder<T extends OrderablePanel>(panels: T[]): T[] {
   if (panels.length === 0) return [];
   const clusters = clusterPanelsByProximity(panels, 4); // 4m safely bridges same/adjacent rows, not separate wings
   return clusters.flatMap(orderClusterRowMajor);
+}
+
+// Physical mounting rows: same clustering, but kept as row groups (not
+// flattened) so the rack-building code can give one row of panels a single
+// shared rail/leg/brace structure instead of a per-panel leg forest.
+function computePhysicalRows<T extends OrderablePanel>(panels: T[]): T[][] {
+  if (panels.length === 0) return [];
+  const clusters = clusterPanelsByProximity(panels, 4);
+  return clusters.flatMap(splitClusterIntoRows);
 }
 
 // Is (px,pz) inside a rotated rectangle obstacle (with a clearance margin)?
@@ -685,7 +696,14 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
       const obstacleObstructions = og ? og.children : [];
 
       const sampleMonths = [1, 4, 7, 10]; // Jan, Apr, Jul, Oct — spread across the year
-      const sampleHours = [8, 10, 12, 14, 16];
+      // 9am-3pm instead of 8-4: at 8am/4pm the sun is low enough (often
+      // <30° elevation) that even a reasonably-spaced array legitimately
+      // self-shades row-to-row — real, but those hours carry little of the
+      // day's actual energy, so counting them made ordinary, well-spaced
+      // layouts look far more "affected" than their real annual output
+      // loss. Restricting to the hours that carry most of the day's yield
+      // keeps the check meaningful without flagging normal geometry.
+      const sampleHours = [9, 11, 13, 15];
       const raycaster = new THREE.Raycaster();
       const results: Record<string, number> = {};
 
@@ -697,11 +715,14 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
 
         // Every OTHER panel's assembly is a valid obstruction; a panel can't
         // shade itself, so exclude meshes tagged with this panel's own id.
-        const otherPanelMeshes = pg.children.filter(child => {
-          let hasThisId = false;
-          child.traverse(c => { if (c.userData.panelId === panel.id) hasThisId = true; });
-          return !hasThisId;
-        });
+        // `pg` also holds the mounting-rack groups (rails/legs/braces/
+        // ballasts) added alongside the panel assemblies — those never set
+        // userData.panelId, so the old "keep unless tagged with THIS id"
+        // filter silently let every rack group through as an obstruction
+        // for every panel, producing false "shaded by my own racking" hits.
+        // Only real panel assemblies (root has userData.panelId) count.
+        const otherPanelMeshes = pg.children.filter(child =>
+          child.userData.panelId !== undefined && child.userData.panelId !== panel.id);
         const candidates = [...otherPanelMeshes, ...obstacleObstructions, ...buildingObstructions];
 
         let daytimeSamples = 0, shadedSamples = 0;
@@ -1041,7 +1062,7 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
     shape.closePath();
     const bg = new THREE.ExtrudeGeometry(shape, { depth: WALL_H, bevelEnabled: false });
     bg.rotateX(Math.PI / 2); bg.translate(0, WALL_H, 0);
-    const building = new THREE.Mesh(bg, new THREE.MeshLambertMaterial({ color: '#EDE4D3' }));
+    const building = new THREE.Mesh(bg, new THREE.MeshLambertMaterial({ color: '#F5F3EE' }));
     building.castShadow = true; building.receiveShadow = true;
     scene.add(building);
     const rg = new THREE.ShapeGeometry(shape);
@@ -1192,7 +1213,8 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
     const pw = PANEL_W_M, ph = PANEL_H_M;
     const frameMat = new THREE.MeshLambertMaterial({ color: '#2a2a2a' });
     const cellMat = new THREE.LineBasicMaterial({ color: '#3a6aaa' });
-    const legMat = new THREE.MeshLambertMaterial({ color: '#999' });
+    const legMat = new THREE.MeshLambertMaterial({ color: '#4a4a4a' });
+    const ballastMat = new THREE.MeshLambertMaterial({ color: '#e8c93a' });
 
     panels.forEach((panel, panelIdx) => {
       const tiltRad = panel.tilt * Math.PI / 180;
@@ -1239,12 +1261,143 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
         pGroup.add(new THREE.Line(g, cellMat));
       }
       assembly.add(pGroup);
-      const backH = MOUNT_H + Math.sin(tiltRad) * ph, frontH = MOUNT_H;
-      ([[-pw / 2 + 0.08, frontH, ph / 2 - 0.08], [pw / 2 - 0.08, frontH, ph / 2 - 0.08], [-pw / 2 + 0.08, backH, -ph / 2 + 0.08], [pw / 2 - 0.08, backH, -ph / 2 + 0.08]] as [number, number, number][]).forEach(([lx, lh, lz]) => {
-        const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, lh), legMat);
-        leg.position.set(lx, lh / 2, lz); leg.castShadow = true; assembly.add(leg);
-      });
       pg.add(assembly);
+    });
+
+    // Builds one shared rack — front/back rail, a leg+diagonal-brace pair
+    // at each panel boundary plus both ends, and ballast feet — into
+    // `rackGroup` (already positioned/rotated at the run's anchor). `lxs`
+    // are panel-center x offsets in the rack's own local frame, `rowLz` is
+    // their shared depth offset. A run of a single panel degenerates to a
+    // rail exactly one module wide on 2 legs — same visual language as a
+    // full row, just narrower, so short/interrupted runs never look like a
+    // different (denser, individually-legged) structure next to full rows.
+    const buildRack = (rackGroup: THREE.Group, lxs: number[], rowLz: number, tiltRad: number) => {
+      const backH = MOUNT_H + Math.sin(tiltRad) * ph, frontH = MOUNT_H;
+      const rowMinLx = Math.min(...lxs) - pw / 2, rowMaxLx = Math.max(...lxs) + pw / 2;
+      const rowWidth = rowMaxLx - rowMinLx, rowCenterLx = (rowMinLx + rowMaxLx) / 2;
+      const frontZ = rowLz + ph / 2 - 0.08, backZ = rowLz - ph / 2 + 0.08;
+
+      const frontRail = new THREE.Mesh(new THREE.BoxGeometry(rowWidth, 0.05, 0.08), legMat);
+      frontRail.position.set(rowCenterLx, frontH, frontZ); frontRail.castShadow = true;
+      rackGroup.add(frontRail);
+      const backRail = new THREE.Mesh(new THREE.BoxGeometry(rowWidth, 0.05, 0.08), legMat);
+      backRail.position.set(rowCenterLx, backH, backZ); backRail.castShadow = true;
+      rackGroup.add(backRail);
+
+      // Legs at each panel boundary (shared between neighbors) plus both
+      // run ends — far fewer supports than one set per panel.
+      const sortedLx = [...lxs].sort((a, b) => a - b);
+      const legXs = [rowMinLx];
+      for (let i = 0; i < sortedLx.length - 1; i++) legXs.push((sortedLx[i] + sortedLx[i + 1]) / 2);
+      legXs.push(rowMaxLx);
+
+      legXs.forEach(lx => {
+        const frontLeg = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, frontH), legMat);
+        frontLeg.position.set(lx, frontH / 2, frontZ); frontLeg.castShadow = true; rackGroup.add(frontLeg);
+        const backLeg = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, backH), legMat);
+        backLeg.position.set(lx, backH / 2, backZ); backLeg.castShadow = true; rackGroup.add(backLeg);
+
+        // Diagonal rafter, parallel to the panel plane — the truss brace
+        // visible in real ballasted racks running from the front rail up
+        // to the back rail.
+        const braceLen = Math.hypot(backH - frontH, backZ - frontZ);
+        const brace = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.05, braceLen), legMat);
+        brace.position.set(lx, (frontH + backH) / 2, (frontZ + backZ) / 2);
+        brace.rotation.x = -tiltRad; brace.castShadow = true;
+        rackGroup.add(brace);
+
+        // Ballast blocks — weighted concrete feet, matching real roof-mount
+        // racking hardware that doesn't penetrate the roof.
+        const frontBallast = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.09, 0.28), ballastMat);
+        frontBallast.position.set(lx, 0.045, frontZ); frontBallast.castShadow = true; frontBallast.receiveShadow = true;
+        rackGroup.add(frontBallast);
+        const backBallast = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.09, 0.28), ballastMat);
+        backBallast.position.set(lx, 0.045, backZ); backBallast.castShadow = true; backBallast.receiveShadow = true;
+        rackGroup.add(backBallast);
+      });
+    };
+
+    // ── Shared mounting rack per physical ROW (not per panel) ──
+    // Real ballasted roof-mount racking runs one continuous rail under a
+    // whole row of modules, on a handful of triangular leg/brace supports —
+    // not four legs per panel. Building it per-row (instead of per-panel)
+    // is what turns the "forest of poles" look into a clean rack.
+    const rows = computePhysicalRows(panels);
+    rows.forEach(row => {
+      if (row.length === 0) return;
+      const anchor = row[0];
+      const tiltRad = anchor.tilt * Math.PI / 180;
+
+      // A lone panel, or a row whose members don't even share tilt/azimuth
+      // (e.g. manually adjusted individually) has no reliable shared row
+      // direction — give every panel its own single-module-wide rack via
+      // the SAME builder above, so it still reads as the same rack style
+      // rather than a different, denser stand.
+      const sameTiltAzimuth = row.length > 1 && row.every(p =>
+        Math.abs(p.tilt - anchor.tilt) < 0.5 && Math.abs(((p.azimuth - anchor.azimuth + 540) % 360) - 180) < 0.5);
+      if (!sameTiltAzimuth) {
+        row.forEach(p => {
+          const g = new THREE.Group();
+          g.position.set(p.x, wallHeightM, p.z);
+          g.rotation.y = (180 - p.azimuth) * Math.PI / 180;
+          buildRack(g, [0], 0, p.tilt * Math.PI / 180);
+          pg.add(g);
+        });
+        return;
+      }
+
+      // The row's actual yaw, derived from the REAL world positions of its
+      // panels (first→last), not from the azimuth field. buildLattice tiles
+      // rows along the roof's own edge angle, which is not guaranteed to be
+      // exactly the compass azimuth's (180-azimuth) rotation once the roof
+      // itself is drawn at an angle — trusting the azimuth field for this
+      // sent the rack's local frame off at the wrong angle, detaching the
+      // whole rail/leg structure from the roof for anything but an
+      // axis-aligned, due-south layout.
+      const last = row[row.length - 1];
+      const aziRad = Math.atan2(-(last.z - anchor.z), last.x - anchor.x);
+
+      // Undo each panel's world position back into the row's own local
+      // (unrotated, anchor-relative) frame — the exact inverse of how
+      // `assembly` above is placed (position = world pivot, rotation.y =
+      // aziRad) — so rail/leg geometry built here lines up under every
+      // panel regardless of the row's compass heading.
+      // NOTE: rotatePt(x,z,angle) and Three.js's actual rotation.y(angle)
+      // spin in OPPOSITE senses (verify: rotatePt(x,z,a) === threeRotateY(x,z,-a)),
+      // so inverting a Three.js rotation.y=aziRad transform means calling
+      // rotatePt with +aziRad, not -aziRad.
+      const local = row.map(p => ({ panel: p, ...rotatePt(p.x - anchor.x, p.z - anchor.z, aziRad) }));
+      local.sort((a, b) => a.x - b.x);
+      const colPitch = PANEL_W_M + COL_GAP;
+
+      // Proximity clustering (computePhysicalRows) only checks that panels
+      // are within `linkDistance` of SOME neighbor, chained transitively —
+      // across an obstacle gap, or a stepped roof, that can stitch two
+      // unrelated runs into one "row". Splitting into contiguous, collinear
+      // segments here means each real physical run still gets its own
+      // clean shared rack, instead of one bad gap forcing the ENTIRE row
+      // (including otherwise-fine sections) to fall back to individual
+      // stands — which is what made neighboring rows look inconsistent.
+      const segments: (typeof local)[] = [];
+      let seg: typeof local = [local[0]];
+      for (let i = 1; i < local.length; i++) {
+        const gapOk = (local[i].x - local[i - 1].x) < colPitch * 1.8;
+        const segZ = seg.reduce((s, l) => s + l.z, 0) / seg.length;
+        const collinearOk = Math.abs(local[i].z - segZ) < 0.25;
+        if (gapOk && collinearOk) seg.push(local[i]);
+        else { segments.push(seg); seg = [local[i]]; }
+      }
+      segments.push(seg);
+
+      segments.forEach(segLocal => {
+        const rackGroup = new THREE.Group();
+        rackGroup.position.set(anchor.x, wallHeightM, anchor.z);
+        rackGroup.rotation.y = aziRad;
+        const rowLz = segLocal.reduce((s, l) => s + l.z, 0) / segLocal.length;
+        buildRack(rackGroup, segLocal.map(l => l.x), rowLz, tiltRad);
+        pg.add(rackGroup);
+      });
     });
   }, [panels, roofDims, selectedIds, wallHeightM, stringSize, showStrings, shadingResults, highlightShading, physicalOrderMap]);
 
@@ -1522,7 +1675,7 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
 
   if (!roofDims) {
     return (
-      <div style={{ position: 'absolute', inset: 0, zIndex: 10, background: '#F1F5F9', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12 }}>
+      <div style={{ position: 'absolute', inset: 0, zIndex: 10, background: 'var(--design-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12 }}>
         <div style={{ fontSize: 32, opacity: 0.3 }}>⬡</div>
         <p style={{ color: TX.muted, fontSize: 13 }}>Draw a roof in 2D mode first, then open 3D</p>
         <button onClick={onClose} style={{ padding: '6px 16px', borderRadius: 6, border: 'none', background: TX.blue, color: '#fff', fontSize: 12, cursor: 'pointer' }}>← Back to 2D</button>
@@ -1533,47 +1686,47 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
   const btn = (bg: string, color = '#fff'): React.CSSProperties => ({ width: '100%', padding: '9px 0', borderRadius: 8, border: 'none', background: bg, color, fontSize: 12, fontWeight: 600, cursor: 'pointer' });
 
   return (
-    <div style={{ position: 'absolute', inset: 0, zIndex: 10, background: '#F1F5F9', display: 'flex', flexDirection: 'column' }}>
+    <div style={{ position: 'absolute', inset: 0, zIndex: 10, background: 'var(--design-bg)', display: 'flex', flexDirection: 'column' }}>
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', background: '#FFFFFF', borderBottom: '1px solid #E2E8F0', flexShrink: 0 }}>
-        <span style={{ fontSize: 13, fontWeight: 700, color: '#1E293B' }}>{readOnly ? (project.clientName && project.clientName !== 'New Client' ? project.clientName : 'Solar Design') : '3D Solar Designer'}</span>
-        <span style={{ fontSize: 11, color: '#64748B', background: '#F1F5F9', border: '1px solid #E2E8F0', borderRadius: 4, padding: '2px 8px' }}>{panels.length} panels</span>
-        <span style={{ fontSize: 11, color: '#2563EB', background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 4, padding: '2px 8px' }}>{kwp.toFixed(2)} kWp</span>
-        {!readOnly && <span style={{ fontSize: 11, color: '#64748B', background: '#F1F5F9', border: '1px solid #E2E8F0', borderRadius: 4, padding: '2px 8px' }}>Roof {roofDims.widthM.toFixed(1)} × {roofDims.heightM.toFixed(1)} m</span>}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', background: 'var(--design-panel)', borderBottom: '1px solid var(--design-border)', flexShrink: 0 }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--design-text)' }}>{readOnly ? (project.clientName && project.clientName !== 'New Client' ? project.clientName : 'Solar Design') : '3D Solar Designer'}</span>
+        <span style={{ fontSize: 11, color: 'var(--design-muted)', background: 'var(--design-panel-elevated)', border: '1px solid var(--design-border)', borderRadius: 4, padding: '2px 8px' }}>{panels.length} panels</span>
+        <span style={{ fontSize: 11, color: 'var(--design-primary)', background: 'var(--design-info-bg)', border: '1px solid var(--design-info-border)', borderRadius: 4, padding: '2px 8px' }}>{kwp.toFixed(2)} kWp</span>
+        {!readOnly && <span style={{ fontSize: 11, color: 'var(--design-muted)', background: 'var(--design-panel-elevated)', border: '1px solid var(--design-border)', borderRadius: 4, padding: '2px 8px' }}>Roof {roofDims.widthM.toFixed(1)} × {roofDims.heightM.toFixed(1)} m</span>}
         {panels.length > 0 && (
-          <span style={{ fontSize: 11, color: '#1E3A5F', background: '#EEF2FF', border: '1px solid #C7D2FE', borderRadius: 4, padding: '2px 8px' }} title="Which way the panels physically face, computed from the design — not a guess from shadows">
+          <span style={{ fontSize: 11, color: 'var(--design-navy)', background: 'var(--design-info-bg)', border: '1px solid var(--design-info-border)', borderRadius: 4, padding: '2px 8px' }} title="Which way the panels physically face, computed from the design — not a guess from shadows">
             🧭 Panels face {Math.round(panelFacingAz)}° ({dirFromAz(panelFacingAz)})
           </span>
         )}
-        <span style={{ fontSize: 11, color: '#D97706', background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 4, padding: '2px 8px' }} title="Live sun position for the current hour/month sliders below">
+        <span style={{ fontSize: 11, color: 'var(--design-warning-text)', background: 'var(--design-warning-bg)', border: '1px solid var(--design-warning-border)', borderRadius: 4, padding: '2px 8px' }} title="Live sun position for the current hour/month sliders below">
           ☀ Sun {Math.round(liveSun.azimuth)}° ({dirFromAz(liveSun.azimuth)}) · {Math.round(liveSun.elevation)}° up
         </span>
         {!readOnly && obstacles.length > 0 && (
-          <span style={{ fontSize: 11, color: '#C2410C', background: '#FFF7ED', border: '1px solid #FDBA74', borderRadius: 4, padding: '2px 8px' }}>⛔ {obstacles.length} obstacle{obstacles.length > 1 ? 's' : ''} avoided</span>
+          <span style={{ fontSize: 11, color: 'var(--design-obstacle-text)', background: 'var(--design-obstacle-bg)', border: '1px solid var(--design-obstacle-border)', borderRadius: 4, padding: '2px 8px' }}>⛔ {obstacles.length} obstacle{obstacles.length > 1 ? 's' : ''} avoided</span>
         )}
-        {!readOnly && selCount > 0 && <span style={{ fontSize: 11, color: '#1E3A5F', background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 4, padding: '2px 8px' }}>{selCount} selected</span>}
+        {!readOnly && selCount > 0 && <span style={{ fontSize: 11, color: 'var(--design-navy)', background: 'var(--design-info-bg)', border: '1px solid var(--design-info-border)', borderRadius: 4, padding: '2px 8px' }}>{selCount} selected</span>}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
           {readOnly ? (
             <>
-              <button onClick={() => setShowEnv(s => !s)} style={{ padding: '5px 12px', borderRadius: 5, border: '1px solid #E2E8F0', background: showEnv ? '#2563EB' : '#F8FAFC', color: showEnv ? '#fff' : '#64748B', fontSize: 11, cursor: 'pointer' }}>{showEnv ? '🌳 Env ON' : '🌳 Env OFF'}</button>
-              <span style={{ fontSize: 10, color: '#94A3B8' }}>Drag to orbit · scroll to zoom</span>
+              <button onClick={() => setShowEnv(s => !s)} style={{ padding: '5px 12px', borderRadius: 5, border: '1px solid var(--design-border)', background: showEnv ? 'var(--design-primary)' : 'var(--design-input-bg)', color: showEnv ? '#fff' : 'var(--design-muted)', fontSize: 11, cursor: 'pointer' }}>{showEnv ? '🌳 Env ON' : '🌳 Env OFF'}</button>
+              <span style={{ fontSize: 10, color: 'var(--design-muted-2)' }}>Drag to orbit · scroll to zoom</span>
             </>
           ) : (
             <>
               <button
                 onClick={() => setAdvancedMode(a => !a)}
                 title={advancedMode ? 'Switch to the simplified view' : 'Show manual grid, per-panel editing, sun path & more'}
-                style={{ padding: '5px 12px', borderRadius: 5, border: '1px solid #E2E8F0', background: advancedMode ? '#1E293B' : '#F8FAFC', color: advancedMode ? '#fff' : '#475569', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}
+                style={{ padding: '5px 12px', borderRadius: 5, border: '1px solid var(--design-border)', background: advancedMode ? 'var(--design-text)' : 'var(--design-input-bg)', color: advancedMode ? '#fff' : 'var(--design-text-secondary)', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}
               >
                 {advancedMode ? '⚙ Advanced' : '⚡ Simple'}
               </button>
-              <button onClick={() => setShowEnv(s => !s)} style={{ padding: '5px 12px', borderRadius: 5, border: '1px solid #E2E8F0', background: showEnv ? '#2563EB' : '#F8FAFC', color: showEnv ? '#fff' : '#64748B', fontSize: 11, cursor: 'pointer' }}>{showEnv ? '🌳 Env ON' : '🌳 Env OFF'}</button>
-              <div style={{ display: 'flex', gap: 3, background: '#F1F5F9', padding: 3, borderRadius: 8, border: '1px solid #E2E8F0' }}>
+              <button onClick={() => setShowEnv(s => !s)} style={{ padding: '5px 12px', borderRadius: 5, border: '1px solid var(--design-border)', background: showEnv ? 'var(--design-primary)' : 'var(--design-input-bg)', color: showEnv ? '#fff' : 'var(--design-muted)', fontSize: 11, cursor: 'pointer' }}>{showEnv ? '🌳 Env ON' : '🌳 Env OFF'}</button>
+              <div style={{ display: 'flex', gap: 3, background: 'var(--design-panel-elevated)', padding: 3, borderRadius: 8, border: '1px solid var(--design-border)' }}>
                 {([['orbit', '🔄 Orbit'], ['zone', '📐 Zone'], ['select', '⬚ Select'], ['drag', '✋ Move']] as const).map(([m, label]) => (
-                  <button key={m} onClick={() => setMode(m)} style={{ padding: '5px 12px', borderRadius: 6, border: 'none', background: mode === m ? TX.navy : 'transparent', color: mode === m ? '#fff' : '#64748B', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>{label}</button>
+                  <button key={m} onClick={() => setMode(m)} style={{ padding: '5px 12px', borderRadius: 6, border: 'none', background: mode === m ? TX.navy : 'transparent', color: mode === m ? '#fff' : 'var(--design-muted)', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>{label}</button>
                 ))}
               </div>
-              <button onClick={onClose} style={{ padding: '5px 14px', borderRadius: 5, border: 'none', background: '#2563EB', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>← Back to 2D</button>
+              <button onClick={onClose} style={{ padding: '5px 14px', borderRadius: 5, border: 'none', background: 'var(--design-primary)', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>← Back to 2D</button>
             </>
           )}
         </div>
@@ -1582,131 +1735,131 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
         <div ref={mountRef} style={{ flex: 1, position: 'relative', cursor: mode === 'drag' ? 'move' : (mode === 'select' || mode === 'zone') ? 'crosshair' : 'grab' }}>
           {boxSel && (
-            <div style={{ position: 'absolute', border: '1.5px solid #2563EB', background: 'rgba(37,99,235,.1)', left: Math.min(boxSel.x1, boxSel.x2), top: Math.min(boxSel.y1, boxSel.y2), width: Math.abs(boxSel.x2 - boxSel.x1), height: Math.abs(boxSel.y2 - boxSel.y1), pointerEvents: 'none', borderRadius: 2 }} />
+            <div style={{ position: 'absolute', border: '1.5px solid var(--design-primary)', background: 'rgba(37,99,235,.1)', left: Math.min(boxSel.x1, boxSel.x2), top: Math.min(boxSel.y1, boxSel.y2), width: Math.abs(boxSel.x2 - boxSel.x1), height: Math.abs(boxSel.y2 - boxSel.y1), pointerEvents: 'none', borderRadius: 2 }} />
           )}
         </div>
 
-        <div style={{ width: 280, background: '#FFFFFF', borderLeft: '1px solid #E2E8F0', padding: 16, overflowY: 'auto', flexShrink: 0 }}>
+        <div style={{ width: 280, background: 'var(--design-panel)', borderLeft: '1px solid var(--design-border)', padding: 16, overflowY: 'auto', flexShrink: 0 }}>
           {readOnly ? (
             <>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#1E3A5F', marginBottom: 4 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--design-navy)', marginBottom: 4 }}>
                 {project.clientName && project.clientName !== 'New Client' ? project.clientName : 'Proposed Solar System'}
               </div>
               {project.address && project.address !== 'Enter address...' && (
-                <div style={{ fontSize: 11, color: '#64748B', marginBottom: 14 }}>{project.address}</div>
+                <div style={{ fontSize: 11, color: 'var(--design-muted)', marginBottom: 14 }}>{project.address}</div>
               )}
-              <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 8, padding: 14, marginBottom: 16 }}>
-                <div style={{ fontSize: 15, fontWeight: 700, color: '#1E3A5F', marginBottom: 6 }}>{kwp.toFixed(2)} kWp</div>
-                <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.6 }}>
+              <div style={{ background: 'var(--design-info-bg)', border: '1px solid var(--design-info-border)', borderRadius: 8, padding: 14, marginBottom: 16 }}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--design-navy)', marginBottom: 6 }}>{kwp.toFixed(2)} kWp</div>
+                <div style={{ fontSize: 11, color: 'var(--design-text-secondary)', lineHeight: 1.6 }}>
                   {panels.length} panels<br/>
                   Facing {dirFromAz(panelFacingAz)}<br/>
                   Estimated ~{(kwp * 1332 / 1000).toFixed(1)} MWh/year
                 </div>
               </div>
-              <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 12 }}>☀ See the Sun Move</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-text-secondary)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 12 }}>☀ See the Sun Move</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                <button onClick={() => setAnimating(a => !a)} style={{ flex: 1, padding: '8px 0', borderRadius: 7, border: 'none', background: animating ? '#DC2626' : '#16A34A', color: '#fff', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>{animating ? '⏸ Pause' : '▶ Play Day'}</button>
-                <span style={{ fontSize: 13, color: '#1E3A5F', fontWeight: 700, fontFamily: 'monospace' }}>{Math.floor(hour)}:{String(Math.round((hour % 1) * 60)).padStart(2, '0')}</span>
+                <button onClick={() => setAnimating(a => !a)} style={{ flex: 1, padding: '8px 0', borderRadius: 7, border: 'none', background: animating ? 'var(--design-danger-solid)' : 'var(--design-primary)', color: '#fff', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>{animating ? '⏸ Pause' : '▶ Play Day'}</button>
+                <span style={{ fontSize: 13, color: 'var(--design-navy)', fontWeight: 700, fontFamily: 'monospace' }}>{Math.floor(hour)}:{String(Math.round((hour % 1) * 60)).padStart(2, '0')}</span>
               </div>
               <input type="range" min={6} max={19} step={0.25} value={hour} onChange={e => { setHour(Number(e.target.value)); setAnimating(false); }} style={{ width: '100%', accentColor: '#0EA5E9', marginBottom: 4 }} />
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: '#94A3B8', marginBottom: 10 }}><span>6AM</span><span>Noon</span><span>7PM</span></div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: 'var(--design-muted-2)', marginBottom: 10 }}><span>6AM</span><span>Noon</span><span>7PM</span></div>
               <Slider label="Month" value={month} min={1} max={12} color="#0EA5E9" suffix={` ${monthNames[month - 1]}`} onChange={setMonth} />
-              <div style={{ marginTop: 16, fontSize: 9.5, color: '#94A3B8', textAlign: 'center', lineHeight: 1.5 }}>
+              <div style={{ marginTop: 16, fontSize: 9.5, color: 'var(--design-muted-2)', textAlign: 'center', lineHeight: 1.5 }}>
                 Drag to orbit around the building · scroll to zoom · this is a live 3D model of your actual rooftop
               </div>
             </>
           ) : (
           <>
           {/* ── Always visible: the one thing every vendor needs ── */}
-          <div style={{ fontSize: 11, fontWeight: 700, color: '#1E3A5F', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>⚡ Design My Roof</div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-navy)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>⚡ Design My Roof</div>
           <div style={{ marginBottom: 8 }}>
-            <label style={{ fontSize: 10, color: '#64748B', display: 'block', marginBottom: 4 }}>Target System Size (kW) — or set it high to fill the whole roof</label>
+            <label style={{ fontSize: 10, color: 'var(--design-muted)', display: 'block', marginBottom: 4 }}>Target System Size (kW) — or set it high to fill the whole roof</label>
             <input type="number" min={1} max={5000} value={targetKw}
               onChange={e => setTargetKw(Math.max(1, Number(e.target.value)))}
-              style={{ width: '100%', padding: '8px', background: '#F8FAFC', border: '1px solid #CBD5E1', borderRadius: 5, color: '#1E293B', fontSize: 14, fontWeight: 700, textAlign: 'center', boxSizing: 'border-box' }} />
+              style={{ width: '100%', padding: '8px', background: 'var(--design-input-bg)', border: '1px solid var(--design-border)', borderRadius: 5, color: 'var(--design-text)', fontSize: 14, fontWeight: 700, textAlign: 'center', boxSizing: 'border-box' }} />
           </div>
 
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, padding: '8px 10px', background: forceTrueSouth ? '#EFF6FF' : '#F8FAFC', border: `1px solid ${forceTrueSouth ? '#BFDBFE' : '#E2E8F0'}`, borderRadius: 6, cursor: 'pointer' }}>
-            <input type="checkbox" checked={forceTrueSouth} onChange={e => setForceTrueSouth(e.target.checked)} style={{ accentColor: '#2563EB' }} />
-            <span style={{ fontSize: 11, color: '#1E3A5F', fontWeight: 600 }}>☀ Force true south</span>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, padding: '8px 10px', background: forceTrueSouth ? 'var(--design-info-bg)' : 'var(--design-input-bg)', border: `1px solid ${forceTrueSouth ? 'var(--design-info-border)' : 'var(--design-border)'}`, borderRadius: 6, cursor: 'pointer' }}>
+            <input type="checkbox" checked={forceTrueSouth} onChange={e => setForceTrueSouth(e.target.checked)} style={{ accentColor: 'var(--design-primary)' }} />
+            <span style={{ fontSize: 11, color: 'var(--design-navy)', fontWeight: 600 }}>☀ Force true south</span>
           </label>
-          <div style={{ fontSize: 9.5, color: '#94A3B8', marginBottom: 10, lineHeight: 1.4 }}>
+          <div style={{ fontSize: 9.5, color: 'var(--design-muted-2)', marginBottom: 10, lineHeight: 1.4 }}>
             Off (default): rows align to the roof's longest edge for the tightest fit — usually south-facing, but not always, depending on the building's shape. On: rows always run due south, even if that means slightly less efficient use of odd corners. Re-run Design My Roof / Perfect Align after toggling.
           </div>
 
-          <button onClick={() => autoFillToTarget()} style={{ ...btn('#1E3A5F'), marginBottom: 6, fontSize: 14, padding: '13px 0' }}>⚡ Design My Roof</button>
-          <div style={{ fontSize: 10, color: '#94A3B8', marginBottom: panels.length > 0 ? 10 : 16, lineHeight: 1.4 }}>
+          <button onClick={() => autoFillToTarget()} style={{ ...btn('var(--design-navy)'), marginBottom: 6, fontSize: 14, padding: '13px 0' }}>⚡ Design My Roof</button>
+          <div style={{ fontSize: 10, color: 'var(--design-muted-2)', marginBottom: panels.length > 0 ? 10 : 16, lineHeight: 1.4 }}>
             Panels face the optimal direction automatically and route around anything marked below — you don't need to set anything else.
           </div>
 
           {panels.length > 0 && (
-            <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 8, padding: 12, marginBottom: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#1E3A5F', marginBottom: 4 }}>✓ {panels.length} panels · {kwp.toFixed(2)} kWp</div>
-              <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.5, marginBottom: 10 }}>
+            <div style={{ background: 'var(--design-info-bg)', border: '1px solid var(--design-info-border)', borderRadius: 8, padding: 12, marginBottom: 16 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--design-navy)', marginBottom: 4 }}>✓ {panels.length} panels · {kwp.toFixed(2)} kWp</div>
+              <div style={{ fontSize: 11, color: 'var(--design-text-secondary)', lineHeight: 1.5, marginBottom: 10 }}>
                 Estimated ~{(kwp * 1332 / 1000).toFixed(1)} MWh/year — roughly {Math.round(kwp * 1332 / 1200)} average Indian homes' worth of power.
               </div>
-              <button onClick={alignAllToBuilding} style={{ ...btn('#1E3A5F'), fontSize: 11.5, marginBottom: 6 }}>🧭 Perfect Align (fix crossing/overhang)</button>
-              <div style={{ fontSize: 9.5, color: '#64748B', marginBottom: 10, lineHeight: 1.4 }}>
+              <button onClick={alignAllToBuilding} style={{ ...btn('var(--design-navy)'), fontSize: 11.5, marginBottom: 6 }}>🧭 Perfect Align (fix crossing/overhang)</button>
+              <div style={{ fontSize: 9.5, color: 'var(--design-muted)', marginBottom: 10, lineHeight: 1.4 }}>
                 Rebuilds the same panel count freshly aligned to the roof edge — use this instead of manually rotating if things look crossed or hang past the edge.
               </div>
-              <button onClick={exportClientView} style={{ ...btn('#2563EB'), fontSize: 11.5, marginBottom: 6 }}>📸 Export Client View</button>
-              <div style={{ fontSize: 9.5, color: '#64748B', marginBottom: 10, lineHeight: 1.4 }}>
+              <button onClick={exportClientView} style={{ ...btn('var(--design-primary)'), fontSize: 11.5, marginBottom: 6 }}>📸 Export Client View</button>
+              <div style={{ fontSize: 9.5, color: 'var(--design-muted)', marginBottom: 10, lineHeight: 1.4 }}>
                 Orbit to a good angle first, then export — saves a PNG with the client's name, address & system size captioned on it, ready for WhatsApp or the quote PDF.
               </div>
-              <button onClick={generateQuote} style={{ ...btn('#16A34A'), fontSize: 11.5 }}>📄 Generate Quote</button>
-              <div style={{ fontSize: 9.5, color: '#64748B', marginTop: 6, lineHeight: 1.4 }}>
+              <button onClick={generateQuote} style={{ ...btn('var(--design-primary)'), fontSize: 11.5 }}>📄 Generate Quote</button>
+              <div style={{ fontSize: 9.5, color: 'var(--design-muted)', marginTop: 6, lineHeight: 1.4 }}>
                 Opens the quote generator pre-filled with this system's size, panel count & estimated generation.
               </div>
             </div>
           )}
 
           {/* ── Always visible: fill just one area of the roof (Solar Ladder-style) ── */}
-          <div style={{ fontSize: 11, fontWeight: 700, color: '#2563EB', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>📐 Fill a Specific Area</div>
-          <div style={{ fontSize: 10, color: '#94A3B8', marginBottom: 8, lineHeight: 1.4 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-primary)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>📐 Fill a Specific Area</div>
+          <div style={{ fontSize: 10, color: 'var(--design-muted-2)', marginBottom: 8, lineHeight: 1.4 }}>
             Switch to <strong>📐 Zone</strong> above, then drag a box over just the section of roof you want — around a chimney, on one wing of an L-shaped building, whatever you like.
           </div>
           {zoneRect ? (
-            <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 8, padding: 12, marginBottom: 16 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: '#1E3A5F', marginBottom: 8 }}>
+            <div style={{ background: 'var(--design-info-bg)', border: '1px solid var(--design-info-border)', borderRadius: 8, padding: 12, marginBottom: 16 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-navy)', marginBottom: 8 }}>
                 ● Area selected: {Math.abs(zoneRect.x2 - zoneRect.x1).toFixed(1)} × {Math.abs(zoneRect.z2 - zoneRect.z1).toFixed(1)} m
               </div>
-              <label style={{ fontSize: 10, color: '#64748B', display: 'block', marginBottom: 4 }}>Panels for this area (kW)</label>
+              <label style={{ fontSize: 10, color: 'var(--design-muted)', display: 'block', marginBottom: 4 }}>Panels for this area (kW)</label>
               <input type="number" min={0.5} max={500} step={0.5} value={zoneTargetKw}
                 onChange={e => setZoneTargetKw(Math.max(0.5, Number(e.target.value)))}
-                style={{ width: '100%', padding: '7px', background: '#F8FAFC', border: '1px solid #CBD5E1', borderRadius: 5, color: '#1E293B', fontSize: 13, fontWeight: 700, textAlign: 'center', boxSizing: 'border-box', marginBottom: 8 }} />
+                style={{ width: '100%', padding: '7px', background: 'var(--design-input-bg)', border: '1px solid var(--design-border)', borderRadius: 5, color: 'var(--design-text)', fontSize: 13, fontWeight: 700, textAlign: 'center', boxSizing: 'border-box', marginBottom: 8 }} />
               <div style={{ display: 'flex', gap: 6 }}>
-                <button onClick={fillZone} style={{ ...btn('#2563EB'), fontSize: 12 }}>⚡ Fill This Area</button>
-                <button onClick={clearZone} style={{ ...btn('#F8FAFC', '#64748B'), border: '1px solid #E2E8F0', flexShrink: 0, width: 'auto', padding: '9px 14px' }}>✕</button>
+                <button onClick={fillZone} style={{ ...btn('var(--design-primary)'), fontSize: 12 }}>⚡ Fill This Area</button>
+                <button onClick={clearZone} style={{ ...btn('var(--design-input-bg)', 'var(--design-muted)'), border: '1px solid var(--design-border)', flexShrink: 0, width: 'auto', padding: '9px 14px' }}>✕</button>
               </div>
             </div>
           ) : (
-            <div style={{ background: '#F1F5F9', border: '1px solid #E2E8F0', borderRadius: 8, padding: 10, marginBottom: 16, fontSize: 10.5, color: '#64748B', textAlign: 'center', lineHeight: 1.5 }}>
+            <div style={{ background: 'var(--design-panel-elevated)', border: '1px solid var(--design-border)', borderRadius: 8, padding: 10, marginBottom: 16, fontSize: 10.5, color: 'var(--design-muted)', textAlign: 'center', lineHeight: 1.5 }}>
               No area selected yet — drag on the roof in 📐 Zone mode to pick one.
             </div>
           )}
 
           {/* ── Always visible: obstacle marking, needed for accuracy by everyone ── */}
-          <div style={{ fontSize: 11, fontWeight: 700, color: '#EA580C', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>⛔ Mark Roof Obstacles</div>
-          <div style={{ fontSize: 10, color: '#94A3B8', marginBottom: 8, lineHeight: 1.4 }}>Tap what's actually on the roof — water tanks, AC units, staircases — so panels avoid them.</div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-obstacle-text)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>⛔ Mark Roof Obstacles</div>
+          <div style={{ fontSize: 10, color: 'var(--design-muted-2)', marginBottom: 8, lineHeight: 1.4 }}>Tap what's actually on the roof — water tanks, AC units, staircases — so panels avoid them.</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 10 }}>
             {(['AC Unit', 'Water Tank', 'Skylight', 'Staircase', 'Vent'] as const).map(label => (
               <button key={label} onClick={() => addObstacleAtCenter(label)}
-                style={{ padding: '7px 4px', borderRadius: 6, border: '1px solid #FDBA74', background: '#FFF7ED', color: '#9A3412', fontSize: 10.5, fontWeight: 600, cursor: 'pointer' }}>
+                style={{ padding: '7px 4px', borderRadius: 6, border: '1px solid var(--design-obstacle-border)', background: 'var(--design-obstacle-bg)', color: 'var(--design-obstacle-text)', fontSize: 10.5, fontWeight: 600, cursor: 'pointer' }}>
                 + {label}
               </button>
             ))}
           </div>
           {selectedObstacle ? (
-            <div style={{ background: '#FFF7ED', border: '1px solid #FDBA74', borderRadius: 8, padding: 12, marginBottom: 16 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: '#C2410C', marginBottom: 10 }}>● {selectedObstacle.label} selected</div>
-              <Slider label="Width" value={Number(selectedObstacle.w.toFixed(2))} min={0.3} max={5} color="#EA580C" suffix=" m" onChange={v => updateObstacle(selectedObstacle.id, { w: v })} />
-              <Slider label="Depth" value={Number(selectedObstacle.d.toFixed(2))} min={0.3} max={5} color="#EA580C" suffix=" m" onChange={v => updateObstacle(selectedObstacle.id, { d: v })} />
-              <Slider label="Rotation" value={Math.round(selectedObstacle.rotDeg)} min={0} max={360} color="#2563EB" suffix="°" onChange={v => updateObstacle(selectedObstacle.id, { rotDeg: v })} />
-              <div style={{ fontSize: 10, color: '#9A3412', marginBottom: 8, lineHeight: 1.4 }}>Use <strong>✋ Move</strong> to drag it into position, then hit <strong>⚡ Design My Roof</strong> again.</div>
-              <button onClick={() => deleteObstacle(selectedObstacle.id)} style={btn('#DC2626')}>🗑 Delete Obstacle</button>
+            <div style={{ background: 'var(--design-obstacle-bg)', border: '1px solid var(--design-obstacle-border)', borderRadius: 8, padding: 12, marginBottom: 16 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-obstacle-text)', marginBottom: 10 }}>● {selectedObstacle.label} selected</div>
+              <Slider label="Width" value={Number(selectedObstacle.w.toFixed(2))} min={0.3} max={5} color="var(--design-obstacle-text)" suffix=" m" onChange={v => updateObstacle(selectedObstacle.id, { w: v })} />
+              <Slider label="Depth" value={Number(selectedObstacle.d.toFixed(2))} min={0.3} max={5} color="var(--design-obstacle-text)" suffix=" m" onChange={v => updateObstacle(selectedObstacle.id, { d: v })} />
+              <Slider label="Rotation" value={Math.round(selectedObstacle.rotDeg)} min={0} max={360} color="var(--design-primary)" suffix="°" onChange={v => updateObstacle(selectedObstacle.id, { rotDeg: v })} />
+              <div style={{ fontSize: 10, color: 'var(--design-obstacle-text)', marginBottom: 8, lineHeight: 1.4 }}>Use <strong>✋ Move</strong> to drag it into position, then hit <strong>⚡ Design My Roof</strong> again.</div>
+              <button onClick={() => deleteObstacle(selectedObstacle.id)} style={btn('var(--design-danger-solid)')}>🗑 Delete Obstacle</button>
             </div>
           ) : (
-            <div style={{ background: '#F1F5F9', border: '1px solid #E2E8F0', borderRadius: 8, padding: 10, marginBottom: 16, fontSize: 10.5, color: '#64748B', textAlign: 'center', lineHeight: 1.5 }}>
+            <div style={{ background: 'var(--design-panel-elevated)', border: '1px solid var(--design-border)', borderRadius: 8, padding: 10, marginBottom: 16, fontSize: 10.5, color: 'var(--design-muted)', textAlign: 'center', lineHeight: 1.5 }}>
               Tap a type above to place it, then <strong>✋ Move</strong> to position it or click it directly to select, resize & rotate.
             </div>
           )}
@@ -1714,125 +1867,125 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
           {/* ── Advanced-only: manual grids, per-panel editing, sun path, height ── */}
           {advancedMode && (
             <>
-              <div style={{ borderTop: '1px dashed #CBD5E1', margin: '4px 0 16px' }} />
+              <div style={{ borderTop: '1px dashed var(--design-border)', margin: '4px 0 16px' }} />
 
-              <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 12 }}>Manual Grid</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-text-secondary)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 12 }}>Manual Grid</div>
               <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
                 <div style={{ flex: 1 }}>
-                  <label style={{ fontSize: 10, color: '#64748B', display: 'block', marginBottom: 4 }}>Rows</label>
-                  <input type="number" min={1} max={50} value={rows} onChange={e => setRows(Math.max(1, Number(e.target.value)))} style={{ width: '100%', padding: '6px 8px', background: '#F8FAFC', border: '1px solid #CBD5E1', borderRadius: 5, color: '#1E293B', fontSize: 13, textAlign: 'center', boxSizing: 'border-box' }} />
+                  <label style={{ fontSize: 10, color: 'var(--design-muted)', display: 'block', marginBottom: 4 }}>Rows</label>
+                  <input type="number" min={1} max={50} value={rows} onChange={e => setRows(Math.max(1, Number(e.target.value)))} style={{ width: '100%', padding: '6px 8px', background: 'var(--design-input-bg)', border: '1px solid var(--design-border)', borderRadius: 5, color: 'var(--design-text)', fontSize: 13, textAlign: 'center', boxSizing: 'border-box' }} />
                 </div>
-                <div style={{ display: 'flex', alignItems: 'flex-end', paddingBottom: 8, color: '#94A3B8' }}>×</div>
+                <div style={{ display: 'flex', alignItems: 'flex-end', paddingBottom: 8, color: 'var(--design-muted-2)' }}>×</div>
                 <div style={{ flex: 1 }}>
-                  <label style={{ fontSize: 10, color: '#64748B', display: 'block', marginBottom: 4 }}>Cols</label>
-                  <input type="number" min={1} max={50} value={cols} onChange={e => setCols(Math.max(1, Number(e.target.value)))} style={{ width: '100%', padding: '6px 8px', background: '#F8FAFC', border: '1px solid #CBD5E1', borderRadius: 5, color: '#1E293B', fontSize: 13, textAlign: 'center', boxSizing: 'border-box' }} />
+                  <label style={{ fontSize: 10, color: 'var(--design-muted)', display: 'block', marginBottom: 4 }}>Cols</label>
+                  <input type="number" min={1} max={50} value={cols} onChange={e => setCols(Math.max(1, Number(e.target.value)))} style={{ width: '100%', padding: '6px 8px', background: 'var(--design-input-bg)', border: '1px solid var(--design-border)', borderRadius: 5, color: 'var(--design-text)', fontSize: 13, textAlign: 'center', boxSizing: 'border-box' }} />
                 </div>
               </div>
-              <div style={{ fontSize: 10, color: '#64748B', marginBottom: 8 }}>= {rows * cols} panels · {((rows * cols * PANEL_POWER) / 1000).toFixed(2)} kWp · aligned to roof</div>
-              <button onClick={generateGrid} style={{ ...btn('#2563EB'), marginBottom: 6 }}>⊞ Add {rows}×{cols} Grid</button>
-              <button onClick={clearPanels} style={{ ...btn('#F8FAFC', '#64748B'), border: '1px solid #E2E8F0', marginBottom: 16 }}>✕ Clear All</button>
+              <div style={{ fontSize: 10, color: 'var(--design-muted)', marginBottom: 8 }}>= {rows * cols} panels · {((rows * cols * PANEL_POWER) / 1000).toFixed(2)} kWp · aligned to roof</div>
+              <button onClick={generateGrid} style={{ ...btn('var(--design-primary)'), marginBottom: 6 }}>⊞ Add {rows}×{cols} Grid</button>
+              <button onClick={clearPanels} style={{ ...btn('var(--design-input-bg)', 'var(--design-muted)'), border: '1px solid var(--design-border)', marginBottom: 16 }}>✕ Clear All</button>
 
-              <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>Building Height</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-text-secondary)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>Building Height</div>
               <Slider label="Height" value={wallHeightM} min={2} max={30} color="#0EA5E9" suffix="m" onChange={setWallHeightM} />
               <div style={{ height: 8 }} />
 
-              <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>Row Spacing</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-text-secondary)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>Row Spacing</div>
               <Slider label="Gap Between Rows" value={Number(rowGapM.toFixed(1))} min={0.3} max={3} color="#0EA5E9" suffix=" m" onChange={setRowGapM} />
-              <div style={{ fontSize: 10, color: '#94A3B8', marginBottom: 10, lineHeight: 1.4 }}>
+              <div style={{ fontSize: 10, color: 'var(--design-muted-2)', marginBottom: 10, lineHeight: 1.4 }}>
                 Bigger gap = less chance one row's shadow falls on the row behind it, especially in winter when the sun sits lower. Smaller gap = more panels fit, but more shading risk. Re-run <strong>Design My Roof</strong> or <strong>Perfect Align</strong> after changing this.
               </div>
               <div style={{ height: 8 }} />
 
-              <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>🔌 Electrical Strings</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-text-secondary)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>🔌 Electrical Strings</div>
               <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginBottom: 8 }}>
                 <div style={{ flex: 1 }}>
-                  <label style={{ fontSize: 10, color: '#64748B', display: 'block', marginBottom: 4 }}>Panels per string</label>
+                  <label style={{ fontSize: 10, color: 'var(--design-muted)', display: 'block', marginBottom: 4 }}>Panels per string</label>
                   <input type="number" min={1} max={30} value={stringSize}
                     onChange={e => setStringSize(Math.max(1, Number(e.target.value)))}
-                    style={{ width: '100%', padding: '6px 8px', background: '#F8FAFC', border: '1px solid #CBD5E1', borderRadius: 5, color: '#1E293B', fontSize: 13, textAlign: 'center', boxSizing: 'border-box' }} />
+                    style={{ width: '100%', padding: '6px 8px', background: 'var(--design-input-bg)', border: '1px solid var(--design-border)', borderRadius: 5, color: 'var(--design-text)', fontSize: 13, textAlign: 'center', boxSizing: 'border-box' }} />
                 </div>
-                <button onClick={() => setShowStrings(s => !s)} style={{ padding: '7px 12px', borderRadius: 6, border: `1px solid ${showStrings ? '#2563EB' : '#E2E8F0'}`, background: showStrings ? '#EFF6FF' : '#F8FAFC', color: showStrings ? '#1E3A5F' : '#64748B', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
+                <button onClick={() => setShowStrings(s => !s)} style={{ padding: '7px 12px', borderRadius: 6, border: `1px solid ${showStrings ? 'var(--design-primary)' : 'var(--design-border)'}`, background: showStrings ? 'var(--design-info-bg)' : 'var(--design-input-bg)', color: showStrings ? 'var(--design-navy)' : 'var(--design-muted)', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
                   {showStrings ? '🎨 Colors On' : '⚪ Show Colors'}
                 </button>
               </div>
               {panels.length > 0 ? (
                 <div style={{ maxHeight: 160, overflowY: 'auto', marginBottom: 10 }}>
                   {stringBreakdown.map(s => (
-                    <div key={s.string} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px', borderRadius: 5, marginBottom: 3, background: '#F8FAFC' }}>
+                    <div key={s.string} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px', borderRadius: 5, marginBottom: 3, background: 'var(--design-input-bg)' }}>
                       <div style={{ width: 10, height: 10, borderRadius: 3, background: s.color, flexShrink: 0 }} />
-                      <span style={{ fontSize: 11, color: '#334155', fontWeight: 600 }}>String {s.string}</span>
-                      <span style={{ fontSize: 10, color: '#94A3B8', marginLeft: 'auto' }}>{s.count} panels · {s.kwp.toFixed(2)} kWp</span>
+                      <span style={{ fontSize: 11, color: 'var(--design-text)', fontWeight: 600 }}>String {s.string}</span>
+                      <span style={{ fontSize: 10, color: 'var(--design-muted-2)', marginLeft: 'auto' }}>{s.count} panels · {s.kwp.toFixed(2)} kWp</span>
                     </div>
                   ))}
                 </div>
               ) : (
-                <div style={{ fontSize: 10, color: '#94A3B8', marginBottom: 10 }}>No panels yet — design the roof first.</div>
+                <div style={{ fontSize: 10, color: 'var(--design-muted-2)', marginBottom: 10 }}>No panels yet — design the roof first.</div>
               )}
-              <div style={{ fontSize: 9.5, color: '#94A3B8', marginBottom: 10, lineHeight: 1.4 }}>
+              <div style={{ fontSize: 9.5, color: 'var(--design-muted-2)', marginBottom: 10, lineHeight: 1.4 }}>
                 Groups panels by real physical position — separate roof wings are clustered independently and never mixed into the same string, with panels ordered row-by-row, left to right within each cluster.
               </div>
 
-              <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>☀ Shading Analysis</div>
-              <button onClick={runShadingAnalysis} disabled={runningShading || panels.length === 0} style={{ ...btn(runningShading ? '#94A3B8' : '#1E3A5F'), marginBottom: 8, cursor: runningShading ? 'not-allowed' : 'pointer' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-text-secondary)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>☀ Shading Analysis</div>
+              <button onClick={runShadingAnalysis} disabled={runningShading || panels.length === 0} style={{ ...btn(runningShading ? 'var(--design-muted-2)' : 'var(--design-navy)'), marginBottom: 8, cursor: runningShading ? 'not-allowed' : 'pointer' }}>
                 {runningShading ? '⟳ Checking every panel…' : '☀ Run Shading Analysis'}
               </button>
-              <div style={{ fontSize: 9.5, color: '#94A3B8', marginBottom: 10, lineHeight: 1.4 }}>
+              <div style={{ fontSize: 9.5, color: 'var(--design-muted-2)', marginBottom: 10, lineHeight: 1.4 }}>
                 Checks each panel against neighboring panels, marked obstacles & the parapet across 20 sampled times of year — a real geometric check, not a guess. Re-run after moving panels or changing tilt/height.
               </div>
 
               {shadingSummary && (
-                <div style={{ background: shadingSummary.shadedCount > 0 ? '#FFFBEB' : '#F0FDF4', border: `1px solid ${shadingSummary.shadedCount > 0 ? '#FDE68A' : '#86EFAC'}`, borderRadius: 8, padding: 12, marginBottom: 10 }}>
+                <div style={{ background: shadingSummary.shadedCount > 0 ? 'var(--design-warning-bg)' : 'var(--design-success-bg)', border: `1px solid ${shadingSummary.shadedCount > 0 ? 'var(--design-warning-border)' : 'var(--design-success-border)'}`, borderRadius: 8, padding: 12, marginBottom: 10 }}>
                   {shadingSummary.shadedCount > 0 ? (
                     <>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: '#92400E', marginBottom: 4 }}>⚠ {shadingSummary.shadedCount} of {shadingSummary.totalPanels} panels affected</div>
-                      <div style={{ fontSize: 11, color: '#78350F', lineHeight: 1.5 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--design-warning-text)', marginBottom: 4 }}>⚠ {shadingSummary.shadedCount} of {shadingSummary.totalPanels} panels affected</div>
+                      <div style={{ fontSize: 11, color: 'var(--design-warning-text)', lineHeight: 1.5 }}>
                         Estimated annual loss: ~{shadingSummary.estLossKwh.toFixed(0)} kWh/year ({(shadingSummary.avgLossAcrossShaded * 100).toFixed(0)}% average loss on affected panels)
                       </div>
                     </>
                   ) : (
-                    <div style={{ fontSize: 12, fontWeight: 700, color: '#15803D' }}>✓ No meaningful shading detected on this layout</div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--design-success-text)' }}>✓ No meaningful shading detected on this layout</div>
                   )}
                   <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, cursor: 'pointer' }}>
                     <input type="checkbox" checked={highlightShading} onChange={e => setHighlightShading(e.target.checked)} />
-                    <span style={{ fontSize: 10.5, color: '#64748B' }}>Highlight shaded panels (red = heavy, amber = mild)</span>
+                    <span style={{ fontSize: 10.5, color: 'var(--design-muted)' }}>Highlight shaded panels (red = heavy, amber = mild)</span>
                   </label>
                 </div>
               )}
 
-              <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>Selection</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-text-secondary)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>Selection</div>
               <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-                <button onClick={selectAll} style={{ ...btn('#F1F5F9', '#475569'), border: '1px solid #E2E8F0', padding: '7px 0', fontSize: 11 }}>Select All</button>
-                <button onClick={() => setSelectedIds([])} style={{ ...btn('#F1F5F9', '#475569'), border: '1px solid #E2E8F0', padding: '7px 0', fontSize: 11 }}>Deselect</button>
+                <button onClick={selectAll} style={{ ...btn('var(--design-panel-elevated)', 'var(--design-text-secondary)'), border: '1px solid var(--design-border)', padding: '7px 0', fontSize: 11 }}>Select All</button>
+                <button onClick={() => setSelectedIds([])} style={{ ...btn('var(--design-panel-elevated)', 'var(--design-text-secondary)'), border: '1px solid var(--design-border)', padding: '7px 0', fontSize: 11 }}>Deselect</button>
               </div>
               {selCount > 0 && (
-                <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 8, padding: 12, marginBottom: 14 }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: '#1E3A5F', marginBottom: 10 }}>● {selCount} panel{selCount > 1 ? 's' : ''} selected</div>
+                <div style={{ background: 'var(--design-info-bg)', border: '1px solid var(--design-info-border)', borderRadius: 8, padding: 12, marginBottom: 14 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-navy)', marginBottom: 10 }}>● {selCount} panel{selCount > 1 ? 's' : ''} selected</div>
                   <Slider label="Tilt" value={selTilt} min={0} max={45} color="#0EA5E9" suffix="°" onChange={v => updateSelected('tilt', v)} />
-                  <Slider label="Rotate Array" value={Math.round(selAz)} min={0} max={360} color="#2563EB" suffix={`° ${dirFromAz(selAz)}`} onChange={v => updateSelected('azimuth', v)} onDragStart={captureRotateSnapshot} onDragEnd={pruneOutOfBoundsPanels} />
-                  <div style={{ fontSize: 10, color: '#64748B', marginBottom: 8, lineHeight: 1.4 }}>Rotate spins the whole array to match the building angle — rows stay intact.</div>
-                  <button onClick={deleteSelected} style={btn('#DC2626')}>🗑 Delete Selected</button>
+                  <Slider label="Rotate Array" value={Math.round(selAz)} min={0} max={360} color="var(--design-primary)" suffix={`° ${dirFromAz(selAz)}`} onChange={v => updateSelected('azimuth', v)} onDragStart={captureRotateSnapshot} onDragEnd={pruneOutOfBoundsPanels} />
+                  <div style={{ fontSize: 10, color: 'var(--design-muted)', marginBottom: 8, lineHeight: 1.4 }}>Rotate spins the whole array to match the building angle — rows stay intact.</div>
+                  <button onClick={deleteSelected} style={btn('var(--design-danger-solid)')}>🗑 Delete Selected</button>
                 </div>
               )}
               {selCount === 0 && (
-                <div style={{ background: '#F1F5F9', border: '1px solid #E2E8F0', borderRadius: 8, padding: 12, marginBottom: 14, fontSize: 11, color: '#64748B', textAlign: 'center', lineHeight: 1.5 }}>
+                <div style={{ background: 'var(--design-panel-elevated)', border: '1px solid var(--design-border)', borderRadius: 8, padding: 12, marginBottom: 14, fontSize: 11, color: 'var(--design-muted)', textAlign: 'center', lineHeight: 1.5 }}>
                   Use <strong>⬚ Select</strong> to box the array, then <strong>Rotate Array</strong> to align it, or <strong>✋ Move</strong> to reposition.
                 </div>
               )}
 
-              <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 10 }}>Default Tilt / Azimuth</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-text-secondary)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 10 }}>Default Tilt / Azimuth</div>
               <Slider label="Tilt" value={globalTilt} min={0} max={45} color="#0EA5E9" suffix="°" onChange={setGlobalTilt} />
-              <Slider label="Azimuth" value={globalAzimuth} min={0} max={360} color="#2563EB" suffix={`° ${dirFromAz(globalAzimuth)}`} onChange={setGlobalAzimuth} />
-              <button onClick={applyGlobalToAll} style={{ ...btn('#2563EB'), marginBottom: 6 }}>Apply to All Panels</button>
-              <button onClick={() => { setGlobalTilt(15); setGlobalAzimuth(optimalAzimuth); }} style={btn('#1E3A5F')}>☀ Optimal ({optimalAzimuth === 180 ? 'S' : 'N'}, 15°)</button>
+              <Slider label="Azimuth" value={globalAzimuth} min={0} max={360} color="var(--design-primary)" suffix={`° ${dirFromAz(globalAzimuth)}`} onChange={setGlobalAzimuth} />
+              <button onClick={applyGlobalToAll} style={{ ...btn('var(--design-primary)'), marginBottom: 6 }}>Apply to All Panels</button>
+              <button onClick={() => { setGlobalTilt(15); setGlobalAzimuth(optimalAzimuth); }} style={btn('var(--design-navy)')}>☀ Optimal ({optimalAzimuth === 180 ? 'S' : 'N'}, 15°)</button>
 
-              <div style={{ marginTop: 20, borderTop: '1px solid #E2E8F0', paddingTop: 14 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 12 }}>☀ Sun & Shadows</div>
+              <div style={{ marginTop: 20, borderTop: '1px solid var(--design-border)', paddingTop: 14 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-text-secondary)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 12 }}>☀ Sun & Shadows</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                  <button onClick={() => setAnimating(a => !a)} style={{ flex: 1, padding: '8px 0', borderRadius: 7, border: 'none', background: animating ? '#DC2626' : '#16A34A', color: '#fff', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>{animating ? '⏸ Pause' : '▶ Play Day'}</button>
-                  <span style={{ fontSize: 13, color: '#1E3A5F', fontWeight: 700, fontFamily: 'monospace' }}>{Math.floor(hour)}:{String(Math.round((hour % 1) * 60)).padStart(2, '0')}</span>
+                  <button onClick={() => setAnimating(a => !a)} style={{ flex: 1, padding: '8px 0', borderRadius: 7, border: 'none', background: animating ? 'var(--design-danger-solid)' : 'var(--design-primary)', color: '#fff', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>{animating ? '⏸ Pause' : '▶ Play Day'}</button>
+                  <span style={{ fontSize: 13, color: 'var(--design-navy)', fontWeight: 700, fontFamily: 'monospace' }}>{Math.floor(hour)}:{String(Math.round((hour % 1) * 60)).padStart(2, '0')}</span>
                 </div>
                 <input type="range" min={6} max={19} step={0.25} value={hour} onChange={e => { setHour(Number(e.target.value)); setAnimating(false); }} style={{ width: '100%', accentColor: '#0EA5E9', marginBottom: 4 }} />
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: '#94A3B8', marginBottom: 10 }}><span>6AM</span><span>Noon</span><span>7PM</span></div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: 'var(--design-muted-2)', marginBottom: 10 }}><span>6AM</span><span>Noon</span><span>7PM</span></div>
                 <Slider label="Month" value={month} min={1} max={12} color="#0EA5E9" suffix={` ${monthNames[month - 1]}`} onChange={setMonth} />
               </div>
             </>
@@ -1849,7 +2002,7 @@ function Slider({ label, value, min, max, color, suffix, onChange, onDragStart, 
   return (
     <div style={{ marginBottom: 12 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-        <span style={{ fontSize: 11, color: '#64748B' }}>{label}</span>
+        <span style={{ fontSize: 11, color: 'var(--design-muted)' }}>{label}</span>
         <span style={{ fontSize: 11, color, fontWeight: 700 }}>{value}{suffix}</span>
       </div>
       <input

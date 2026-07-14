@@ -1,13 +1,41 @@
 "use client"
 
 import type React from "react"
-import { usePathname } from "next/navigation"
+import { usePathname, useSearchParams } from "next/navigation"
 import { motion } from "framer-motion"
 import { Sidebar } from "@/components/sidebar"
 import { BottomNav } from "@/components/bottom-nav"
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
+  const searchParams = useSearchParams()
+
+  // The Design workspace is a CAD-style tool, not a dashboard page — it
+  // needs the full available width instead of sitting in the centered
+  // max-w-7xl column every other page uses. This ONLY removes that width
+  // cap + centering for /design; the sidebar's own fixed positioning and
+  // the .app-content padding-left push/hover-expand mechanics below are
+  // completely untouched, so the global rail behaves identically on every
+  // other route.
+  const isDesignRoute = pathname?.startsWith("/design")
+
+  // Client View (?client=1 on /design) must hide global navigation
+  // entirely, not just visually cover it with a fixed/z-9999 overlay —
+  // that left the Sidebar and BottomNav still mounted underneath. AppShell
+  // is the workspace-level layout that actually controls whether those
+  // mount at all, so this is a real bypass: a client opening a shared
+  // design link never renders any internal navigation chrome, and there's
+  // nothing for the page itself to "escape" from anymore.
+  const isDesignClientView = isDesignRoute && searchParams.get("client") === "1"
+
+  // The dashboard entry transition (fade+slide via motion.div, keyed on
+  // pathname) is what was causing Konva/Three.js canvas measurement churn
+  // on the Design page — every mount was treated as a fresh page transition.
+  // The Design workspace manages its own internal state transitions (panel
+  // open/close, mode switches) and doesn't need this wrapper at all.
+  if (isDesignClientView) {
+    return <div className="min-h-screen bg-background">{children}</div>
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -27,15 +55,25 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         }
       `}</style>
       <div className="app-content">
-        <main className="mx-auto min-h-screen w-full max-w-7xl pb-24 md:pb-0">
-          <motion.div
-            key={pathname}
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.2, ease: "easeOut" }}
-          >
-            {children}
-          </motion.div>
+        <main
+          className={
+            isDesignRoute
+              ? "min-h-screen w-full"
+              : "mx-auto min-h-screen w-full max-w-7xl pb-24 md:pb-0"
+          }
+        >
+          {isDesignRoute ? (
+            children
+          ) : (
+            <motion.div
+              key={pathname}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.2, ease: "easeOut" }}
+            >
+              {children}
+            </motion.div>
+          )}
         </main>
       </div>
       <BottomNav />

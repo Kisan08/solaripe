@@ -37,13 +37,14 @@ export function useKeyboardShortcuts() {
         clearSelection();
       }
 
-      // Tool shortcuts
+      // Tool shortcuts. 'o' intentionally not mapped to the 'obstacle' tool —
+      // obstacle creation/resize/rotation is 3D-only now; obstacles are
+      // still visible/selectable/deletable in 2D via the tools below.
       const toolKeys: Record<string, any> = {
         'v': 'select',
         'm': 'move',
         'p': 'polygon',
         'r': 'rectangle',
-        'o': 'obstacle',
         's': 'panel',
         'd': 'delete',
         'e': 'measure',

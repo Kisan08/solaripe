@@ -49,12 +49,12 @@ const GridLayer = React.memo(({ width, height, scale, offset }: {
   for (let i = 0; i <= cols; i++) {
     const x = startX + i * step;
     lines.push(<Line key={`vg${i}`} points={[x, startY, x, startY + rows * step]}
-      stroke="#1E293B" strokeWidth={0.5 / scale} />);
+      stroke="#1E293B" strokeWidth={0.5 / scale} opacity={0.35} />);
   }
   for (let j = 0; j <= rows; j++) {
     const y = startY + j * step;
     lines.push(<Line key={`hg${j}`} points={[startX, y, startX + cols * step, y]}
-      stroke="#1E293B" strokeWidth={0.5 / scale} />);
+      stroke="#1E293B" strokeWidth={0.5 / scale} opacity={0.35} />);
   }
   return <>{lines}</>;
 });
@@ -241,6 +241,7 @@ export function DesignCanvas({ width, height, mapElement }: DesignCanvasProps) {
     removePanel, removeObstacle,
     drawingPoints, addDrawingPoint, clearDrawing, setDrawingPoints,
     showGrid, snapEnabled, setCursorPos, equipment,
+    layerVisibility,
   } = useDesignStore();
 
   const stageRef = useRef<Konva.Stage>(null);
@@ -530,9 +531,12 @@ export function DesignCanvas({ width, height, mapElement }: DesignCanvasProps) {
         onDblClick={handleDblClick}
         style={{ cursor: isPanning ? 'grabbing' : undefined }}
       >
-        {/* Grid */}
-        {showGrid && (
-          <Layer>
+        {/* Grid — only while actively tracing, not while navigating/idle.
+            The grid is a drawing aid for snapping roof points; showing it
+            any other time just adds visual noise on top of the satellite
+            image and makes roof edges harder to see. */}
+        {showGrid && (activeTool === 'rectangle' || activeTool === 'polygon') && (
+          <Layer listening={false}>
             <GridLayer width={width} height={height} scale={scale} offset={offset} />
           </Layer>
         )}
@@ -540,7 +544,7 @@ export function DesignCanvas({ width, height, mapElement }: DesignCanvasProps) {
         {/* Main design layer */}
         <Layer>
           {/* Roofs */}
-          {roofs.map(roof => (
+          {layerVisibility.roof && roofs.map(roof => (
             <RoofShape
               key={roof.id}
               roof={roof}
@@ -560,7 +564,7 @@ export function DesignCanvas({ width, height, mapElement }: DesignCanvasProps) {
           ))}
 
           {/* Obstacles */}
-          {obstacles.map(obs => (
+          {layerVisibility.obstacles && obstacles.map(obs => (
             <ObstacleShape
               key={obs.id}
               obs={obs}

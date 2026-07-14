@@ -25,6 +25,17 @@ interface DesignStore {
   activeTool: ToolType;
   setActiveTool: (t: ToolType) => void;
 
+  // Layers panel visibility toggles. Purely presentational — controls
+  // whether DesignCanvas renders each group, not the underlying data.
+  // Deliberately scoped to what's real in the 2D canvas today: roof,
+  // obstacles, and the satellite backdrop. No 'panels' entry — DesignCanvas
+  // defines a PanelShape component but never actually renders it (panels
+  // only appear once you're in the 3D view), so a 2D panels toggle would
+  // control nothing. No strings/shadows/parapet/building either, since
+  // those only exist in the 3D scene.
+  layerVisibility: { roof: boolean; obstacles: boolean; satellite: boolean };
+  toggleLayerVisibility: (layer: 'roof' | 'obstacles' | 'satellite') => void;
+
   showGrid: boolean;
   snapEnabled: boolean;
   toggleGrid: () => void;
@@ -120,6 +131,9 @@ export const useDesignStore = create<DesignStore>()(
   immer((set, get) => ({
     activeTool: 'select',
     setActiveTool: (t) => set({ activeTool: t }),
+
+    layerVisibility: { roof: true, obstacles: true, satellite: true },
+    toggleLayerVisibility: (layer) => set((s) => { s.layerVisibility[layer] = !s.layerVisibility[layer]; }),
 
     showGrid: false,
     snapEnabled: true,
