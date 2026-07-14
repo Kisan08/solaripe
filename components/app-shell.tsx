@@ -1,23 +1,26 @@
 "use client"
 
 import type React from "react"
+import { Suspense } from "react"
 import { usePathname, useSearchParams } from "next/navigation"
 import { motion } from "framer-motion"
 import { Sidebar } from "@/components/sidebar"
 import { BottomNav } from "@/components/bottom-nav"
 
-export function AppShell({ children }: { children: React.ReactNode }) {
-  const pathname = usePathname()
+// useSearchParams() requires a Suspense boundary around whatever calls it,
+// or Next.js's static prerendering of routes with no dynamic data of their
+// own (like the auto-generated /_not-found page, which renders through
+// this same root-level AppShell) fails at build time with "useSearchParams
+// should be wrapped in a suspense boundary". usePathname() has no such
+// requirement, so it stays in the outer component; only the searchParams-
+// dependent logic (Client View detection) is isolated in the inner
+// component below and wrapped in <Suspense>.
+function AppShellInner({ pathname, isDesignRoute, children }: {
+  pathname: string | null
+  isDesignRoute: boolean
+  children: React.ReactNode
+}) {
   const searchParams = useSearchParams()
-
-  // The Design workspace is a CAD-style tool, not a dashboard page — it
-  // needs the full available width instead of sitting in the centered
-  // max-w-7xl column every other page uses. This ONLY removes that width
-  // cap + centering for /design; the sidebar's own fixed positioning and
-  // the .app-content padding-left push/hover-expand mechanics below are
-  // completely untouched, so the global rail behaves identically on every
-  // other route.
-  const isDesignRoute = pathname?.startsWith("/design")
 
   // Client View (?client=1 on /design) must hide global navigation
   // entirely, not just visually cover it with a fixed/z-9999 overlay —
@@ -28,11 +31,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // nothing for the page itself to "escape" from anymore.
   const isDesignClientView = isDesignRoute && searchParams.get("client") === "1"
 
-  // The dashboard entry transition (fade+slide via motion.div, keyed on
-  // pathname) is what was causing Konva/Three.js canvas measurement churn
-  // on the Design page — every mount was treated as a fresh page transition.
-  // The Design workspace manages its own internal state transitions (panel
-  // open/close, mode switches) and doesn't need this wrapper at all.
   if (isDesignClientView) {
     return <div className="min-h-screen bg-background">{children}</div>
   }
@@ -78,5 +76,26 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </div>
       <BottomNav />
     </div>
+  )
+}
+
+export function AppShell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname()
+
+  // The Design workspace is a CAD-style tool, not a dashboard page — it
+  // needs the full available width instead of sitting in the centered
+  // max-w-7xl column every other page uses. This ONLY removes that width
+  // cap + centering for /design; the sidebar's own fixed positioning and
+  // the .app-content padding-left push/hover-expand mechanics above are
+  // completely untouched, so the global rail behaves identically on every
+  // other route.
+  const isDesignRoute = pathname?.startsWith("/design") ?? false
+
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-background">{children}</div>}>
+      <AppShellInner pathname={pathname} isDesignRoute={isDesignRoute}>
+        {children}
+      </AppShellInner>
+    </Suspense>
   )
 }
