@@ -1,54 +1,44 @@
 import { NextRequest, NextResponse } from "next/server";
 import { company } from "@/lib/company.config";
+import { getOrCreateSession } from "@/lib/calling/stateManager";
+import { fetchClientContext } from "@/lib/calling/crmContext";
+import { buildGatherTwiml } from "@/lib/calling/twiml";
 
-// Polly.Aditi is Amazon Polly's STANDARD (non-neural) Hindi voice — that's
-// the actual source of the "robotic/synthetic" sound. Twilio also exposes
-// Polly's Neural voices through the exact same <Say voice="..."> attribute,
-// just with a "-Neural" suffix on the voice name — no new service, no new
-// API key. Kajal-Neural is Polly's neural Hindi (hi-IN) voice.
-//
-// IMPORTANT — please verify this exact voice name against Twilio's current
-// docs/console before deploying. I can't browse Twilio's live voice catalog
-// from here.
-const VOICE = "Polly.Kajal-Neural";
-const LANG = "hi-IN";
-
-function buildTwiml(name: string, clientId: string, baseUrl: string) {
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Gather input="speech dtmf" numDigits="1" language="${LANG}" speechTimeout="auto" action="${baseUrl}/api/call-response?clientId=${clientId}" method="POST">
-    <Say voice="${VOICE}" language="${LANG}">
-      Namaste ${name} ji.<break time="400ms"/>
-      Main ${company.name} se bol rahi hoon.<break time="500ms"/>
-      Humari company Maharashtra mein solar panel installation karti hai.<break time="500ms"/>
-      Aap apne bijli bill mein 80 percent tak ki bachat kar sakte hain.<break time="600ms"/>
-      Kya aap solar panel ke baare mein thodi jaankari lena chahenge?<break time="500ms"/>
-      Aap seedha bol sakte hain — jaise "haan" ya "nahi".<break time="300ms"/>
-      Ya phir, haan ke liye 1 aur nahi ke liye 2 dabaayen.
-    </Say>
-  </Gather>
-  <Say voice="${VOICE}" language="${LANG}">
-    Koi jawab nahi mila.<break time="300ms"/> Hum baad mein call karenge.<break time="300ms"/> Dhanyavaad.
-  </Say>
-</Response>`;
-}
-
-export async function GET(req: NextRequest) {
+// Turn 0 stays a fast, fixed (but CRM-personalized) greeting rather than an
+// OpenAI call — there's nothing from the customer to react to yet, so
+// generating it would only add latency before the phone even finishes
+// ringing into the conversation. Every turn from here on is AI-driven (see
+// call-response/route.ts).
+async function handle(req: NextRequest) {
   const { searchParams } = new URL(req.url);
-  const name = searchParams.get("name") || "Friend";
+  const name = searchParams.get("name") || "Sir";
   const clientId = searchParams.get("clientId") || "";
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || company.website;
-  return new NextResponse(buildTwiml(name, clientId, baseUrl), {
+
+  // Twilio's real voice webhook POSTs CallSid as a form field. The GET
+  // handler exists only so this route can be opened by hand for testing;
+  // in that case there's no CallSid, so fall back to a synthetic one tied
+  // to the client so a session still gets created and the turn loop still
+  // works end to end.
+  let callSid = "";
+  if (req.method === "POST") {
+    const formData = await req.formData();
+    callSid = (formData.get("CallSid") as string) || "";
+  }
+  if (!callSid) callSid = `manual-${clientId}-${Date.now()}`;
+
+  const crm = await fetchClientContext(clientId);
+  await getOrCreateSession(callSid, clientId);
+
+  const greeting = crm?.city
+    ? `Namaste ${name} ji, main ${company.name} se Kajal bol rahi hoon. Aapko ${crm.city} mein solar ke baare mein jaankari chahiye thi na?`
+    : `Namaste ${name} ji, main ${company.name} se Kajal bol rahi hoon. Aapke bijli bill mein bachat ke liye solar panel ke baare mein do minute baat karna chahoongi.`;
+
+  const actionUrl = `${baseUrl}/api/call-response?clientId=${clientId}`;
+  return new NextResponse(buildGatherTwiml(greeting, actionUrl), {
     headers: { "Content-Type": "text/xml" },
   });
 }
 
-export async function POST(req: NextRequest) {
-  const { searchParams } = new URL(req.url);
-  const name = searchParams.get("name") || "Friend";
-  const clientId = searchParams.get("clientId") || "";
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || company.website;
-  return new NextResponse(buildTwiml(name, clientId, baseUrl), {
-    headers: { "Content-Type": "text/xml" },
-  });
-}
+export async function GET(req: NextRequest) { return handle(req); }
+export async function POST(req: NextRequest) { return handle(req); }

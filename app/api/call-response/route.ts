@@ -1,94 +1,143 @@
-import { supabase } from "@/lib/supabase";
 import { NextRequest, NextResponse } from "next/server";
+import { company } from "@/lib/company.config";
+import { getOrCreateSession, saveSession } from "@/lib/calling/stateManager";
+import { fetchClientContext, applyCrmUpdates } from "@/lib/calling/crmContext";
+import { buildTurnMessages, parseAiTurnResult } from "@/lib/calling/promptBuilder";
+import { callOpenAiJson } from "@/lib/calling/openai";
+import { buildGatherTwiml, buildHangupTwiml } from "@/lib/calling/twiml";
+import { logTurn } from "@/lib/calling/logging";
+import type { CallSession } from "@/lib/calling/types";
 
-const VOICE = "Polly.Kajal-Neural";
-const LANG = "hi-IN";
+const GENTLE_REPROMPT = "Hello? Main sun rahi hoon, aap bataiye.";
+const SILENCE_CLOSE = "Theek hai, lagta hai line thodi disturb hai. Main baad mein dobara call karungi. Dhanyavaad.";
 
-// Keyword lists cover Romanized Hindi, Devanagari, and plain English, since
-// I can't confirm from here which script Twilio's hi-IN speech recognition
-// actually returns — log the raw SpeechResult on your first test calls
-// (see the console.log below) and tell me what format shows up so these
-// lists can be tightened instead of over-covering guesses.
-//
-// Order matters: check the most specific/distinct phrases (call-back)
-// first, then negation, then affirmative — "chahiye nahi" contains both an
-// affirmative-looking word (chahiye) and a negation (nahi), so negation
-// must win when both are present.
-const CALLBACK_WORDS = [
-  "baad me", "baad mein", "later", "abhi nahi baad", "busy", "व्यस्त", "बाद में", "बाद में बात",
-];
-const NEGATIVE_WORDS = [
-  "nahi", "nako", "no", " na ", "मत", "नहीं", "ना",
-];
-const AFFIRMATIVE_WORDS = [
-  "haan", " ha ", "yes", "ji haan", "theek hai", "chahiye", "batao", "batayen", "sahi", "ok", "okay",
-  "हाँ", "हां", "जी हाँ", "ठीक है", "चाहिए",
-];
+// Old numbered-menu shortcut, kept for accessibility / as a fallback when
+// speech recognition returns nothing — maps a keypress straight onto what
+// the customer would have said, so it still flows through the same AI turn
+// instead of a separate code path.
+function digitToText(digit: string): string | null {
+  if (digit === "1") return "Haan, mujhe interested hoon, jaankari chahiye.";
+  if (digit === "2") return "Nahi, mujhe interested nahi hai.";
+  if (digit === "3") return "Mujhe baad mein call kariye.";
+  return null;
+}
 
-function classify(rawSpeech: string, digit: string): "interested" | "not_interested" | "call_back" | "unclear" {
-  // Digit press still takes priority if present (kept for backward
-  // compatibility with the old numbered-menu flow, and as the reliable
-  // fallback when speech recognition doesn't return anything usable).
-  if (digit === "1") return "interested";
-  if (digit === "2") return "not_interested";
-  if (digit === "3") return "call_back";
-
-  const s = ` ${rawSpeech.toLowerCase().trim()} `;
-  if (!s.trim()) return "unclear";
-
-  if (CALLBACK_WORDS.some(w => s.includes(w.toLowerCase()))) return "call_back";
-  if (NEGATIVE_WORDS.some(w => s.includes(w.toLowerCase()))) return "not_interested";
-  if (AFFIRMATIVE_WORDS.some(w => s.includes(w.toLowerCase()))) return "interested";
-  return "unclear";
+function mapEndStatus(intent: string): "interested" | "not_interested" | "call_back" {
+  if (intent === "not_interested" || intent === "angry") return "not_interested";
+  if (intent === "busy") return "call_back";
+  return "interested";
 }
 
 export async function POST(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const clientId = searchParams.get("clientId") || "";
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || company.website;
+  const actionUrl = `${baseUrl}/api/call-response?clientId=${clientId}`;
 
   const formData = await req.formData();
+  const callSid = (formData.get("CallSid") as string) || `manual-${clientId}`;
   const digit = (formData.get("Digits") as string) || "";
   const speechResult = (formData.get("SpeechResult") as string) || "";
-  const speechConfidence = formData.get("Confidence") as string | null;
 
-  // Log the raw transcript + confidence for your first real test calls —
-  // this is exactly what you need to check to confirm the script/format
-  // being returned and tighten the keyword lists above.
-  console.log("[call-response]", { clientId, digit, speechResult, speechConfidence });
+  const session = await getOrCreateSession(callSid, clientId);
 
-  const outcome = classify(speechResult, digit);
+  if (session.ended) {
+    // Twilio shouldn't call back after Hangup, but guard defensively.
+    return new NextResponse(buildHangupTwiml("Dhanyavaad."), { headers: { "Content-Type": "text/xml" } });
+  }
 
-  const statusMap = {
-    interested: { status: "interested", response: `Interested — "${speechResult || `pressed ${digit}`}"` },
-    not_interested: { status: "not_interested", response: `Not Interested — "${speechResult || `pressed ${digit}`}"` },
-    call_back: { status: "call_back", response: `Call Back Later — "${speechResult || `pressed ${digit}`}"` },
-    unclear: { status: "unclear_response", response: `Unclear — "${speechResult || "no input"}" (needs manual follow-up)` },
-  } as const;
+  const customerText = speechResult.trim() || digitToText(digit) || "";
 
-  const { status, response } = statusMap[outcome];
+  // ── Silence handling ──
+  // actionOnEmptyResult on the <Gather> guarantees Twilio calls this route
+  // even with nothing heard, so silence is handled entirely here instead of
+  // needing a separate TwiML branch: wait once with a gentle nudge, then
+  // close politely rather than looping forever.
+  if (!customerText) {
+    session.silence_count += 1;
+    if (session.silence_count === 1) {
+      await saveSession(session);
+      return new NextResponse(buildGatherTwiml(GENTLE_REPROMPT, actionUrl), {
+        headers: { "Content-Type": "text/xml" },
+      });
+    }
+    session.ended = true;
+    await saveSession(session);
+    await applyCrmUpdates(clientId, { status: "call_back", notes: "Customer went silent mid-call; needs a manual callback." });
+    return new NextResponse(buildHangupTwiml(SILENCE_CLOSE), { headers: { "Content-Type": "text/xml" } });
+  }
 
-  await supabase
-    .from("clients")
-    .update({ status, response, called_at: new Date().toISOString() })
-    .eq("id", clientId);
+  session.silence_count = 0;
+  session.transcript.push({ role: "customer", text: customerText, at: new Date().toISOString() });
 
-  const replyText =
-    outcome === "interested"
-      ? `Bahut accha!<break time="300ms"/> Humari team jald hi aapse sampark karegi.<break time="300ms"/> Dhanyavaad.`
-      : outcome === "not_interested"
-      ? `Theek hai.<break time="300ms"/> Agar kabhi zaroorat ho toh hume zaroor call karein.<break time="300ms"/> Dhanyavaad.`
-      : outcome === "call_back"
-      ? `Bilkul.<break time="300ms"/> Hum aapko baad mein call karenge.<break time="300ms"/> Dhanyavaad.`
-      : `Maaf kijiye, samajh nahi aaya.<break time="300ms"/> Humari team aapse jald hi seedha baat karegi.<break time="300ms"/> Dhanyavaad.`;
+  const crm = await fetchClientContext(clientId);
+  if (!crm) {
+    // No CRM record to drive the conversation — fail safe rather than
+    // silently hallucinating customer details.
+    return new NextResponse(
+      buildHangupTwiml("Maaf kijiye, thodi technical dikkat aa gayi. Humari team aapko dobara call karegi. Dhanyavaad."),
+      { headers: { "Content-Type": "text/xml" } },
+    );
+  }
 
-  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say voice="${VOICE}" language="${LANG}">
-    ${replyText}
-  </Say>
-</Response>`;
+  const messages = buildTurnMessages({
+    companyName: company.name,
+    crm,
+    session: session as CallSession,
+    latestCustomerText: customerText,
+  });
 
-  return new NextResponse(twiml, {
+  const startedAt = Date.now();
+  let result;
+  let aiError: string | undefined;
+  try {
+    const raw = await callOpenAiJson(messages);
+    result = parseAiTurnResult(raw, session.stage);
+  } catch (err) {
+    aiError = err instanceof Error ? err.message : String(err);
+    console.error("[call-response] OpenAI turn failed", aiError);
+    result = parseAiTurnResult({}, session.stage); // safe fallback reply
+  }
+  const latencyMs = Date.now() - startedAt;
+
+  session.transcript.push({ role: "ai", text: result.reply, at: new Date().toISOString() });
+  session.slots = { ...session.slots, ...result.slots };
+  session.stage = result.stage;
+  session.intent = result.intent;
+  session.emotion = result.emotion;
+  session.turn_count += 1;
+  session.ended = result.endCall;
+
+  await saveSession(session);
+
+  await logTurn({
+    callSid,
+    clientId,
+    turn: session.turn_count,
+    customerText,
+    aiText: result.reply,
+    intent: result.intent,
+    stage: result.stage,
+    latencyMs,
+    error: aiError,
+  });
+
+  if (result.endCall) {
+    const notesParts = [result.summary, result.followUp && `Follow-up: ${result.followUp}`].filter(Boolean);
+    await applyCrmUpdates(clientId, {
+      slots: session.slots,
+      status: mapEndStatus(result.intent),
+      notes: notesParts.join(" "),
+    });
+    return new NextResponse(buildHangupTwiml(result.reply), { headers: { "Content-Type": "text/xml" } });
+  }
+
+  // Mid-call: still write back anything new learned this turn (city, bill,
+  // property type) so the CRM stays current even if the call is dropped
+  // before it reaches a natural end.
+  await applyCrmUpdates(clientId, { slots: session.slots });
+
+  return new NextResponse(buildGatherTwiml(result.reply, actionUrl), {
     headers: { "Content-Type": "text/xml" },
   });
 }
