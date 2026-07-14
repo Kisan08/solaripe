@@ -29,6 +29,23 @@ function mapEndStatus(intent: string): "interested" | "not_interested" | "call_b
 }
 
 export async function POST(req: NextRequest) {
+  try {
+    return await handleTurn(req);
+  } catch (err) {
+    // A live phone call must always get back valid TwiML — a raw 500 here
+    // means Twilio can't render anything and the call just fails silently
+    // instead of ending gracefully. Most likely causes: the
+    // supabase/migrations/0001_ai_calling.sql migration hasn't been run
+    // yet, or clientId doesn't match a real client row.
+    console.error("[call-response] unhandled turn error", err);
+    return new NextResponse(
+      buildHangupTwiml("Maaf kijiye, thodi technical dikkat aa gayi. Humari team aapko dobara call karegi. Dhanyavaad."),
+      { headers: { "Content-Type": "text/xml" } },
+    );
+  }
+}
+
+async function handleTurn(req: NextRequest): Promise<NextResponse> {
   const { searchParams } = new URL(req.url);
   const clientId = searchParams.get("clientId") || "";
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || company.website;
