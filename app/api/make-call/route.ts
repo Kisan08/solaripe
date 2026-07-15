@@ -18,7 +18,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://onesolarpower.in";
+    // const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://onesolarpower.in";
+    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://solaripe.vercel.app";
 
     const call = await client.calls.create({
       to: `+91${phone.replace(/\D/g, "").slice(-10)}`,
