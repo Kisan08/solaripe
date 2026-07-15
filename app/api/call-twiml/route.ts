@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { company } from "@/lib/company.config";
 import { getOrCreateSession } from "@/lib/calling/stateManager";
-import { fetchClientContext } from "@/lib/calling/crmContext";
 import { buildGatherTwiml, buildHangupTwiml } from "@/lib/calling/twiml";
 
 // Turn 0 stays a fast, fixed (but CRM-personalized) greeting rather than an
@@ -27,19 +26,14 @@ async function handle(req: NextRequest) {
     }
     if (!callSid) callSid = `manual-${clientId}-${Date.now()}`;
 
-    // Independent reads — run together instead of one after another to cut
-    // the fixed latency before the greeting can even start.
-    const [crm] = await Promise.all([
-      fetchClientContext(clientId),
-      getOrCreateSession(callSid, clientId),
-    ]);
+    await getOrCreateSession(callSid, clientId);
 
     // Short, casual opener: short company name (not the full legal name),
     // and no name+"ji" honorific — gets straight to the point instead of
-    // sounding like a formal script.
-    const greeting = crm?.city
-      ? `Hello, main ${company.shortName} se Kajal bol rahi hoon. ${crm.city} mein aapke bijli bill mein bachat ho sakti hai, do minute baat kar sakte hain?`
-      : `Hello, main ${company.shortName} se Kajal bol rahi hoon. Aapke bijli bill mein bachat ke liye solar ke baare mein do minute baat kar sakte hain?`;
+    // sounding like a formal script. Always the same line regardless of
+    // whether we know the customer's city yet — keeps the very first thing
+    // the customer hears consistent and simple.
+    const greeting = `Hello, mai ${company.shortName} se Kajal bol rahi hoon. Aapke bijli bill mein bachat ke liye solar ke baare mein do minute baat kar sakte hain?`;
 
     const actionUrl = `${baseUrl}/api/call-response?clientId=${clientId}`;
     return new NextResponse(buildGatherTwiml(greeting, actionUrl), {

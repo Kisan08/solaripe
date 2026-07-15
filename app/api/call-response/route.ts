@@ -8,8 +8,8 @@ import { buildGatherTwiml, buildHangupTwiml } from "@/lib/calling/twiml";
 import { logTurn } from "@/lib/calling/logging";
 import type { CallSession } from "@/lib/calling/types";
 
-const GENTLE_REPROMPT = "Hello? Main sun rahi hoon, aap bataiye.";
-const SILENCE_CLOSE = "Theek hai, lagta hai line thodi disturb hai. Main baad mein dobara call karungi. Dhanyavaad.";
+const GENTLE_REPROMPT = "Hello? Mai sun rahi hoon, aap bataiye.";
+const SILENCE_CLOSE = "Theek hai, lagta hai line thodi disturb hai. Mai baad mein dobara call karungi. Dhanyavaad.";
 
 // Old numbered-menu shortcut, kept for accessibility / as a fallback when
 // speech recognition returns nothing — maps a keypress straight onto what
