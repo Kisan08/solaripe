@@ -52,7 +52,11 @@ export async function callOpenAiJson(messages: ChatMessage[]): Promise<Record<st
       model,
       messages,
       temperature: 0.6,
-      max_tokens: 300,
+      // Replies are capped at 1-2 short sentences by the prompt — 180 tokens
+      // comfortably covers that plus the JSON scaffolding (stage/intent/
+      // slots/etc), and asking the model to generate fewer tokens is itself
+      // part of what keeps the "thinking" pause short.
+      max_tokens: 180,
       // JSON mode: the model returns exactly one structured object (reply +
       // stage + intent + emotion + slots) in a single round-trip, instead of
       // a separate call per classification — that's what keeps latency and

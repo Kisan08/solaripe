@@ -56,7 +56,13 @@ async function handleTurn(req: NextRequest): Promise<NextResponse> {
   const digit = (formData.get("Digits") as string) || "";
   const speechResult = (formData.get("SpeechResult") as string) || "";
 
-  const session = await getOrCreateSession(callSid, clientId);
+  // Session and CRM context don't depend on each other — fetching them
+  // together instead of one-after-another removes a full DB round trip
+  // from every single turn's perceived "thinking" pause.
+  const [session, crm] = await Promise.all([
+    getOrCreateSession(callSid, clientId),
+    fetchClientContext(clientId),
+  ]);
 
   if (session.ended) {
     // Twilio shouldn't call back after Hangup, but guard defensively.
@@ -79,15 +85,16 @@ async function handleTurn(req: NextRequest): Promise<NextResponse> {
       });
     }
     session.ended = true;
-    await saveSession(session);
-    await applyCrmUpdates(clientId, { status: "call_back", notes: "Customer went silent mid-call; needs a manual callback." });
+    await Promise.all([
+      saveSession(session),
+      applyCrmUpdates(clientId, { status: "call_back", notes: "Customer went silent mid-call; needs a manual callback." }),
+    ]);
     return new NextResponse(buildHangupTwiml(SILENCE_CLOSE), { headers: { "Content-Type": "text/xml" } });
   }
 
   session.silence_count = 0;
   session.transcript.push({ role: "customer", text: customerText, at: new Date().toISOString() });
 
-  const crm = await fetchClientContext(clientId);
   if (!crm) {
     // No CRM record to drive the conversation — fail safe rather than
     // silently hallucinating customer details.
@@ -98,7 +105,7 @@ async function handleTurn(req: NextRequest): Promise<NextResponse> {
   }
 
   const messages = buildTurnMessages({
-    companyName: company.name,
+    companyName: company.shortName,
     crm,
     session: session as CallSession,
     latestCustomerText: customerText,
@@ -125,9 +132,7 @@ async function handleTurn(req: NextRequest): Promise<NextResponse> {
   session.turn_count += 1;
   session.ended = result.endCall;
 
-  await saveSession(session);
-
-  await logTurn({
+  const logPromise = logTurn({
     callSid,
     clientId,
     turn: session.turn_count,
@@ -141,18 +146,30 @@ async function handleTurn(req: NextRequest): Promise<NextResponse> {
 
   if (result.endCall) {
     const notesParts = [result.summary, result.followUp && `Follow-up: ${result.followUp}`].filter(Boolean);
-    await applyCrmUpdates(clientId, {
-      slots: session.slots,
-      status: mapEndStatus(result.intent),
-      notes: notesParts.join(" "),
-    });
+    // These three writes are independent of each other — running them
+    // together instead of sequentially is the difference between one
+    // round-trip's worth of latency and three, on the turn that's about to
+    // speak the closing line and hang up.
+    await Promise.all([
+      saveSession(session),
+      logPromise,
+      applyCrmUpdates(clientId, {
+        slots: session.slots,
+        status: mapEndStatus(result.intent),
+        notes: notesParts.join(" "),
+      }),
+    ]);
     return new NextResponse(buildHangupTwiml(result.reply), { headers: { "Content-Type": "text/xml" } });
   }
 
   // Mid-call: still write back anything new learned this turn (city, bill,
   // property type) so the CRM stays current even if the call is dropped
   // before it reaches a natural end.
-  await applyCrmUpdates(clientId, { slots: session.slots });
+  await Promise.all([
+    saveSession(session),
+    logPromise,
+    applyCrmUpdates(clientId, { slots: session.slots }),
+  ]);
 
   return new NextResponse(buildGatherTwiml(result.reply, actionUrl), {
     headers: { "Content-Type": "text/xml" },

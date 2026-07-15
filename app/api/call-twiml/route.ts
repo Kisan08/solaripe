@@ -11,7 +11,6 @@ import { buildGatherTwiml, buildHangupTwiml } from "@/lib/calling/twiml";
 // call-response/route.ts).
 async function handle(req: NextRequest) {
   const { searchParams } = new URL(req.url);
-  const name = searchParams.get("name") || "Sir";
   const clientId = searchParams.get("clientId") || "";
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || company.website;
 
@@ -28,12 +27,19 @@ async function handle(req: NextRequest) {
     }
     if (!callSid) callSid = `manual-${clientId}-${Date.now()}`;
 
-    const crm = await fetchClientContext(clientId);
-    await getOrCreateSession(callSid, clientId);
+    // Independent reads — run together instead of one after another to cut
+    // the fixed latency before the greeting can even start.
+    const [crm] = await Promise.all([
+      fetchClientContext(clientId),
+      getOrCreateSession(callSid, clientId),
+    ]);
 
+    // Short, casual opener: short company name (not the full legal name),
+    // and no name+"ji" honorific — gets straight to the point instead of
+    // sounding like a formal script.
     const greeting = crm?.city
-      ? `Namaste ${name} ji, main ${company.name} se Kajal bol rahi hoon. Aapko ${crm.city} mein solar ke baare mein jaankari chahiye thi na?`
-      : `Namaste ${name} ji, main ${company.name} se Kajal bol rahi hoon. Aapke bijli bill mein bachat ke liye solar panel ke baare mein do minute baat karna chahoongi.`;
+      ? `Hello, main ${company.shortName} se Kajal bol rahi hoon. ${crm.city} mein aapke bijli bill mein bachat ho sakti hai, do minute baat kar sakte hain?`
+      : `Hello, main ${company.shortName} se Kajal bol rahi hoon. Aapke bijli bill mein bachat ke liye solar ke baare mein do minute baat kar sakte hain?`;
 
     const actionUrl = `${baseUrl}/api/call-response?clientId=${clientId}`;
     return new NextResponse(buildGatherTwiml(greeting, actionUrl), {

@@ -22,7 +22,7 @@ export function escapeXml(text: string): string {
 export function buildGatherTwiml(sayText: string, actionUrl: string): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Gather input="speech dtmf" numDigits="1" language="${LANG}" speechTimeout="auto" actionOnEmptyResult="true" action="${actionUrl}" method="POST">
+  <Gather input="speech dtmf" numDigits="1" language="${LANG}" speechTimeout="auto" speechModel="phone_call" actionOnEmptyResult="true" action="${actionUrl}" method="POST">
     <Say voice="${VOICE}" language="${LANG}">${escapeXml(sayText)}</Say>
   </Gather>
 </Response>`;
