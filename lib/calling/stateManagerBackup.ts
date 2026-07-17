@@ -1,8 +1,4 @@
-// Service-role client — no browser session exists when Twilio hits these
-// webhooks, so RLS's auth.uid() would be null. tenant_id on new rows is
-// derived server-side from the associated clients row via a DB trigger
-// (see supabase/migrations/0005_tenant_scope_crm.sql), not from a session.
-import { supabaseAdmin as supabase } from "@/lib/supabaseAdmin";
+import { supabase } from "@/lib/supabase";
 import type { CallSession } from "./types";
 
 // Twilio calls your webhook fresh on every turn — there is no persistent

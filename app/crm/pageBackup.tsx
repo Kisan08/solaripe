@@ -76,10 +76,6 @@ export default function CRMPage() {
   const [toast, setToast] = useState<{ msg: string; type: "ok" | "err" } | null>(null);
   const [uploadedCount, setUploadedCount] = useState<number | null>(null);
   const [reminderDismissed, setReminderDismissed] = useState(false);
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [addName, setAddName] = useState("");
-  const [addPhone, setAddPhone] = useState("");
-  const [adding, setAdding] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const notifiedRef = useRef<Set<string>>(new Set());
@@ -152,25 +148,6 @@ export default function CRMPage() {
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = "";
-    }
-  }
-
-  async function handleAddClient() {
-    setAdding(true);
-    try {
-      const res = await fetch("/api/crm/clients", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: addName, phone: addPhone }),
-      });
-      if (!res.ok) throw new Error((await res.json()).error ?? "Failed to add client");
-      showToast(`${addName} added`, "ok");
-      setShowAddModal(false);
-      setAddName(""); setAddPhone("");
-      await fetchClients();
-    } catch (err: unknown) {
-      showToast(err instanceof Error ? err.message : "Failed to add client", "err");
-    } finally {
-      setAdding(false);
     }
   }
 
@@ -283,58 +260,6 @@ export default function CRMPage() {
           maxWidth: 360, margin: "0 auto",
         }}>
           {toast.msg}
-        </div>
-      )}
-
-      {/* Add Client modal */}
-      {showAddModal && (
-        <div style={{
-          position: "fixed", inset: 0, zIndex: 10000,
-          backgroundColor: "rgba(15,23,42,0.4)",
-          display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
-        }} onClick={() => !adding && setShowAddModal(false)}>
-          <div onClick={(e) => e.stopPropagation()} style={{
-            backgroundColor: "#fff", borderRadius: 14, padding: 20,
-            width: "100%", maxWidth: 360, boxShadow: "0 12px 32px rgba(0,0,0,0.25)",
-          }}>
-            <h2 style={{ fontSize: 16, fontWeight: 700, color: "#0F172A", margin: "0 0 14px" }}>Add Client</h2>
-
-            <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#6B7280", marginBottom: 4 }}>Name</label>
-            <input type="text" value={addName} onChange={(e) => setAddName(e.target.value)}
-              placeholder="Client name" autoFocus
-              style={{
-                width: "100%", padding: "9px 12px", fontSize: 14, borderRadius: 8,
-                border: "1px solid #E2E8F0", marginBottom: 12, boxSizing: "border-box",
-              }} />
-
-            <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#6B7280", marginBottom: 4 }}>Phone</label>
-            <input type="tel" value={addPhone} onChange={(e) => setAddPhone(e.target.value)}
-              placeholder="10-digit mobile number"
-              style={{
-                width: "100%", padding: "9px 12px", fontSize: 14, borderRadius: 8,
-                border: "1px solid #E2E8F0", marginBottom: 18, boxSizing: "border-box",
-              }} />
-
-            <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={() => setShowAddModal(false)} disabled={adding}
-                style={{
-                  flex: 1, backgroundColor: "#F3F4F6", color: "#374151", border: "none",
-                  borderRadius: 8, padding: "10px", fontSize: 13, fontWeight: 700,
-                  cursor: adding ? "not-allowed" : "pointer",
-                }}>
-                Cancel
-              </button>
-              <button onClick={handleAddClient} disabled={adding || !addName.trim() || !addPhone.trim()}
-                style={{
-                  flex: 1, backgroundColor: "#1A4F8A", color: "#fff", border: "none",
-                  borderRadius: 8, padding: "10px", fontSize: 13, fontWeight: 700,
-                  cursor: adding || !addName.trim() || !addPhone.trim() ? "not-allowed" : "pointer",
-                  opacity: adding || !addName.trim() || !addPhone.trim() ? 0.6 : 1,
-                }}>
-                {adding ? "Adding…" : "Add"}
-              </button>
-            </div>
-          </div>
         </div>
       )}
 
@@ -452,15 +377,6 @@ export default function CRMPage() {
             <input ref={fileRef} type="file" accept=".pdf,.xlsx,.xls,.xlsm,.csv"
               style={{ display: "none" }} onChange={handleUpload} disabled={uploading} />
           </label>
-
-          <button className="crm-btn" onClick={() => setShowAddModal(true)}
-            style={{
-              backgroundColor: "#fff", color: "#1A4F8A", border: "1px solid #1A4F8A",
-              borderRadius: 7, padding: "9px 16px", fontSize: 13, fontWeight: 700,
-              cursor: "pointer",
-            }}>
-            + Add Client
-          </button>
 
           {uploadedCount !== null && (
             <span style={{ fontSize: 13, color: "#065F46", fontWeight: 600 }}>✅ {uploadedCount} imported</span>

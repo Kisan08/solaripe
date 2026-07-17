@@ -1,7 +1,4 @@
-// Service-role client — this is a Twilio status callback, no browser
-// session exists here at all (see lib/calling/stateManager.ts for the
-// same reasoning).
-import { supabaseAdmin as supabase } from "@/lib/supabaseAdmin";
+import { supabase } from "@/lib/supabase";
 import { NextRequest, NextResponse } from "next/server";
 import { sendOwnerWhatsApp, formatCallSummaryMessage } from "@/lib/whatsappNotify";
 

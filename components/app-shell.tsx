@@ -1,38 +1,35 @@
 "use client"
 
 import type React from "react"
-import { Suspense } from "react"
-import { usePathname, useSearchParams } from "next/navigation"
+import { usePathname } from "next/navigation"
 import { motion } from "framer-motion"
 import { Sidebar } from "@/components/sidebar"
 import { BottomNav } from "@/components/bottom-nav"
 
-// useSearchParams() requires a Suspense boundary around whatever calls it,
-// or Next.js's static prerendering of routes with no dynamic data of their
-// own (like the auto-generated /_not-found page, which renders through
-// this same root-level AppShell) fails at build time with "useSearchParams
-// should be wrapped in a suspense boundary". usePathname() has no such
-// requirement, so it stays in the outer component; only the searchParams-
-// dependent logic (Client View detection) is isolated in the inner
-// component below and wrapped in <Suspense>.
-function AppShellInner({ pathname, isDesignRoute, children }: {
-  pathname: string | null
-  isDesignRoute: boolean
-  children: React.ReactNode
-}) {
-  const searchParams = useSearchParams()
+// Routes that should render standalone — no sidebar, no bottom nav, no
+// app chrome at all. A logged-out visitor on /login or /signup has no
+// account yet, so showing them navigation to pages they can't access
+// (and which would just redirect them back here via middleware) is both
+// confusing and a preview of internal nav to someone who isn't authed.
+const AUTH_ROUTES = ["/login", "/signup"]
 
-  // Client View (?client=1 on /design) must hide global navigation
-  // entirely, not just visually cover it with a fixed/z-9999 overlay —
-  // that left the Sidebar and BottomNav still mounted underneath. AppShell
-  // is the workspace-level layout that actually controls whether those
-  // mount at all, so this is a real bypass: a client opening a shared
-  // design link never renders any internal navigation chrome, and there's
-  // nothing for the page itself to "escape" from anymore.
-  const isDesignClientView = isDesignRoute && searchParams.get("client") === "1"
+export function AppShell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname()
+  const isAuthRoute = AUTH_ROUTES.some((route) => pathname.startsWith(route))
 
-  if (isDesignClientView) {
-    return <div className="min-h-screen bg-background">{children}</div>
+  if (isAuthRoute) {
+    return (
+      <div className="min-h-screen bg-background">
+        <motion.div
+          key={pathname}
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.2, ease: "easeOut" }}
+        >
+          {children}
+        </motion.div>
+      </div>
+    )
   }
 
   return (
@@ -53,49 +50,18 @@ function AppShellInner({ pathname, isDesignRoute, children }: {
         }
       `}</style>
       <div className="app-content">
-        <main
-          className={
-            isDesignRoute
-              ? "min-h-screen w-full"
-              : "mx-auto min-h-screen w-full max-w-7xl pb-24 md:pb-0"
-          }
-        >
-          {isDesignRoute ? (
-            children
-          ) : (
-            <motion.div
-              key={pathname}
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.2, ease: "easeOut" }}
-            >
-              {children}
-            </motion.div>
-          )}
+        <main className="mx-auto min-h-screen w-full max-w-7xl pb-24 md:pb-0">
+          <motion.div
+            key={pathname}
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.2, ease: "easeOut" }}
+          >
+            {children}
+          </motion.div>
         </main>
       </div>
       <BottomNav />
     </div>
-  )
-}
-
-export function AppShell({ children }: { children: React.ReactNode }) {
-  const pathname = usePathname()
-
-  // The Design workspace is a CAD-style tool, not a dashboard page — it
-  // needs the full available width instead of sitting in the centered
-  // max-w-7xl column every other page uses. This ONLY removes that width
-  // cap + centering for /design; the sidebar's own fixed positioning and
-  // the .app-content padding-left push/hover-expand mechanics above are
-  // completely untouched, so the global rail behaves identically on every
-  // other route.
-  const isDesignRoute = pathname?.startsWith("/design") ?? false
-
-  return (
-    <Suspense fallback={<div className="min-h-screen bg-background">{children}</div>}>
-      <AppShellInner pathname={pathname} isDesignRoute={isDesignRoute}>
-        {children}
-      </AppShellInner>
-    </Suspense>
   )
 }

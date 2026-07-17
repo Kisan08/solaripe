@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { useDesignStore } from '../../store/designStore';
 import { ToolType } from '../../types';
-import { formatCapacity, pxToM2, polygonArea, PIXELS_PER_METER } from '../../utils/geometry';
+import { formatCapacity, pxToM2, polygonArea } from '../../utils/geometry';
 
 interface CollapsibleCardProps {
   title: string;

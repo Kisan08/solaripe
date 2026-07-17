@@ -1,10 +1,4 @@
-// Service-role client, not the anon one: this file is only ever called
-// from Twilio webhook routes (call-twiml/call-response), which have no
-// browser session at all (Twilio calls them directly, no cookies) — RLS's
-// auth.uid() would just be null here, so it has to bypass RLS by design.
-// Tenant correctness instead relies on always acting on a single,
-// already-existing clientId whose tenant_id was fixed at import time.
-import { supabaseAdmin as supabase } from "@/lib/supabaseAdmin";
+import { supabase } from "@/lib/supabase";
 import type { ClientCrmContext, Slots } from "./types";
 
 export async function fetchClientContext(clientId: string): Promise<ClientCrmContext | null> {

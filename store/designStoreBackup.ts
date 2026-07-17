@@ -4,7 +4,7 @@ import {
   ToolType, RoofPolygon, Obstacle, SolarPanel, Walkway,
   Point, ProjectInfo, Equipment, HistoryEntry, MapConfig
 } from '../types';
-import { saveDesign, loadDesign, type SavedDesign } from '../lib/designs';
+import { saveDesign, loadDesign } from '../lib/designs';
 
 const MAX_HISTORY = 50;
 
@@ -115,12 +115,6 @@ interface DesignStore {
   setProjectId: (id: string) => void;
   saveToSupabase: () => Promise<void>;
   loadFromSupabase: (projectId: string) => Promise<void>;
-  // Applies already-fetched design data to store state without querying
-  // Supabase itself — the RLS-protected client-side query in loadFromSupabase
-  // above returns nothing for an unauthenticated ?client=1 viewer, so that
-  // path fetches through app/api/public-design (service-role, read-only,
-  // single-project-only) instead and hands the result to this action.
-  loadDesignData: (projectId: string, design: SavedDesign | null) => void;
 }
 
 function computeStats(roofs: RoofPolygon[], panels: SolarPanel[], equipment: Equipment) {
@@ -386,10 +380,6 @@ export const useDesignStore = create<DesignStore>()(
         console.error('Failed to load design:', error);
         return;
       }
-      get().loadDesignData(projectId, design);
-    },
-
-    loadDesignData: (projectId, design) => {
       if (design) {
         console.log('Setting state from design:', design.roofs?.length, 'roofs,', design.panels?.length, 'panels');
         set({

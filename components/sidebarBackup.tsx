@@ -1,14 +1,11 @@
 "use client"
 
-import { useEffect, useState } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { motion } from "framer-motion"
-import { LogOut, Sun } from "lucide-react"
+import { Sun } from "lucide-react"
 import { NAV_ITEMS } from "@/lib/nav"
 import { cn } from "@/lib/utils"
-import { createClient } from "@/lib/supabase/client"
-import { signOutAction } from "@/lib/auth/actions"
 
 // Collapsed width shows icons only; hovering the rail expands it to reveal
 // labels, matching the SeaArt-style reference. The rail is `fixed` and
@@ -19,26 +16,6 @@ import { signOutAction } from "@/lib/auth/actions"
 // AppShell's content padding matches the COLLAPSED width permanently.
 export function Sidebar() {
   const pathname = usePathname()
-  const [companyName, setCompanyName] = useState<string | null>(null)
-
-  useEffect(() => {
-    const supabase = createClient()
-    let cancelled = false
-
-    async function loadTenant() {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
-      const { data } = await supabase
-        .from("tenants")
-        .select("company_name")
-        .eq("id", user.id)
-        .single()
-      if (!cancelled && data) setCompanyName(data.company_name)
-    }
-
-    loadTenant()
-    return () => { cancelled = true }
-  }, [])
 
   return (
     <aside
@@ -64,21 +41,14 @@ export function Sidebar() {
 
       <nav className="flex flex-1 flex-col gap-1 px-3 py-2">
         {NAV_ITEMS.map((item) => {
-          // "Design" shares its href with "Projects" (it's a shortcut into
-          // Projects now, not its own destination — see lib/nav.ts), so
-          // the plain startsWith check would light up BOTH items whenever
-          // you're on /projects. "Design" never gets its own active state;
-          // "Projects" is the real owner of that route.
           const active =
-            item.label === "Design"
-              ? false
-              : item.href === "/"
+            item.href === "/"
               ? pathname === "/"
               : pathname.startsWith(item.href)
           const Icon = item.icon
           return (
             <Link
-              key={item.label}
+              key={item.href}
               href={item.href}
               title={item.label}
               className={cn(
@@ -107,21 +77,13 @@ export function Sidebar() {
       <div className="shrink-0 border-t border-sidebar-border p-4">
         <div className="flex items-center gap-3 rounded-lg bg-secondary px-3 py-2.5">
           <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
-            {(companyName ?? "?").slice(0, 2).toUpperCase()}
+            SE
           </div>
-          <div className="flex flex-1 items-center justify-between gap-2 leading-tight whitespace-nowrap opacity-0 transition-opacity duration-150 group-hover:opacity-100 overflow-hidden">
-            <span className="text-xs font-semibold text-foreground truncate">
-              {companyName ?? "Loading…"}
+          <div className="flex flex-col leading-tight whitespace-nowrap opacity-0 transition-opacity duration-150 group-hover:opacity-100">
+            <span className="text-xs font-semibold text-foreground">
+              SunEdge Energy
             </span>
-            <form action={signOutAction}>
-              <button
-                type="submit"
-                title="Log out"
-                className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <LogOut className="size-4" aria-hidden="true" />
-              </button>
-            </form>
+            <span className="text-[11px] text-muted-foreground">Pro plan</span>
           </div>
         </div>
       </div>

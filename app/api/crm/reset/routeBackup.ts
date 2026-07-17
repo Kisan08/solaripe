@@ -1,9 +1,6 @@
-import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { supabase } from "@/lib/supabase";
 import { NextRequest, NextResponse } from "next/server";
 
-// Session-aware client — if clientId belongs to another tenant, RLS's
-// UPDATE policy blocks it (0 rows affected, no error), same as if it
-// didn't exist at all.
 export async function POST(req: NextRequest) {
   const { clientId } = await req.json();
 
@@ -11,7 +8,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "clientId required" }, { status: 400 });
   }
 
-  const supabase = await createServerSupabaseClient();
   const { error } = await supabase
     .from("clients")
     .update({ status: "pending", response: null, called_at: null })

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import twilio from "twilio";
-import { supabase } from "@/lib/supabase";
+import { createServerSupabaseClient } from "@/lib/supabase/server";
 
 const client = twilio(
   process.env.TWILIO_ACCOUNT_SID!,
@@ -9,27 +9,41 @@ const client = twilio(
 
 export async function POST(req: NextRequest) {
   try {
-    const { clientId, name, phone } = await req.json();
+    const { clientId } = await req.json();
 
-    if (!phone || !clientId) {
-      return NextResponse.json(
-        { error: "Phone and clientId required" },
-        { status: 400 }
-      );
+    if (!clientId) {
+      return NextResponse.json({ error: "clientId required" }, { status: 400 });
     }
 
-    // const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://onesolarpower.in";
+    // Look up the client row server-side instead of trusting phone/name
+    // from the request body — previously this route dialed whatever phone
+    // number the client sent, with no check that clientId actually
+    // resolved to that number or belonged to the caller at all. The
+    // session-aware client + RLS (auth.uid() = tenant_id) means this
+    // select returns nothing if clientId belongs to another tenant or
+    // doesn't exist, so the call gets rejected instead of silently dialing
+    // an arbitrary number.
+    const supabase = await createServerSupabaseClient();
+    const { data: clientRow, error: fetchError } = await supabase
+      .from("clients")
+      .select("name, phone")
+      .eq("id", clientId)
+      .single();
+
+    if (fetchError || !clientRow?.phone) {
+      return NextResponse.json({ error: "Client not found" }, { status: 404 });
+    }
+
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://solaripe.vercel.app";
 
     const call = await client.calls.create({
-      to: `+91${phone.replace(/\D/g, "").slice(-10)}`,
+      to: `+91${clientRow.phone.replace(/\D/g, "").slice(-10)}`,
       from: process.env.TWILIO_PHONE_NUMBER!,
-      url: `${baseUrl}/api/call-twiml?clientId=${clientId}&name=${encodeURIComponent(name)}`,
+      url: `${baseUrl}/api/call-twiml?clientId=${clientId}&name=${encodeURIComponent(clientRow.name)}`,
       statusCallback: `${baseUrl}/api/call-webhook?clientId=${clientId}`,
       statusCallbackMethod: "POST",
     });
 
-    // Update status in Supabase
     await supabase
       .from("clients")
       .update({ status: "calling", called_at: new Date().toISOString() })

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { supabase } from "@/lib/supabase";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -154,22 +154,16 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Upsert into Supabase — skip existing phones. tenant_id is stamped
-    // server-side by a DB trigger from the current session (see
-    // supabase/migrations/0005_tenant_scope_crm.sql), never sent here.
+    // Upsert into Supabase — skip existing phones
     const rows = unique.map((c) => ({
       name: c.name,
       phone: c.phone,
       status: "pending",
     }));
 
-    const supabase = await createServerSupabaseClient();
     const { data: inserted, error } = await supabase
       .from("clients")
-      // phone uniqueness is now per-tenant (tenant_id, phone), not global —
-      // the conflict target has to match that composite constraint or this
-      // upsert would error ("no unique or exclusion constraint matching").
-      .upsert(rows, { onConflict: "tenant_id,phone", ignoreDuplicates: true })
+      .upsert(rows, { onConflict: "phone", ignoreDuplicates: true })
       .select();
 
     if (error) {

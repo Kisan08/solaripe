@@ -1,7 +1,4 @@
-// Service-role client — see stateManager.ts for why (no session at
-// Twilio-webhook time; tenant_id derived server-side from clients via
-// trigger, not from auth.uid()).
-import { supabaseAdmin as supabase } from "@/lib/supabaseAdmin";
+import { supabase } from "@/lib/supabase";
 
 export async function logTurn(params: {
   callSid: string;

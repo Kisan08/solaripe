@@ -11,7 +11,7 @@ export interface SavedDesign {
   obstacles: Obstacle[];
   panels: SolarPanel[];
   walkways: Walkway[];
-  project_info: ProjectInfo; 
+  project_info: ProjectInfo;
   equipment: Equipment;
   map_config: MapConfig;
   wall_height_m: number | null; // NEW — building height, was previously never saved

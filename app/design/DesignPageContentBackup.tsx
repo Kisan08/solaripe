@@ -206,7 +206,7 @@ export default function DesignPageContent() {
   // /design visit — actually creating a backing `projects` row instead of
   // silently minting a client-side id that nothing else in the app knows
   // about. See hooks/useDesignProjectLoader.ts for the full rationale.
-  const { status: projectLoadStatus, errorMessage: projectLoadError } = useDesignProjectLoader(isClientView);
+  const { status: projectLoadStatus, errorMessage: projectLoadError } = useDesignProjectLoader();
 
   // Single source of truth for every mapMode+activeTool transition — see
   // hooks/useDesignNavigationActions.ts.

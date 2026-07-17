@@ -37,36 +37,21 @@ export const defaultSettings: AppSettings = {
   owner_phone: company.phone,
 }
 
-// Was a single row shared by everyone, keyed by the literal string
-// 'default' — now one row per tenant, keyed by tenant_id (RLS enforces a
-// tenant can only ever see/touch their own row; see
-// supabase/migrations/0004_tenant_scope.sql). A brand-new tenant has no
-// settings row yet, which is why this reads with maybeSingle() (not
-// single()) and falls back to defaultSettings rather than erroring.
 export async function getSettings(): Promise<AppSettings> {
   const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return defaultSettings
-
   const { data } = await supabase
     .from('settings')
     .select('*')
-    .eq('tenant_id', user.id)
-    .maybeSingle()
+    .eq('id', 'default')
+    .single()
   if (!data) return defaultSettings
   return { ...defaultSettings, ...data }
 }
 
 export async function saveSettings(settings: Partial<AppSettings>) {
   const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) throw new Error('Not authenticated')
-
   const { error } = await supabase
     .from('settings')
-    .upsert(
-      { id: user.id, tenant_id: user.id, ...settings, updated_at: new Date().toISOString() },
-      { onConflict: 'tenant_id' },
-    )
+    .upsert({ id: 'default', ...settings, updated_at: new Date().toISOString() })
   if (error) throw error
 }
