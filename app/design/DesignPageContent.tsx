@@ -167,11 +167,15 @@ export default function DesignPageContent() {
   const [showIrregularTool, setShowIrregularTool] = useState(false);
   const [currentLocation, setCurrentLocation] = useState({ lat: 19.2403, lng: 73.1305 });
 
-  // Design workspace theme — defaults to 'dark' (the target CAD look) on
-  // first render for SSR/client consistency, then syncs from localStorage
-  // right after mount. This is a workspace-scoped preference, independent
-  // of the rest of Solaripe, which keeps its existing light UI.
-  const [theme, setTheme] = useState<DesignTheme>('dark');
+  // Design workspace theme — defaults to 'light'. Was 'dark' (the
+  // originally intended CAD look), but low contrast on several badges/
+  // panel text in the dark palette read as illegible and "unprofessional"
+  // in practice — the light palette's plain dark-navy-on-white contrast is
+  // the safer professional default; dark mode is still one click away via
+  // the toggle for anyone who prefers it. This is a workspace-scoped
+  // preference, independent of the rest of Solaripe, which keeps its
+  // existing light UI.
+  const [theme, setTheme] = useState<DesignTheme>('light');
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem(THEME_STORAGE_KEY);
