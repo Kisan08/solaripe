@@ -1,4 +1,14 @@
-import { supabase } from './supabase';
+// The plain lib/supabase.ts client manages its own session storage,
+// completely separate from the cookie-based session proxy.ts/login use —
+// so it always looks logged-out to Postgrest (auth.uid() is null there),
+// which is exactly what caused "null value in column tenant_id violates
+// not-null constraint" here (the set_tenant_id trigger sets
+// tenant_id := auth.uid(), and auth.uid() was null). This got reverted
+// once already (a later commit overwrote this fix) — if it comes back a
+// third time, check what's clobbering it before just reapplying again.
+// lib/supabase/client.ts's createClient() (built on @supabase/ssr) is the
+// one that actually shares the logged-in session.
+import { createClient } from './supabase/client';
 import type {
   RoofPolygon, Obstacle, SolarPanel, Walkway,
   ProjectInfo, Equipment, MapConfig,
@@ -32,6 +42,7 @@ interface DesignPayload {
 }
 
 export async function saveDesign(payload: DesignPayload): Promise<{ error: string | null }> {
+  const supabase = createClient();
   const { error } = await supabase
     .from('designs')
     .upsert(
@@ -59,6 +70,7 @@ export async function saveDesign(payload: DesignPayload): Promise<{ error: strin
 export async function loadDesign(
   projectId: string
 ): Promise<{ design: SavedDesign | null; error: string | null }> {
+  const supabase = createClient();
   const { data, error } = await supabase
     .from('designs')
     .select('*')
