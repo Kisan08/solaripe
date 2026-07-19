@@ -2,7 +2,7 @@
 import { useState, useEffect, type ChangeEvent, type ReactNode, type CSSProperties, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { company } from "@/lib/company.config";
-import { getSettings, defaultSettings, type AppSettings, type PaymentMilestone } from '@/lib/settings'
+import { getSettings, defaultSettings, type AppSettings } from '@/lib/settings'
 
 export const dynamic = 'force-dynamic'
 export const fetchCache = 'force-no-store'
@@ -35,17 +35,10 @@ const PANEL_WP  = 580;
 const YIELD_KWH = 1332;
 const DEGRADE   = 0.0045;
 const GRID_RISE = 0.05;
-// NAVY/BLUE2/ACCENT reference CSS custom properties instead of literal hex
-// so the quote can be re-themed per tenant without threading `s`/colors as
-// props through every component (P2/P3/P4 never received `s` before this
-// and still don't) — QuotationDocument sets the actual resolved values
-// once, on a wrapper div, from the tenant's settings. Defaults below match
-// the fallback values on that wrapper, so anything rendered outside that
-// wrapper (there shouldn't be any) still looks identical to before.
-const NAVY      = "var(--quote-primary, #0F1E3D)";
+const NAVY      = "#0F1E3D";
 const BLUE      = "#1A4F8A";
-const BLUE2     = "var(--quote-secondary, #1E88E5)";
-const ACCENT    = "var(--quote-accent, #F5A623)";
+const BLUE2     = "#1E88E5";
+const ACCENT    = "#F5A623";
 const GREEN     = "#16A34A";
 const GREEN_L   = "#DCFCE7";
 const RED       = "#DC2626";
@@ -60,14 +53,7 @@ const inrFull = (n: number) => `Rs. ${Math.round(n).toLocaleString("en-IN")}`;
 const fmtDate = (s: string) => { if (!s) return "—"; const d = new Date(s); return `${pad(d.getDate())}/${pad(d.getMonth()+1)}/${d.getFullYear()}`; };
 const lakh    = (n: number) => n >= 100000 ? `Rs.${(n/100000).toFixed(2)}L` : inr(n);
 
-const DEFAULT_SCHEDULE: PaymentMilestone[] = [
-  { label: "Advance on PO", percent: 30 },
-  { label: "Material Delivery", percent: 40 },
-  { label: "Installation & Commissioning", percent: 20 },
-  { label: "Net Meter & Handover", percent: 10 },
-];
-
-function compute(f: QuoteForm, schedule: PaymentMilestone[] = DEFAULT_SCHEDULE) {
+function compute(f: QuoteForm) {
   const wp              = f.systemCapacity * 1000;
   const panels          = Math.ceil(wp / PANEL_WP);
   const gen             = Math.round(YIELD_KWH * f.systemCapacity);
@@ -82,14 +68,10 @@ function compute(f: QuoteForm, schedule: PaymentMilestone[] = DEFAULT_SCHEDULE) 
   return {
     wp, panels, gen, exGst, gst, net, subsidy, netAfterSubsidy,
     annualSavingsY1, paybackYears, roi25,
-    // Falls back to the original fixed 30/40/20/10 split whenever schedule
-    // is shorter than expected (e.g. a not-yet-migrated settings row) —
-    // `?? 0` on top of that so a malformed/missing entry never produces
-    // NaN in the printed amounts.
-    t1: Math.round(net * ((schedule[0]?.percent ?? 30) / 100)),
-    t2: Math.round(net * ((schedule[1]?.percent ?? 40) / 100)),
-    t3: Math.round(net * ((schedule[2]?.percent ?? 20) / 100)),
-    t4: Math.round(net * ((schedule[3]?.percent ?? 10) / 100)),
+    t1: Math.round(net * 0.30),
+    t2: Math.round(net * 0.40),
+    t3: Math.round(net * 0.20),
+    t4: Math.round(net * 0.10),
   };
 }
 
@@ -132,26 +114,19 @@ function PdfHeader({ s }: { s: AppSettings }) {
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingBottom: 12, borderBottom: `3px solid ${BLUE2}`, marginBottom: 6 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-        <img src={s.logo_url || "/logo.png"} alt="Logo" style={{ width: 54, height: 54, objectFit: "contain" }} />
+        <img src="/logo.png" alt="Logo" style={{ width: 54, height: 54, objectFit: "contain" }} />
         <div>
           <div style={{ color: NAVY, fontWeight: 800, fontSize: 17, letterSpacing: 0.5, marginBottom: 3 }}>
             {s.name.toUpperCase()}
           </div>
           <div style={{ color: "#555", fontSize: FONT_S, marginBottom: 3 }}>
-            {s.tagline || defaultSettings.tagline}
+            Engineering · Procurement · Construction (EPC) – Solar Division
           </div>
           <div style={{ display: "flex", gap: 16, fontSize: FONT_S, color: "#444" }}>
             <span>Ph: {s.phone}</span>
             <span>{s.email}</span>
             {s.gst && <span>GST: {s.gst}</span>}
           </div>
-          {/* Address never appeared anywhere in the quote before this
-              phase (see Phase 4 report) — placed here since PdfHeader
-              renders on every page, the same natural spot phone/email/GST
-              already live in. */}
-          {s.address && (
-            <div style={{ fontSize: FONT_S, color: "#666", marginTop: 3 }}>{s.address}</div>
-          )}
         </div>
       </div>
       <div style={{ textAlign: "right" }}>
@@ -219,7 +194,7 @@ function P1({ f, c, s, showSiteDetails }: { f: QuoteForm; c: Calc; s: AppSetting
         {/* Hero */}
         <div style={{ position: "relative", marginTop: 8, borderRadius: 8, overflow: "hidden" }}>
           <img
-            src={s.cover_image_url || "/solar_cover.jpg"}
+            src="/solar_cover.jpg"
             alt={s.name}
             style={{
               width: "100%",
@@ -312,36 +287,31 @@ function P1({ f, c, s, showSiteDetails }: { f: QuoteForm; c: Calc; s: AppSetting
         </div>
       )}
 
-      {/* Why Solar strip — tenant-toggleable, defaults on (generic content, no misattribution risk) */}
-      {s.show_why_solar && (
-        <div style={{ background: NAVY, borderRadius: 8, padding: "14px 16px" }}>
-          <div style={{ fontSize: FONT_S, color: ACCENT, fontWeight: 700, letterSpacing: 1, marginBottom: 10 }}>WHY GO SOLAR NOW?</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
-            {[
-              { icon: "📉", t: "Reduce Electricity Bill", d: `Save approx. ${lakh(c.annualSavingsY1)} in Year 1 alone` },
-              { icon: "💰", t: `${lakh(totalSavings25(f, c.gen))} Total Savings`, d: "Projected savings over 25 years" },
-              { icon: "🌱", t: "Clean Energy", d: `${Math.round(c.gen * 25 * 0.82 / 1000)}T CO2 avoided over 25 years` },
-            ].map(item => (
-              <div key={item.t} style={{ textAlign: "center" }}>
-                <div style={{ fontSize: 20 }}>{item.icon}</div>
-                <div style={{ color: "white", fontWeight: 700, fontSize: FONT, marginTop: 4 }}>{item.t}</div>
-                <div style={{ color: "#aac9f0", fontSize: FONT_S, marginTop: 3 }}>{item.d}</div>
-              </div>
-            ))}
-          </div>
+      {/* Why Solar strip */}
+      <div style={{ background: NAVY, borderRadius: 8, padding: "14px 16px" }}>
+        <div style={{ fontSize: FONT_S, color: ACCENT, fontWeight: 700, letterSpacing: 1, marginBottom: 10 }}>WHY GO SOLAR NOW?</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+          {[
+            { icon: "📉", t: "Reduce Electricity Bill", d: `Save approx. ${lakh(c.annualSavingsY1)} in Year 1 alone` },
+            { icon: "💰", t: `${lakh(totalSavings25(f, c.gen))} Total Savings`, d: "Projected savings over 25 years" },
+            { icon: "🌱", t: "Clean Energy", d: `${Math.round(c.gen * 25 * 0.82 / 1000)}T CO2 avoided over 25 years` },
+          ].map(item => (
+            <div key={item.t} style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 20 }}>{item.icon}</div>
+              <div style={{ color: "white", fontWeight: 700, fontSize: FONT, marginTop: 4 }}>{item.t}</div>
+              <div style={{ color: "#aac9f0", fontSize: FONT_S, marginTop: 3 }}>{item.d}</div>
+            </div>
+          ))}
         </div>
-      )}
+      </div>
 
       {/* Partner logos — enlarged (was height:34, now 60) so this block
-          carries more visual weight at the bottom of the cover page.
-          Tenant-toggleable, defaults on (generic panel-brand logos). */}
-      {s.show_partner_logos && (
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 32 }}>
-          <img src="/waaree_logo.png" alt="Waaree" style={{ height: 60, objectFit: "contain", opacity: 0.9 }} />
-          <img src="/adani_solar.png" alt="Adani" style={{ height: 60, objectFit: "contain", opacity: 0.9 }} />
-          <img src="/premier_energies.png" alt="Premier" style={{ height: 60, objectFit: "contain", opacity: 0.9 }} />
-        </div>
-      )}
+          carries more visual weight at the bottom of the cover page */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 32 }}>
+        <img src="/waaree_logo.png" alt="Waaree" style={{ height: 60, objectFit: "contain", opacity: 0.9 }} />
+        <img src="/adani_solar.png" alt="Adani" style={{ height: 60, objectFit: "contain", opacity: 0.9 }} />
+        <img src="/premier_energies.png" alt="Premier" style={{ height: 60, objectFit: "contain", opacity: 0.9 }} />
+      </div>
     </div>
   );
 }
@@ -351,7 +321,7 @@ function P1({ f, c, s, showSiteDetails }: { f: QuoteForm; c: Calc; s: AppSetting
    which ballooned into "too much" when content was shorter than the page.
    Switched to a fixed, moderate gap instead — predictable spacing that
    doesn't grow or shrink based on how much room happens to be left. */
-function P2({ f, c, s }: { f: QuoteForm; c: Calc; s: AppSettings }) {
+function P2({ f, c }: { f: QuoteForm; c: Calc }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", flex: 1, gap: 22 }}>
       <div>
@@ -446,11 +416,12 @@ function P2({ f, c, s }: { f: QuoteForm; c: Calc; s: AppSettings }) {
       <div>
         <SectionTitle title="Payment Schedule" sub="Milestone-based" />
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
-          {(s.default_payment_schedule ?? DEFAULT_SCHEDULE).map((m, i) => ({
-            l: `T-${i + 1} | ${m.percent}%`,
-            d: m.label,
-            a: [c.t1, c.t2, c.t3, c.t4][i] ?? 0,
-          })).map((m, i) => (
+          {[
+            { l: "T-1 | 30%", d: "Advance on PO", a: c.t1 },
+            { l: "T-2 | 40%", d: "Material Delivery", a: c.t2 },
+            { l: "T-3 | 20%", d: "Installation & Commissioning", a: c.t3 },
+            { l: "T-4 | 10%", d: "Net Meter & Handover", a: c.t4 },
+          ].map((m, i) => (
             <div key={i} style={{ background: i === 0 ? NAVY : GRAY, borderRadius: 8, padding: "10px 12px", textAlign: "center", border: `1px solid ${i === 0 ? NAVY : "#e5e7eb"}` }}>
               <div style={{ fontSize: FONT_S, fontWeight: 700, color: i === 0 ? ACCENT : BLUE2, letterSpacing: 0.5 }}>{m.l}</div>
               <div style={{ fontSize: FONT_L, fontWeight: 700, color: i === 0 ? "white" : NAVY, margin: "6px 0 4px" }}>{inrFull(m.a)}</div>
@@ -541,41 +512,38 @@ function P3({ f, c }: { f: QuoteForm; c: Calc }) {
 }
 
 /* ─── PAGE 4 — Warranties + Scope + BOM ─── */
-// Row color is auto-assigned by cycling this palette (matches today's
-// exact 6-row look) rather than being a per-row editable field — see the
-// settings-page decision in Phase 4's report.
-const WARRANTY_COLORS = [BLUE2, "#7C3AED", GREEN, ACCENT];
-
-function P4({ s }: { s: AppSettings }) {
-  const warranty = s.default_warranty?.length ? s.default_warranty : defaultSettings.default_warranty;
-  const scope = s.default_scope ?? defaultSettings.default_scope;
+function P4() {
   return (
     <>
       <SectionTitle title="Warranties" sub="OEM guaranteed" />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginBottom: 14 }}>
-        {warranty.map((w, i) => {
-          const color = WARRANTY_COLORS[i % WARRANTY_COLORS.length];
-          return (
-            <div key={i} style={{ border: `1px solid ${color}30`, borderRadius: 8, padding: "10px 12px", background: "#FAFCFF" }}>
-              <div style={{ fontWeight: 700, color: NAVY, fontSize: FONT }}>{w.item}</div>
-              <div style={{ fontSize: FONT_S, color: "#4B4B4B", marginTop: 2 }}>{w.coverage}</div>
-              <div style={{ fontSize: FONT_L, fontWeight: 700, color, marginTop: 6 }}>{w.period}</div>
-            </div>
-          );
-        })}
+        {[
+          { item: "Solar PV Modules", cov: "Manufacturing Defect", period: "12 Years", color: BLUE2 },
+          { item: "Solar PV Modules", cov: "Linear Performance (80%)", period: "30 Years", color: BLUE2 },
+          { item: "Inverter", cov: "Standard OEM", period: "5 Yrs (ext. 8)", color: "#7C3AED" },
+          { item: "HDG Structure", cov: "Corrosion Warranty", period: "15 Years", color: GREEN },
+          { item: "Balance of System", cov: "OEM Standard", period: "1 Year", color: ACCENT },
+          { item: "Workmanship", cov: "Installation Quality", period: "1 Year", color: ACCENT },
+        ].map((w, i) => (
+          <div key={i} style={{ border: `1px solid ${w.color}30`, borderRadius: 8, padding: "10px 12px", background: "#FAFCFF" }}>
+            <div style={{ fontWeight: 700, color: NAVY, fontSize: FONT }}>{w.item}</div>
+            <div style={{ fontSize: FONT_S, color: "#4B4B4B", marginTop: 2 }}>{w.cov}</div>
+            <div style={{ fontSize: FONT_L, fontWeight: 700, color: w.color, marginTop: 6 }}>{w.period}</div>
+          </div>
+        ))}
       </div>
 
       <SectionTitle title="Scope of Work" sub="Inclusions and exclusions" />
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
         <div style={{ background: GREEN_L, borderRadius: 8, padding: "12px 14px" }}>
           <div style={{ fontWeight: 700, color: GREEN, fontSize: FONT, marginBottom: 8 }}>INCLUDED IN SCOPE</div>
-          {scope.included.map(i => (
+          {["Solar modules, inverter, structure", "DC and AC cables, connectors, trays", "Earthing system and lightning arrester", "Net meter with LT/CT box", "DISCOM net metering approval", "EAR and Marine insurance", "Commissioning and monitoring setup", "Remote monitoring (1 year free)"].map(i => (
             <div key={i} style={{ fontSize: FONT, color: "#166534", marginBottom: 4 }}>+ {i}</div>
           ))}
         </div>
         <div style={{ background: RED_L, borderRadius: 8, padding: "12px 14px" }}>
           <div style={{ fontWeight: 700, color: RED, fontSize: FONT, marginBottom: 8 }}>CLIENT SCOPE (Not Included)</div>
-          {scope.excluded.map(i => (
+          {["Water supply at site", "Internet for monitoring", "Power during installation", "Service lift / crane", "Roof access ladder", "Removal of existing system", "Meter merging / load enhancement", "Civil / waterproofing work"].map(i => (
             <div key={i} style={{ fontSize: FONT, color: "#991b1b", marginBottom: 4 }}>- {i}</div>
           ))}
         </div>
@@ -625,7 +593,8 @@ function P5({ f, s }: { f: QuoteForm; s: AppSettings }) {
       <div>
         <SectionTitle title="Terms and Acceptance" />
         <div style={{ background: LIGHT, border: `1px solid ${BLUE2}`, borderRadius: 8, padding: "10px 16px", fontSize: FONT, lineHeight: 1.6 }}>
-          {s.default_terms || defaultSettings.default_terms}
+          By signing below, both parties agree to the Techno-Commercial Proposal terms.{" "}
+          <span style={{ color: RED, fontWeight: 600 }}>Payments as per milestone schedule. GST as applicable. Proposal valid for 30 days from date above.</span>
         </div>
       </div>
 
@@ -649,23 +618,18 @@ function P5({ f, s }: { f: QuoteForm; s: AppSettings }) {
         ))}
       </div>
 
-      {/* Tenant-toggleable, defaults OFF — these are specific named
-          third-party clients, not generic content; see settings page copy
-          for why this doesn't default on like the other two toggles. */}
-      {s.show_client_logos && (
-        <div>
-          <SectionTitle title="Our Clients" sub="Trusted by leading developers" />
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 30, flexWrap: "wrap", padding: "20px 0" }}>
-            <img src="/client_hiranandani.jpeg" alt="Hiranandani" style={{ height: 98, objectFit: "contain" }} />
-            <img src="/client_mahavir.jpeg" alt="Mahavir" style={{ height: 76, objectFit: "contain" }} />
-            <img src="/client_jpinfra.jpeg" alt="JP Infra" style={{ height: 84, objectFit: "contain" }} />
-            <img src="/client_lodha.jpeg" alt="Lodha" style={{ height: 76, objectFit: "contain" }} />
-            <img src="/client_triveni.jpeg" alt="Triveni" style={{ height: 98, objectFit: "contain" }} />
-            <img src="/client_regency.jpeg" alt="Regency" style={{ height: 90, objectFit: "contain" }} />
-            <img src="/client_mohan.jpeg" alt="Mohan Group" style={{ height: 98, objectFit: "contain" }} />
-          </div>
+      <div>
+        <SectionTitle title="Our Clients" sub="Trusted by leading developers" />
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 30, flexWrap: "wrap", padding: "20px 0" }}>
+          <img src="/client_hiranandani.jpeg" alt="Hiranandani" style={{ height: 98, objectFit: "contain" }} />
+          <img src="/client_mahavir.jpeg" alt="Mahavir" style={{ height: 76, objectFit: "contain" }} />
+          <img src="/client_jpinfra.jpeg" alt="JP Infra" style={{ height: 84, objectFit: "contain" }} />
+          <img src="/client_lodha.jpeg" alt="Lodha" style={{ height: 76, objectFit: "contain" }} />
+          <img src="/client_triveni.jpeg" alt="Triveni" style={{ height: 98, objectFit: "contain" }} />
+          <img src="/client_regency.jpeg" alt="Regency" style={{ height: 90, objectFit: "contain" }} />
+          <img src="/client_mohan.jpeg" alt="Mohan Group" style={{ height: 98, objectFit: "contain" }} />
         </div>
-      )}
+      </div>
 
       <div style={{ background: NAVY, color: "white", textAlign: "center", padding: "18px", borderRadius: 8 }}>
         <div style={{ color: ACCENT, fontWeight: 700, fontSize: FONT_L }}>Thank you for choosing {s.name}</div>
@@ -680,9 +644,9 @@ function QuotationDocument({ f, c, s, showSiteDetails }: { f: QuoteForm; c: Calc
   return (
     <div id="quotation-document">
       <Page s={s}><P1 f={f} c={c} s={s} showSiteDetails={showSiteDetails} /></Page>
-      <Page s={s}><P2 f={f} c={c} s={s} /></Page>
+      <Page s={s}><P2 f={f} c={c} /></Page>
       <Page s={s}><P3 f={f} c={c} /></Page>
-      <Page s={s}><P4 s={s} /></Page>
+      <Page s={s}><P4 /></Page>
       <Page s={s}><P5 f={f} s={s} /></Page>
     </div>
   );
@@ -762,7 +726,7 @@ function QuotePageInner() {
 
   const [busy, setBusy] = useState(false);
   const [shareHint, setShareHint] = useState<string | null>(null);
-  const c = compute(f, settings.default_payment_schedule);
+  const c = compute(f);
 
   const onChange = (e: ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
@@ -1082,9 +1046,10 @@ function QuotePageInner() {
                 ["Payback", `${c.paybackYears} years`],
                 ["25-yr Returns", lakh(totalSavings25(f, c.gen))],
                 ["ROI", `${c.roi25}%`],
-                ...(settings.default_payment_schedule ?? DEFAULT_SCHEDULE).map((m, i): [string, string] =>
-                  [`T-${i + 1} (${m.percent}%)`, inrFull([c.t1, c.t2, c.t3, c.t4][i] ?? 0)]
-                ),
+                ["T-1 (30%)", inrFull(c.t1)],
+                ["T-2 (40%)", inrFull(c.t2)],
+                ["T-3 (20%)", inrFull(c.t3)],
+                ["T-4 (10%)", inrFull(c.t4)],
               ].map(([l, v]) => (
                 <div key={l} className="contents">
                   <div className="text-blue-600">{l}:</div>
@@ -1097,19 +1062,7 @@ function QuotePageInner() {
 
         <div className="overflow-auto rounded-2xl border border-gray-200" style={{ maxHeight: "88vh", background: "#e5e7eb" }}>
           {showPreview ? (
-            <div
-              style={{
-                padding: 16,
-                // Resolved once here from the tenant's settings — NAVY/
-                // BLUE2/ACCENT (used throughout P1-P5/PdfHeader) reference
-                // these var() names with the same hex as fallback, so a
-                // tenant who's never customized branding renders pixel-
-                // identical to before this feature existed.
-                ["--quote-primary" as string]: settings.primary_color || "#0F1E3D",
-                ["--quote-secondary" as string]: settings.secondary_color || "#1E88E5",
-                ["--quote-accent" as string]: settings.accent_color || "#F5A623",
-              } as CSSProperties}
-            >
+            <div style={{ padding: 16 }}>
               <QuotationDocument f={f} c={c} s={settings} showSiteDetails={showSiteDetails} />
             </div>
           ) : (
