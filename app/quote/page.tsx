@@ -3,6 +3,7 @@ import { useState, useEffect, type ChangeEvent, type ReactNode, type CSSProperti
 import { useSearchParams } from "next/navigation";
 import { company } from "@/lib/company.config";
 import { getSettings, defaultSettings, type AppSettings, type PaymentMilestone } from '@/lib/settings'
+import { fetchActiveProducts, type Product } from '@/lib/products'
 
 export const dynamic = 'force-dynamic'
 export const fetchCache = 'force-no-store'
@@ -66,6 +67,36 @@ const DEFAULT_SCHEDULE: PaymentMilestone[] = [
   { label: "Installation & Commissioning", percent: 20 },
   { label: "Net Meter & Handover", percent: 10 },
 ];
+
+// Product-library spec-string composition (Phase 5). A null product (no
+// selection made) returns EXACTLY today's original hardcoded text — that's
+// what makes "select nothing, see no change" true. A selection reconstructs
+// the same phrasing pattern from brand/model/wattage_or_spec/specs instead
+// of duplicating near-identical strings per call site. Deliberately does
+// NOT touch pricing — ratePerWp stays a manual input regardless.
+function moduleSpecP2(p: Product | null): string {
+  if (!p) return "Waaree / Premier TOPCon Bifacial 580 Wp | BIS Compliant";
+  const base = [p.brand, p.model, p.wattage_or_spec].filter(Boolean).join(" ");
+  return `${base} | ${p.specs?.certification || "BIS Compliant"}`;
+}
+
+function moduleSpecP4(p: Product | null): string {
+  if (!p) return "Waaree / Premier TOPCon Bifacial 580 Wp | BIS | 0.45% degradation";
+  const base = [p.brand, p.model, p.wattage_or_spec].filter(Boolean).join(" ");
+  return `${base} | BIS | ${p.specs?.degradation || "0.45% degradation"}`;
+}
+
+function inverterBrandModel(p: Product | null): string {
+  return p ? [p.brand, p.model].filter(Boolean).join(" ") : "Waaree String";
+}
+
+function inverterSpecP2(p: Product | null, capacityKw: number): string {
+  return `${inverterBrandModel(p)} ${capacityKw} kW | ${p?.specs?.connectivity || "Grid-tied"}`;
+}
+
+function inverterSpecP4(p: Product | null): string {
+  return `${inverterBrandModel(p)} | ${p?.specs?.connectivity || "Grid-tied"} | ${p?.specs?.monitoring || "Remote monitoring ready"}`;
+}
 
 function compute(f: QuoteForm, schedule: PaymentMilestone[] = DEFAULT_SCHEDULE) {
   const wp              = f.systemCapacity * 1000;
@@ -351,14 +382,15 @@ function P1({ f, c, s, showSiteDetails }: { f: QuoteForm; c: Calc; s: AppSetting
    which ballooned into "too much" when content was shorter than the page.
    Switched to a fixed, moderate gap instead — predictable spacing that
    doesn't grow or shrink based on how much room happens to be left. */
-function P2({ f, c, s }: { f: QuoteForm; c: Calc; s: AppSettings }) {
+function P2({ f, c, s, panel, inverter }: { f: QuoteForm; c: Calc; s: AppSettings; panel: Product | null; inverter: Product | null }) {
+  const panelKpiSub = panel ? [panel.brand, panel.model].filter(Boolean).join(" ") : "Waaree 580 Wp TOPCon";
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", flex: 1, gap: 22 }}>
       <div>
         <SectionTitle title="System Design" sub="Technical configuration" />
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 12 }}>
-          <KpiCard label="Solar Panels" value={`${c.panels}`} sub="Waaree 580 Wp TOPCon" color={BLUE2} bg="#EEF5FF" />
-          <KpiCard label="Inverter" value={`${f.systemCapacity} kW`} sub="Waaree String" color={NAVY} bg={LIGHT} />
+          <KpiCard label="Solar Panels" value={`${c.panels}`} sub={panelKpiSub} color={BLUE2} bg="#EEF5FF" />
+          <KpiCard label="Inverter" value={`${f.systemCapacity} kW`} sub={inverterBrandModel(inverter)} color={NAVY} bg={LIGHT} />
           <KpiCard label="AC Generation" value={`${c.gen.toLocaleString("en-IN")}`} sub="kWh / year" color={GREEN} bg={GREEN_L} />
           <KpiCard label="Performance Ratio" value="75%" sub="GHI: 1,850 kWh/m2" color="#7C3AED" bg="#F3EEFF" />
         </div>
@@ -366,8 +398,8 @@ function P2({ f, c, s }: { f: QuoteForm; c: Calc; s: AppSettings }) {
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <tbody>
             {[
-              ["Module", "Waaree / Premier TOPCon Bifacial 580 Wp | BIS Compliant", "Structure", "Hot-Dip Galvanized (HDG) | 15-yr warranty"],
-              ["Inverter", `Waaree String ${f.systemCapacity} kW | Grid-tied`, "DC Cable", "4 mm2 Tinned Cu | EN-50618 (Waasol)"],
+              ["Module", moduleSpecP2(panel), "Structure", "Hot-Dip Galvanized (HDG) | 15-yr warranty"],
+              ["Inverter", inverterSpecP2(inverter, f.systemCapacity), "DC Cable", "4 mm2 Tinned Cu | EN-50618 (Waasol)"],
               ["Degradation", "0.45% YoY from Year 2", "Timeline", "60-70 days from PO & Advance"],
               ["Earthing", "Chemical Earth Pits per IS 3043", "Lightning Arrester", "Conventional LA per IEC-62305"],
             ].map((row, i) => (
@@ -546,7 +578,7 @@ function P3({ f, c }: { f: QuoteForm; c: Calc }) {
 // settings-page decision in Phase 4's report.
 const WARRANTY_COLORS = [BLUE2, "#7C3AED", GREEN, ACCENT];
 
-function P4({ s }: { s: AppSettings }) {
+function P4({ s, panel, inverter }: { s: AppSettings; panel: Product | null; inverter: Product | null }) {
   const warranty = s.default_warranty?.length ? s.default_warranty : defaultSettings.default_warranty;
   const scope = s.default_scope ?? defaultSettings.default_scope;
   return (
@@ -592,8 +624,8 @@ function P4({ s }: { s: AppSettings }) {
         </thead>
         <tbody>
           {[
-            ["1", "Solar PV Modules", "Waaree / Premier TOPCon Bifacial 580 Wp | BIS | 0.45% degradation"],
-            ["2", "String Inverter", "Waaree String | Grid-tied | Remote monitoring ready"],
+            ["1", "Solar PV Modules", moduleSpecP4(panel)],
+            ["2", "String Inverter", inverterSpecP4(inverter)],
             ["3", "Mounting Structure", "Hot-Dip Galvanized (HDG) | SS-304 fasteners | 15-yr warranty"],
             ["4", "DC Cables", "4 mm2 Tinned Cu UV-Protected | Waasol | EN-50618"],
             ["5", "AC Cables", "Polycab/KEI | Al XLPE Armoured | Bimetallic Lugs"],
@@ -676,13 +708,13 @@ function P5({ f, s }: { f: QuoteForm; s: AppSettings }) {
 }
 
 /* ─── Full Document ─── */
-function QuotationDocument({ f, c, s, showSiteDetails }: { f: QuoteForm; c: Calc; s: AppSettings; showSiteDetails: boolean }) {
+function QuotationDocument({ f, c, s, showSiteDetails, panel, inverter }: { f: QuoteForm; c: Calc; s: AppSettings; showSiteDetails: boolean; panel: Product | null; inverter: Product | null }) {
   return (
     <div id="quotation-document">
       <Page s={s}><P1 f={f} c={c} s={s} showSiteDetails={showSiteDetails} /></Page>
-      <Page s={s}><P2 f={f} c={c} s={s} /></Page>
+      <Page s={s}><P2 f={f} c={c} s={s} panel={panel} inverter={inverter} /></Page>
       <Page s={s}><P3 f={f} c={c} /></Page>
-      <Page s={s}><P4 s={s} /></Page>
+      <Page s={s}><P4 s={s} panel={panel} inverter={inverter} /></Page>
       <Page s={s}><P5 f={f} s={s} /></Page>
     </div>
   );
@@ -725,6 +757,16 @@ function QuotePageInner() {
   const valid = new Date(); valid.setDate(valid.getDate() + 30);
   const searchParams = useSearchParams();
   const [settings, setSettings] = useState<AppSettings>(defaultSettings)
+  // Optional product-library selections (Phase 5) — null means "not
+  // selected," which is exactly what makes P2/P4 fall back to today's
+  // hardcoded spec text unchanged. Pricing (ratePerWp) is deliberately
+  // untouched by these — this only feeds spec/BOM text, never cost.
+  const [panelOptions, setPanelOptions] = useState<Product[]>([])
+  const [inverterOptions, setInverterOptions] = useState<Product[]>([])
+  const [selectedPanelId, setSelectedPanelId] = useState('')
+  const [selectedInverterId, setSelectedInverterId] = useState('')
+  const selectedPanel = panelOptions.find(p => p.id === selectedPanelId) ?? null
+  const selectedInverter = inverterOptions.find(p => p.id === selectedInverterId) ?? null
 
   const [f, setF] = useState<QuoteForm>({
     proposalNo: `OPS-${new Date().getFullYear()}-001`,
@@ -758,6 +800,8 @@ function QuotePageInner() {
       }))
     }
     run()
+    fetchActiveProducts('panel').then(setPanelOptions)
+    fetchActiveProducts('inverter').then(setInverterOptions)
   }, [])
 
   const [busy, setBusy] = useState(false);
@@ -1054,6 +1098,26 @@ function QuotePageInner() {
               {f.projectType === "OPEX / PPA" && (
                 <Field label="PPA Rate (Rs./kWh)" name="ppaRate" type="number" value={f.ppaRate} onChange={onChange} />
               )}
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Panel Model (optional)</label>
+                <select value={selectedPanelId} onChange={e => setSelectedPanelId(e.target.value)}
+                  className="w-full px-3 py-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400">
+                  <option value="">Default (Waaree / Premier 580 Wp)</option>
+                  {panelOptions.map(p => (
+                    <option key={p.id} value={p.id}>{p.brand} {p.model}{p.wattage_or_spec ? ` — ${p.wattage_or_spec}` : ""}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Inverter Model (optional)</label>
+                <select value={selectedInverterId} onChange={e => setSelectedInverterId(e.target.value)}
+                  className="w-full px-3 py-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400">
+                  <option value="">Default (Waaree String)</option>
+                  {inverterOptions.map(p => (
+                    <option key={p.id} value={p.id}>{p.brand} {p.model}{p.wattage_or_spec ? ` — ${p.wattage_or_spec}` : ""}</option>
+                  ))}
+                </select>
+              </div>
               <div className="col-span-2"><Field label="AC Cable Spec" name="acCableSpec" value={f.acCableSpec} onChange={onChange} /></div>
             </div>
           </div>
@@ -1110,7 +1174,7 @@ function QuotePageInner() {
                 ["--quote-accent" as string]: settings.accent_color || "#F5A623",
               } as CSSProperties}
             >
-              <QuotationDocument f={f} c={c} s={settings} showSiteDetails={showSiteDetails} />
+              <QuotationDocument f={f} c={c} s={settings} showSiteDetails={showSiteDetails} panel={selectedPanel} inverter={selectedInverter} />
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center h-64 gap-4">

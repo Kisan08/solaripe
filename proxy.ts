@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { isPlatformAdmin } from "@/lib/admin";
 
 // Every page in this app is a "use client" component (confirmed by
 // inspection), so there's no server-rendered auth check to hook into
@@ -55,6 +56,17 @@ export async function proxy(request: NextRequest) {
     const loginUrl = new URL("/login", request.url);
     loginUrl.searchParams.set("redirectedFrom", request.nextUrl.pathname);
     return NextResponse.redirect(loginUrl);
+  }
+
+  // /admin/* actually blocks the route here rather than just hiding a nav
+  // link — a logged-in non-admin tenant redirected straight to the
+  // dashboard, same as if the route didn't exist for them. This is on top
+  // of (not instead of) the RLS policies on product_library itself and the
+  // /api/admin/* routes' own check — three independent layers, since a
+  // proxy bug here should never be the only thing standing between a
+  // tenant and write access to the shared catalog.
+  if (request.nextUrl.pathname.startsWith("/admin") && !isPlatformAdmin(user.id)) {
+    return NextResponse.redirect(new URL("/", request.url));
   }
 
   return response;
