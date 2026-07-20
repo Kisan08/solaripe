@@ -1,9 +1,14 @@
 "use client";
 import { useState, useEffect, type ChangeEvent, type ReactNode, type CSSProperties, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
+import { Phone, Mail, MapPin } from "lucide-react";
 import { company } from "@/lib/company.config";
 import { getSettings, defaultSettings, type AppSettings, type PaymentMilestone } from '@/lib/settings'
 import { fetchActiveProducts, type Product } from '@/lib/products'
+import {
+  fetchClientLogos, fetchTestimonials, fetchCertifications, fetchFeaturedProjects,
+  type ClientLogo, type Testimonial, type Certification, type TenantProject,
+} from '@/lib/media'
 
 export const dynamic = 'force-dynamic'
 export const fetchCache = 'force-no-store'
@@ -158,12 +163,52 @@ const TH: CSSProperties   = { ...BASE, background: NAVY, color: "white", fontWei
 const TD: CSSProperties   = { ...BASE };
 const LB: CSSProperties   = { ...BASE, background: LIGHT, fontWeight: 600, color: NAVY };
 
+// No-logo fallback: a tenant who hasn't uploaded a logo (Settings > Quote
+// Branding) gets a CSS-generated initials badge in their own brand colors
+// instead of a generic stock building-icon image — reads as "this
+// company's mark," not "no logo was configured." Falls back to "OPS"-style
+// short_name (already a deliberately short identifier), or the first
+// letter of the full name if short_name is empty.
+// Always rendered inside its own rounded box (white for an uploaded image,
+// brand-gradient for the initials fallback) rather than a bare <img> —
+// makes the logo legible regardless of what's behind it, which matters
+// once this is placed over a dark photo hero (CoverHero below), not just
+// the plain white PdfHeader strip it originally lived in.
+function LogoBadge({ s, size = 54 }: { s: AppSettings; size?: number }) {
+  if (s.logo_url) {
+    return (
+      <div
+        style={{
+          width: size, height: size, borderRadius: 10, flexShrink: 0,
+          background: "white", display: "flex", alignItems: "center", justifyContent: "center",
+          padding: 6, boxSizing: "border-box",
+        }}
+      >
+        <img src={s.logo_url} alt="Logo" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+      </div>
+    );
+  }
+  const initials = (s.short_name || s.name || "").trim().slice(0, 3).toUpperCase() || "?";
+  return (
+    <div
+      style={{
+        width: size, height: size, borderRadius: 10, flexShrink: 0,
+        background: `linear-gradient(135deg, ${s.primary_color || NAVY}, ${s.secondary_color || BLUE2})`,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        color: "white", fontWeight: 800, fontSize: initials.length > 2 ? size * 0.28 : size * 0.35, letterSpacing: 0.5,
+      }}
+    >
+      {initials}
+    </div>
+  );
+}
+
 /* ─── PDF Shell ─── */
 function PdfHeader({ s }: { s: AppSettings }) {
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingBottom: 12, borderBottom: `3px solid ${BLUE2}`, marginBottom: 6 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-        <img src={s.logo_url || "/logo.png"} alt="Logo" style={{ width: 54, height: 54, objectFit: "contain" }} />
+        <LogoBadge s={s} />
         <div>
           <div style={{ color: NAVY, fontWeight: 800, fontSize: 17, letterSpacing: 0.5, marginBottom: 3 }}>
             {s.name.toUpperCase()}
@@ -201,14 +246,18 @@ function PdfFooter({ s }: { s: AppSettings }) {
   );
 }
 
-function Page({ children, s }: { children: ReactNode; s: AppSettings }) {
+// hideHeader: Page 1's cover folds the logo/company-info strip into its
+// own full-width photo banner (CoverHero) instead of using the slim
+// PdfHeader repeated on every other page — showing both would duplicate
+// the same logo/name/contact info twice at the top of the cover.
+function Page({ children, s, hideHeader }: { children: ReactNode; s: AppSettings; hideHeader?: boolean }) {
   return (
     <div className="quote-page" style={{
       fontFamily: "Arial, sans-serif", fontSize: FONT, color: "#1a1a1a", background: "white",
       padding: "26px 32px", width: 794, minHeight: 1123, margin: "0 auto 18px",
       boxSizing: "border-box", display: "flex", flexDirection: "column", pageBreakAfter: "always",
     }}>
-      <PdfHeader s={s} />
+      {!hideHeader && <PdfHeader s={s} />}
       <div style={{ flex: 1, paddingTop: 6, display: "flex", flexDirection: "column" }}>{children}</div>
       <PdfFooter s={s} />
     </div>
@@ -243,54 +292,137 @@ function KpiCard({ label, value, sub, color = BLUE2, bg = LIGHT }: { label: stri
    Contrast fix: hero overlay darkened from rgba(15,30,61,0.6) to
    rgba(15,30,61,0.78) and the "TECHNO-COMMERCIAL PROPOSAL" label brought to
    full opacity — both were washing out against bright sky photos. */
+// No-cover-photo fallback: the old default, /solar_cover.jpg, was a stock
+// photo with "OMKAR POWER SOLUTIONS" baked into the image pixels — every
+// tenant who hadn't uploaded their own cover photo was unknowingly showing
+// a different company's name on their proposal's cover page. Replaced with
+// a CSS-generated solar-panel-grid pattern in the tenant's own brand
+// colors instead of swapping in a different stock photo, so no future
+// tenant can ever inherit baked-in branding again. Sized identically
+// (100% x 190, display:block) so the absolutely-positioned label/badge
+// siblings in P1 need no changes.
+function HeroBackground({ s, height = 190 }: { s: AppSettings; height?: number }) {
+  if (s.cover_image_url) {
+    return (
+      <img
+        src={s.cover_image_url}
+        alt={s.name}
+        style={{
+          width: "100%",
+          height,
+          objectFit: "cover",
+          objectPosition: "center center",
+          display: "block",
+          filter: "saturate(1.06) contrast(1.03) brightness(1.02)",
+        }}
+      />
+    );
+  }
+  const primary = s.primary_color || NAVY;
+  const secondary = s.secondary_color || BLUE2;
+  const accent = s.accent_color || ACCENT;
+  return (
+    <div
+      style={{
+        width: "100%",
+        height,
+        display: "block",
+        position: "relative",
+        overflow: "hidden",
+        // Layered back-to-front: a small soft accent-colored highlight
+        // tucked into the corner, base brand-color gradient underneath.
+        // Earlier versions also had a panel-cell grid pattern and a
+        // diagonal light streak — both dropped since neither read cleanly
+        // at PDF size, leaving just a flat gradient with a corner glow.
+        backgroundImage: [
+          `radial-gradient(circle at 92% 8%, ${accent}55 0%, transparent 22%)`,
+          `linear-gradient(135deg, ${primary} 0%, ${secondary} 100%)`,
+        ].join(", "),
+      }}
+    />
+  );
+}
+
+// Cover-page banner: replaces the old two-piece layout (a slim white
+// PdfHeader strip, then a separate photo hero below it with a small
+// bottom-corner label + badge) with one unified full-width photo/gradient
+// banner carrying logo, company info, proposal title, and the system-size
+// badge together — chosen (of four mockup options) as the one that's
+// reliably renderable in the html2canvas PDF pipeline (flexbox + a single
+// clip-path ribbon, no multi-shape chevron cutouts) and pairs naturally
+// with HeroBackground's photo-or-brand-gradient fallback. Only used here,
+// on Page 1 — every other page keeps the existing slim PdfHeader (a full
+// photo banner repeated on the financial/warranty pages would be visual
+// noise, not a proposal header).
+function CoverHero({ f, s }: { f: QuoteForm; s: AppSettings }) {
+  return (
+    <div style={{ position: "relative", marginTop: 8, borderRadius: 8, overflow: "hidden", height: 216 }}>
+      <HeroBackground s={s} height={216} />
+      {/* Stronger on the left (where the logo/text block sits) than the
+          right, so the ribbon badge doesn't disappear into the darkest
+          part of a customer's own bright cover photo. */}
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          background: "linear-gradient(90deg, rgba(8,18,45,0.72) 0%, rgba(8,18,45,0.45) 55%, rgba(8,18,45,0.22) 100%)",
+        }}
+      />
+      <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 22px", boxSizing: "border-box" }}>
+        <div style={{ display: "flex", gap: 14, alignItems: "flex-start", minWidth: 0 }}>
+          <LogoBadge s={s} size={54} />
+          <div style={{ minWidth: 0 }}>
+            <div style={{ color: "white", fontWeight: 800, fontSize: 21, letterSpacing: 0.4, lineHeight: 1.2 }}>
+              {s.name.toUpperCase()}
+            </div>
+            <div style={{ color: "#c9d9f0", fontSize: FONT_S, marginTop: 3 }}>
+              {s.tagline || defaultSettings.tagline}
+            </div>
+            <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 4 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, color: "white", fontSize: FONT_S }}>
+                <Phone size={12} /> {s.phone}
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, color: "white", fontSize: FONT_S }}>
+                <Mail size={12} /> {s.email}
+              </div>
+              {s.address && (
+                <div style={{ display: "flex", alignItems: "center", gap: 6, color: "white", fontSize: FONT_S }}>
+                  <MapPin size={12} /> {s.address}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+        <div style={{ textAlign: "right", flexShrink: 0 }}>
+          <div style={{ color: "white", fontWeight: 800, fontSize: 19, lineHeight: 1.3, letterSpacing: 0.4 }}>
+            TECHNO-COMMERCIAL<br />PROPOSAL
+          </div>
+          <div style={{ width: 64, height: 3, background: ACCENT, marginTop: 8, marginLeft: "auto" }} />
+          <div
+            style={{
+              display: "inline-block",
+              marginTop: 14,
+              background: ACCENT,
+              color: NAVY,
+              fontWeight: 800,
+              fontSize: FONT_L,
+              padding: "8px 16px 8px 22px",
+              clipPath: "polygon(12px 0, 100% 0, 100% 100%, 12px 100%, 0 50%)",
+            }}
+          >
+            {f.systemCapacity} kWp
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function P1({ f, c, s, showSiteDetails }: { f: QuoteForm; c: Calc; s: AppSettings; showSiteDetails: boolean }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", flex: 1, justifyContent: "space-between", gap: 0 }}>
       <div>
-        {/* Hero */}
-        <div style={{ position: "relative", marginTop: 8, borderRadius: 8, overflow: "hidden" }}>
-          <img
-            src={s.cover_image_url || "/solar_cover.jpg"}
-            alt={s.name}
-            style={{
-              width: "100%",
-              height: 190,
-              objectFit: "cover",
-              objectPosition: "center center",
-              display: "block",
-              filter: "saturate(1.06) contrast(1.03) brightness(1.02)",
-            }}
-          />
-          {/* Very light overlay only for subtle text readability.
-              The previous rgba(15,30,61,0.78) was making the image look heavily faded. */}
-          <div
-            style={{
-              position: "absolute",
-              inset: 0,
-              background:
-                "linear-gradient(90deg, rgba(8,18,45,0.08) 0%, rgba(8,18,45,0.03) 55%, rgba(8,18,45,0.12) 100%)",
-            }}
-          />
-          <div
-            style={{
-              position: "absolute",
-              bottom: 12,
-              left: 16,
-              color: "white",
-              background: "rgba(8,18,45,0.58)",
-              padding: "5px 10px",
-              borderRadius: 5,
-              backdropFilter: "blur(2px)",
-            }}
-          >
-            <div style={{ fontSize: FONT_S, letterSpacing: 1.8, fontWeight: 700 }}>
-              TECHNO-COMMERCIAL PROPOSAL
-            </div>
-          </div>
-          <div style={{ position: "absolute", bottom: 14, right: 16, background: ACCENT, color: NAVY, padding: "6px 14px", borderRadius: 6, fontWeight: 700, fontSize: FONT_L }}>
-            {f.systemCapacity} kWp
-          </div>
-        </div>
+        <CoverHero f={f} s={s} />
 
         {/* Client name BELOW image */}
         <div style={{ background: NAVY, borderRadius: 8, padding: "12px 16px", marginTop: 6 }}>
@@ -572,13 +704,50 @@ function P3({ f, c }: { f: QuoteForm; c: Calc }) {
   );
 }
 
+/* ─── PAGE 3B — Completed Projects (Phase 6) ───
+   Its own dedicated page, inserted between P3 (Financial Analysis) and P4
+   (Warranties/Scope/BOM) only when the tenant has ≥1 featured project —
+   the whole <Page> is omitted otherwise (see QuotationDocument), not just
+   visually hidden, so an empty tenant's PDF has the identical page count
+   as before this phase. P3 and P4 were both already dense (a 25-row
+   table; three stacked sections), so a new page avoids overflow risk on
+   either. */
+function P3B({ projects }: { projects: TenantProject[] }) {
+  return (
+    <>
+      <SectionTitle title="Completed Projects" sub="Recent installations" />
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        {projects.map(p => (
+          <div key={p.id} style={{ border: "1px solid #d0d7e2", borderRadius: 8, overflow: "hidden" }}>
+            {p.main_image_url && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={p.main_image_url} alt={p.title} style={{ width: "100%", height: 120, objectFit: "cover" }} />
+            )}
+            <div style={{ padding: "10px 12px" }}>
+              <div style={{ fontWeight: 700, color: NAVY, fontSize: FONT }}>{p.title}</div>
+              <div style={{ fontSize: FONT_S, color: "#4B4B4B", marginTop: 2 }}>
+                {[p.site_name, p.location].filter(Boolean).join(" · ") || " "}
+              </div>
+              <div style={{ display: "flex", gap: 10, marginTop: 6, fontSize: FONT_S, color: "#4B4B4B" }}>
+                {p.system_capacity_kwp != null && <span>{p.system_capacity_kwp} kWp</span>}
+                {p.completion_date && <span>Completed {fmtDate(p.completion_date)}</span>}
+              </div>
+              {p.description && <div style={{ fontSize: FONT_S, color: "#333", marginTop: 6, lineHeight: 1.4 }}>{p.description}</div>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
 /* ─── PAGE 4 — Warranties + Scope + BOM ─── */
 // Row color is auto-assigned by cycling this palette (matches today's
 // exact 6-row look) rather than being a per-row editable field — see the
 // settings-page decision in Phase 4's report.
 const WARRANTY_COLORS = [BLUE2, "#7C3AED", GREEN, ACCENT];
 
-function P4({ s, panel, inverter }: { s: AppSettings; panel: Product | null; inverter: Product | null }) {
+function P4({ s, panel, inverter, certifications }: { s: AppSettings; panel: Product | null; inverter: Product | null; certifications: Certification[] }) {
   const warranty = s.default_warranty?.length ? s.default_warranty : defaultSettings.default_warranty;
   const scope = s.default_scope ?? defaultSettings.default_scope;
   return (
@@ -596,6 +765,26 @@ function P4({ s, panel, inverter }: { s: AppSettings; panel: Product | null; inv
           );
         })}
       </div>
+
+      {/* Phase 6: tenant certifications — deliberately a compact badge
+          row (not full cards like Warranties above) since P4 is already
+          the most crowded page (Warranties + Scope + BOM), and PDF pages
+          don't reflow/paginate — keeping this terse avoids overflow. */}
+      {certifications.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
+          {certifications.map(cert => (
+            <div key={cert.id} style={{ display: "flex", alignItems: "center", gap: 6, border: `1px solid ${BLUE2}30`, borderRadius: 20, padding: "5px 12px", background: "#FAFCFF" }}>
+              {cert.certificate_image_url && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={cert.certificate_image_url} alt={cert.name} style={{ height: 18, width: 18, objectFit: "contain", borderRadius: 3 }} />
+              )}
+              <span style={{ fontSize: FONT_S, fontWeight: 700, color: NAVY }}>{cert.name}</span>
+              {cert.issuing_authority && <span style={{ fontSize: FONT_S, color: "#4B4B4B" }}>· {cert.issuing_authority}</span>}
+              {cert.expiry_date && <span style={{ fontSize: FONT_S, color: "#4B4B4B" }}>· valid to {fmtDate(cert.expiry_date)}</span>}
+            </div>
+          ))}
+        </div>
+      )}
 
       <SectionTitle title="Scope of Work" sub="Inclusions and exclusions" />
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
@@ -651,7 +840,7 @@ function P4({ s, panel, inverter }: { s: AppSettings; panel: Product | null; inv
    Fix: client logos enlarged (~30-40% bigger across the board) so they
    genuinely fill the bottom of the page, plus wrapped in a flex column
    with justifyContent: 'space-between' for full-page spacing. */
-function P5({ f, s }: { f: QuoteForm; s: AppSettings }) {
+function P5({ f, s, testimonials, clientLogos }: { f: QuoteForm; s: AppSettings; testimonials: Testimonial[]; clientLogos: ClientLogo[] }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", flex: 1, justifyContent: "space-between" }}>
       <div>
@@ -660,6 +849,36 @@ function P5({ f, s }: { f: QuoteForm; s: AppSettings }) {
           {s.default_terms || defaultSettings.default_terms}
         </div>
       </div>
+
+      {/* Phase 6: tenant testimonials — placed before the signature grid
+          (per the confirmed placement decision), only rendered when the
+          tenant has added at least one. */}
+      {testimonials.length > 0 && (
+        <div>
+          <SectionTitle title="What Our Clients Say" sub="Testimonials" />
+          <div style={{ display: "grid", gridTemplateColumns: testimonials.length > 1 ? "1fr 1fr" : "1fr", gap: 10 }}>
+            {testimonials.map(t => (
+              <div key={t.id} style={{ border: "1px solid #d0d7e2", borderRadius: 8, padding: "10px 14px", background: "#FAFCFF" }}>
+                <div style={{ fontSize: FONT_S, color: "#333", lineHeight: 1.5, fontStyle: "italic" }}>&ldquo;{t.testimonial_text}&rdquo;</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
+                  {t.photo_url && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={t.photo_url} alt={t.customer_name} style={{ width: 28, height: 28, borderRadius: "50%", objectFit: "cover" }} />
+                  )}
+                  <div>
+                    <div style={{ fontSize: FONT_S, fontWeight: 700, color: NAVY }}>
+                      {t.customer_name}{t.rating ? ` · ${"★".repeat(Math.round(t.rating))}` : ""}
+                    </div>
+                    {(t.designation || t.customer_company) && (
+                      <div style={{ fontSize: FONT_S, color: "#4B4B4B" }}>{[t.designation, t.customer_company].filter(Boolean).join(", ")}</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         {[
@@ -681,20 +900,18 @@ function P5({ f, s }: { f: QuoteForm; s: AppSettings }) {
         ))}
       </div>
 
-      {/* Tenant-toggleable, defaults OFF — these are specific named
-          third-party clients, not generic content; see settings page copy
-          for why this doesn't default on like the other two toggles. */}
-      {s.show_client_logos && (
+      {/* Phase 6: tenant client logos — replaces the old hardcoded 7-image
+          array and its show_client_logos toggle. Visibility is now purely
+          data-driven: shown iff the tenant has added ≥1 active logo, so a
+          brand-new tenant sees no section at all rather than a toggle
+          defaulted off (see lib/settings.ts's show_client_logos comment). */}
+      {clientLogos.length > 0 && (
         <div>
           <SectionTitle title="Our Clients" sub="Trusted by leading developers" />
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 30, flexWrap: "wrap", padding: "20px 0" }}>
-            <img src="/client_hiranandani.jpeg" alt="Hiranandani" style={{ height: 98, objectFit: "contain" }} />
-            <img src="/client_mahavir.jpeg" alt="Mahavir" style={{ height: 76, objectFit: "contain" }} />
-            <img src="/client_jpinfra.jpeg" alt="JP Infra" style={{ height: 84, objectFit: "contain" }} />
-            <img src="/client_lodha.jpeg" alt="Lodha" style={{ height: 76, objectFit: "contain" }} />
-            <img src="/client_triveni.jpeg" alt="Triveni" style={{ height: 98, objectFit: "contain" }} />
-            <img src="/client_regency.jpeg" alt="Regency" style={{ height: 90, objectFit: "contain" }} />
-            <img src="/client_mohan.jpeg" alt="Mohan Group" style={{ height: 98, objectFit: "contain" }} />
+            {clientLogos.map(logo => (
+              <img key={logo.id} src={logo.logo_url} alt={logo.name} style={{ height: 90, objectFit: "contain" }} />
+            ))}
           </div>
         </div>
       )}
@@ -708,14 +925,22 @@ function P5({ f, s }: { f: QuoteForm; s: AppSettings }) {
 }
 
 /* ─── Full Document ─── */
-function QuotationDocument({ f, c, s, showSiteDetails, panel, inverter }: { f: QuoteForm; c: Calc; s: AppSettings; showSiteDetails: boolean; panel: Product | null; inverter: Product | null }) {
+function QuotationDocument({
+  f, c, s, showSiteDetails, panel, inverter, clientLogos, testimonials, certifications, featuredProjects,
+}: {
+  f: QuoteForm; c: Calc; s: AppSettings; showSiteDetails: boolean; panel: Product | null; inverter: Product | null;
+  clientLogos: ClientLogo[]; testimonials: Testimonial[]; certifications: Certification[]; featuredProjects: TenantProject[];
+}) {
   return (
     <div id="quotation-document">
-      <Page s={s}><P1 f={f} c={c} s={s} showSiteDetails={showSiteDetails} /></Page>
+      <Page s={s} hideHeader><P1 f={f} c={c} s={s} showSiteDetails={showSiteDetails} /></Page>
       <Page s={s}><P2 f={f} c={c} s={s} panel={panel} inverter={inverter} /></Page>
       <Page s={s}><P3 f={f} c={c} /></Page>
-      <Page s={s}><P4 s={s} panel={panel} inverter={inverter} /></Page>
-      <Page s={s}><P5 f={f} s={s} /></Page>
+      {featuredProjects.length > 0 && (
+        <Page s={s}><P3B projects={featuredProjects} /></Page>
+      )}
+      <Page s={s}><P4 s={s} panel={panel} inverter={inverter} certifications={certifications} /></Page>
+      <Page s={s}><P5 f={f} s={s} testimonials={testimonials} clientLogos={clientLogos} /></Page>
     </div>
   );
 }
@@ -768,6 +993,15 @@ function QuotePageInner() {
   const selectedPanel = panelOptions.find(p => p.id === selectedPanelId) ?? null
   const selectedInverter = inverterOptions.find(p => p.id === selectedInverterId) ?? null
 
+  // Phase 6: tenant media library — each array degrades to [] on fetch
+  // error (see lib/media.ts), which is exactly what makes its section
+  // hide rather than crash. Empty arrays are also the correct "tenant
+  // hasn't added this yet" state, so no separate loading gate is needed.
+  const [clientLogos, setClientLogos] = useState<ClientLogo[]>([])
+  const [testimonials, setTestimonials] = useState<Testimonial[]>([])
+  const [certifications, setCertifications] = useState<Certification[]>([])
+  const [featuredProjects, setFeaturedProjects] = useState<TenantProject[]>([])
+
   const [f, setF] = useState<QuoteForm>({
     proposalNo: `OPS-${new Date().getFullYear()}-001`,
     date: today,
@@ -802,6 +1036,10 @@ function QuotePageInner() {
     run()
     fetchActiveProducts('panel').then(setPanelOptions)
     fetchActiveProducts('inverter').then(setInverterOptions)
+    fetchClientLogos().then(setClientLogos)
+    fetchTestimonials().then(setTestimonials)
+    fetchCertifications().then(setCertifications)
+    fetchFeaturedProjects().then(setFeaturedProjects)
   }, [])
 
   const [busy, setBusy] = useState(false);
@@ -1174,7 +1412,8 @@ function QuotePageInner() {
                 ["--quote-accent" as string]: settings.accent_color || "#F5A623",
               } as CSSProperties}
             >
-              <QuotationDocument f={f} c={c} s={settings} showSiteDetails={showSiteDetails} panel={selectedPanel} inverter={selectedInverter} />
+              <QuotationDocument f={f} c={c} s={settings} showSiteDetails={showSiteDetails} panel={selectedPanel} inverter={selectedInverter}
+                clientLogos={clientLogos} testimonials={testimonials} certifications={certifications} featuredProjects={featuredProjects} />
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center h-64 gap-4">

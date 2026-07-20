@@ -1,13 +1,21 @@
 "use client"
 
+import { useState } from "react"
 import Link from "next/link"
 import { motion } from "framer-motion"
-import { MapPin, Zap, Pencil, PenTool } from "lucide-react"
+import { MapPin, Zap, Pencil, PenTool, History, AlertTriangle, Loader2 } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { projectTypeBadge, statusBadge } from "@/lib/badges"
-import { formatINRCompact } from "@/lib/format"
+import { formatINRCompact, formatDate } from "@/lib/format"
 import type { Project } from "@/lib/types"
+import {
+  fetchProjectPipelineHistory,
+  updateProjectPipelineStage,
+  daysStale,
+  type PipelineStage,
+  type ProjectPipelineHistoryEntry,
+} from "@/lib/pipeline"
 
 const MILESTONES = [
   { key: "t1_paid", label: "T1" },
@@ -16,23 +24,70 @@ const MILESTONES = [
   { key: "t4_paid", label: "T4" },
 ] as const
 
+// All stages including inactive ones, resolved by id — a project's
+// current stage (or a past history entry) may point at a stage the
+// tenant has since renamed or deactivated; it should still show a name.
+function stageName(stageId: string | null, stages: PipelineStage[]): string {
+  if (!stageId) return "No stage set"
+  return stages.find((s) => s.id === stageId)?.name ?? "Unknown stage"
+}
+
 export function ProjectCard({
   project,
   index,
+  stages,
   onEdit,
   onToggleMilestone,
+  onStageChanged,
 }: {
   project: Project
   index: number
+  stages: PipelineStage[]
   onEdit: (p: Project) => void
   onToggleMilestone: (
     p: Project,
     field: "t1_paid" | "t2_paid" | "t3_paid" | "t4_paid",
     value: boolean,
   ) => void
+  onStageChanged: () => void
 }) {
   const paidCount = MILESTONES.filter((m) => project[m.key]).length
   const progress = (paidCount / MILESTONES.length) * 100
+
+  const activeStages = stages.filter((s) => s.active)
+  const stale = daysStale(project, stages)
+
+  const [stageNotes, setStageNotes] = useState("")
+  const [changingStage, setChangingStage] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [history, setHistory] = useState<ProjectPipelineHistoryEntry[] | null>(null)
+  const [historyLoading, setHistoryLoading] = useState(false)
+
+  const handleStageSelect = async (stageId: string) => {
+    if (!stageId || stageId === project.current_stage_id) return
+    setChangingStage(true)
+    try {
+      await updateProjectPipelineStage(project.id, stageId, stageNotes)
+      setStageNotes("")
+      setHistory(null) // force a refetch next time history is opened, so the new entry shows
+      onStageChanged()
+    } finally {
+      setChangingStage(false)
+    }
+  }
+
+  const toggleHistory = async () => {
+    const next = !historyOpen
+    setHistoryOpen(next)
+    if (next && history === null) {
+      setHistoryLoading(true)
+      try {
+        setHistory(await fetchProjectPipelineHistory(project.id))
+      } finally {
+        setHistoryLoading(false)
+      }
+    }
+  }
 
   return (
     <motion.div
@@ -108,6 +163,75 @@ export function ProjectCard({
               )
             })}
           </div>
+        </div>
+
+        {/* Pipeline stage — subsidy / net-metering approval tracker.
+            Manual only: the tenant picks a stage after checking the
+            actual government portal themselves, nothing here polls any
+            live system. */}
+        <div className="mt-4">
+          <div className="mb-1.5 flex items-center justify-between">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Pipeline stage
+            </span>
+            {stale != null && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-red-500/10 px-2 py-0.5 text-[11px] font-semibold text-red-600">
+                <AlertTriangle className="size-3" />
+                Stuck {stale}d
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <select
+              value={project.current_stage_id ?? ""}
+              disabled={changingStage}
+              onChange={(e) => handleStageSelect(e.target.value)}
+              className="h-8 flex-1 rounded-lg border border-border bg-background px-2 text-xs font-medium text-foreground disabled:opacity-50"
+            >
+              <option value="" disabled>
+                {stageName(project.current_stage_id, stages)}
+              </option>
+              {activeStages.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+            {changingStage && <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" />}
+          </div>
+          <input
+            type="text"
+            value={stageNotes}
+            onChange={(e) => setStageNotes(e.target.value)}
+            placeholder="Note for next stage change (optional)"
+            className="mt-1.5 h-7 w-full rounded-lg border border-border bg-background px-2 text-[11px] text-foreground placeholder:text-muted-foreground"
+          />
+          <button
+            onClick={toggleHistory}
+            className="mt-1.5 inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+          >
+            <History className="size-3" />
+            {historyOpen ? "Hide history" : "View history"}
+          </button>
+          {historyOpen && (
+            <div className="mt-1.5 max-h-32 space-y-1 overflow-y-auto rounded-lg bg-secondary/50 p-2">
+              {historyLoading ? (
+                <div className="flex items-center justify-center py-2 text-muted-foreground">
+                  <Loader2 className="size-3.5 animate-spin" />
+                </div>
+              ) : history && history.length > 0 ? (
+                history.map((h) => (
+                  <div key={h.id} className="text-[11px] leading-snug">
+                    <span className="font-semibold text-foreground">{stageName(h.stage_id, stages)}</span>
+                    <span className="text-muted-foreground"> — {formatDate(h.entered_at)}</span>
+                    {h.notes && <div className="text-muted-foreground">{h.notes}</div>}
+                  </div>
+                ))
+              ) : (
+                <div className="text-[11px] text-muted-foreground">No stage changes yet.</div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Progress bar */}

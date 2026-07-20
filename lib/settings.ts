@@ -43,11 +43,12 @@ export interface AppSettings {
   accent_color: string
   show_why_solar: boolean
   show_partner_logos: boolean
-  // Defaults to false (not matching today's always-on behavior) — the
-  // section it controls hardcodes real third-party client names
-  // (Hiranandani, Lodha, etc.), which would misattribute someone else's
-  // client relationships for any tenant other than the original company.
-  // Confirmed explicitly, not assumed.
+  // Phase 6: superseded by tenant_client_logos (lib/media.ts) — "Our
+  // Clients" visibility is now purely data-driven (shown iff the tenant
+  // has added ≥1 active logo), so this toggle is no longer read by the
+  // quote page or shown in Settings. Left here (and in the DB column)
+  // rather than dropped, since removing a column is a destructive,
+  // non-reversible migration for a field that costs nothing to keep idle.
   show_client_logos: boolean
   // Quote content defaults (Phase 4) — same fallback philosophy as Phase
   // 3's branding fields: every default below matches today's exact

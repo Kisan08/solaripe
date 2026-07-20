@@ -48,6 +48,8 @@ export interface Project {
   total_value: number | null
   notes: string | null
   created_at: string
+  current_stage_id: string | null
+  current_stage_entered_at: string | null
 }
 
 export const LEAD_STAGES: LeadStage[] = [

@@ -10,21 +10,27 @@ import {
   ArrowRight,
   Activity,
   Sparkles,
+  AlertTriangle,
 } from "lucide-react"
 import { PageHeader } from "@/components/page-header"
 import { Card } from "@/components/ui/card"
 import { StatCard } from "@/components/dashboard/stat-card"
 import { QuickActions } from "@/components/dashboard/quick-actions"
 import { useLeads, useProjects } from "@/lib/data"
+import { daysStale, usePipelineStages } from "@/lib/pipeline"
 import { formatINRCompact, formatDate } from "@/lib/format"
 
 export default function DashboardPage() {
   const { leads } = useLeads()
   const { projects } = useProjects()
+  const { stages } = usePipelineStages()
 
   const totalLeads = leads.length
   const activeProjects = projects.filter(
     (p) => p.status === "In Progress",
+  ).length
+  const staleProjects = projects.filter(
+    (p) => daysStale(p, stages) != null,
   ).length
   const proposalsSent = leads.filter(
     (l) => l.stage === "Proposal Sent" || l.stage === "Negotiation",
@@ -70,7 +76,7 @@ export default function DashboardPage() {
 
       <div className="space-y-6 p-5 md:p-8">
         {/* Stat cards */}
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
           <StatCard
             index={0}
             label="Total Leads"
@@ -103,6 +109,18 @@ export default function DashboardPage() {
             icon={IndianRupee}
             accent="amber"
           />
+          {/* Subsidy/net-metering pipeline staleness — links to the
+              Projects page where the actual stage-change/history UI lives. */}
+          <Link href="/projects">
+            <StatCard
+              index={4}
+              label="Needs Attention"
+              value={String(staleProjects)}
+              hint="Stuck past expected stage time"
+              icon={AlertTriangle}
+              accent="amber"
+            />
+          </Link>
         </div>
 
         {/* Quick actions */}

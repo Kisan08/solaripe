@@ -12,14 +12,12 @@ import {
   deleteProject,
   updateProjectMilestone,
 } from "@/lib/data"
-import { usePipelineStages } from "@/lib/pipeline"
 import type { Project } from "@/lib/types"
 export const dynamic = 'force-dynamic'
 export const fetchCache = 'force-no-store'
 
 export default function ProjectsPage() {
   const { projects, isLoading, mutate } = useProjects()
-  const { stages } = usePipelineStages()
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<Project | null>(null)
 
@@ -102,10 +100,8 @@ export default function ProjectsPage() {
                 key={p.id}
                 project={p}
                 index={i}
-                stages={stages}
                 onEdit={openEdit}
                 onToggleMilestone={handleToggleMilestone}
-                onStageChanged={() => mutate()}
               />
             ))}
           </div>

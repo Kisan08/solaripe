@@ -2,6 +2,7 @@
 import { useEffect, useState, type ChangeEvent } from 'react'
 import { Save, CheckCircle, Upload, Plus, Trash2 } from 'lucide-react'
 import { getSettings, saveSettings, uploadBrandingAsset, defaultSettings, type AppSettings } from '@/lib/settings'
+import { ClientLogosSection, TestimonialsSection, CertificationsSection, ProjectsSection, PipelineStagesSection } from './MediaSections'
 
 const COLOR_FIELDS: { key: keyof AppSettings; label: string }[] = [
   { key: 'primary_color', label: 'Primary (headers, backgrounds)' },
@@ -12,7 +13,6 @@ const COLOR_FIELDS: { key: keyof AppSettings; label: string }[] = [
 const TOGGLE_FIELDS: { key: keyof AppSettings; label: string; help: string }[] = [
   { key: 'show_why_solar', label: '"Why Go Solar Now" strip', help: 'Generic savings/CO2 messaging on the cover page.' },
   { key: 'show_partner_logos', label: 'Panel partner logos', help: 'Waaree / Adani / Premier logos on the cover page.' },
-  { key: 'show_client_logos', label: '"Our Clients" showcase', help: 'Off by default — shows specific named client logos on the final page. Only enable this if those are genuinely your own past clients.' },
 ]
 
 const SECTIONS = [
@@ -374,6 +374,15 @@ export default function SettingsPage() {
             </div>
           </div>
         </div>
+
+        {/* Media Library (Phase 6) */}
+        <ClientLogosSection />
+        <TestimonialsSection />
+        <CertificationsSection />
+        <ProjectsSection />
+
+        {/* Pipeline Tracker (Phase 7) */}
+        <PipelineStagesSection />
 
         {/* Info banner */}
         <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 flex gap-3">
