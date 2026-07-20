@@ -13,6 +13,74 @@ export interface WhatsAppSendResult {
   error?: string;
 }
 
+
+// ADD this function to lib/whatsappNotify.ts, above sendWhatsApp():
+
+// Twilio's WhatsApp API requires the exact format "whatsapp:+<countrycode><number>",
+// e.g. "whatsapp:+917400261410". Numbers stored in Settings (typed by a
+// tenant) or env vars can't be trusted to already be in that shape — a
+// tenant might type "7400261410", "07400261410", "+91 74002 61410", or
+// even already-correct "whatsapp:+917400261410". Normalize once, here, so
+// every caller of sendWhatsApp is protected automatically instead of each
+// call site needing to remember to format correctly.
+//
+// Defaults to India (+91) since that's this app's primary market — if a
+// tenant's number already has a different country code (starts with a
+// digit sequence that isn't a bare 10-digit Indian mobile number), we
+// leave it alone rather than guessing wrong.
+function normalizeWhatsAppNumber(raw: string): string {
+  let n = raw.trim();
+
+  // Already has the whatsapp: prefix — strip it off, normalize what's
+  // left, then re-add it at the end so the logic below is uniform
+  // whether or not the caller included the prefix.
+  if (n.startsWith("whatsapp:")) {
+    n = n.slice("whatsapp:".length);
+  }
+
+  // Strip everything except digits and a leading +
+  n = n.replace(/[^\d+]/g, "");
+
+  if (!n.startsWith("+")) {
+    // Bare 10-digit Indian mobile number, e.g. "7400261410"
+    if (/^\d{10}$/.test(n)) {
+      n = `+91${n}`;
+    }
+    // Number with a leading 0, e.g. "07400261410"
+    else if (/^0\d{10}$/.test(n)) {
+      n = `+91${n.slice(1)}`;
+    }
+    // Already has a country code but no +, e.g. "917400261410"
+    else if (/^91\d{10}$/.test(n)) {
+      n = `+${n}`;
+    }
+    // Anything else unrecognized — add + and hope it's already got a
+    // country code; better than silently sending a guaranteed-invalid
+    // number, and the Twilio error (if still wrong) will be visible in
+    // logs rather than silently swallowed.
+    else {
+      n = `+${n}`;
+    }
+  }
+
+  return `whatsapp:${n}`;
+}
+
+
+// UPDATE sendWhatsApp to use it — change this line:
+//
+//   const msg = await getTwilioClient().messages.create({ from, to, body });
+//
+// to:
+//
+//   const normalizedTo = normalizeWhatsAppNumber(to);
+//   const msg = await getTwilioClient().messages.create({ from, to: normalizedTo, body });
+//
+// Also normalize `from` the same way, for consistency and in case
+// TWILIO_WHATSAPP_FROM is ever set without the prefix in the future:
+//
+//   const normalizedFrom = normalizeWhatsAppNumber(from);
+//   const msg = await getTwilioClient().messages.create({ from: normalizedFrom, to: normalizedTo, body });
 // A notification is a side-effect, not the main job (a call completing, or
 // a cron sweep running) — this must NEVER throw. A missing env var or a
 // Twilio API hiccup here should never take down the calling flow or fail
@@ -44,8 +112,11 @@ async function sendWhatsApp(to: string, body: string): Promise<WhatsAppSendResul
   }
 
   try {
-    const msg = await getTwilioClient().messages.create({ from, to, body });
-    return { ok: true, sid: msg.sid };
+const msg = await getTwilioClient().messages.create({
+  from: normalizeWhatsAppNumber(from),
+  to: normalizeWhatsAppNumber(to),
+  body,
+});    return { ok: true, sid: msg.sid };
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     console.error("[whatsappNotify] send failed", error);
