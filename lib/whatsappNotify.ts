@@ -138,13 +138,22 @@ export async function sendWhatsAppTo(to: string, body: string): Promise<WhatsApp
   return sendWhatsApp(to, body);
 }
 
+const LEAD_SCORE_LABEL: Record<"hot" | "warm" | "cold", string> = {
+  hot: "🔥 HOT LEAD",
+  warm: "🟡 WARM LEAD",
+  cold: "🔵 COLD LEAD",
+};
+
 export function formatCallSummaryMessage(params: {
   name: string;
   phone: string | null;
   stage: string | null;
   notes: string | null;
+  leadScore?: string | null;
 }): string {
-  return `📞 Call finished
+  const score = params.leadScore as "hot" | "warm" | "cold" | null | undefined;
+  const header = score && score in LEAD_SCORE_LABEL ? `📞 Call finished — ${LEAD_SCORE_LABEL[score]}` : "📞 Call finished";
+  return `${header}
 
 Lead: ${params.name}
 Number: ${params.phone ?? "(unknown)"}

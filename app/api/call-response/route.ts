@@ -4,6 +4,7 @@ import { getOrCreateSession, saveSession } from "@/lib/calling/stateManager";
 import { fetchClientContext, applyCrmUpdates } from "@/lib/calling/crmContext";
 import { buildTurnMessages, parseAiTurnResult } from "@/lib/calling/promptBuilder";
 import { callOpenAiJson } from "@/lib/calling/openai";
+import { scoreLeadFromCall } from "@/lib/calling/leadScore";
 import { buildGatherTwiml, buildHangupTwiml } from "@/lib/calling/twiml";
 import { logTurn } from "@/lib/calling/logging";
 import type { CallSession } from "@/lib/calling/types";
@@ -146,6 +147,9 @@ async function handleTurn(req: NextRequest): Promise<NextResponse> {
 
   if (result.endCall) {
     const notesParts = [result.summary, result.followUp && `Follow-up: ${result.followUp}`].filter(Boolean);
+    // Same write as status/notes below, not a separate call — scored from
+    // the exact intent/emotion/slots this turn already produced.
+    const leadScore = scoreLeadFromCall(result.intent, result.emotion, session.slots);
     // These three writes are independent of each other — running them
     // together instead of sequentially is the difference between one
     // round-trip's worth of latency and three, on the turn that's about to
@@ -157,6 +161,7 @@ async function handleTurn(req: NextRequest): Promise<NextResponse> {
         slots: session.slots,
         status: mapEndStatus(result.intent),
         notes: notesParts.join(" "),
+        leadScore,
       }),
     ]);
     return new NextResponse(buildHangupTwiml(result.reply), { headers: { "Content-Type": "text/xml" } });

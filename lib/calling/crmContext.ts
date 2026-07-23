@@ -26,6 +26,7 @@ export async function applyCrmUpdates(clientId: string, updates: {
   slots?: Partial<Slots>;
   status?: string;
   notes?: string;
+  leadScore?: string;
 }): Promise<void> {
   const patch: Record<string, unknown> = {};
   if (updates.slots?.city) patch.city = updates.slots.city;
@@ -33,6 +34,7 @@ export async function applyCrmUpdates(clientId: string, updates: {
   if (updates.slots?.property_type) patch.property_type = updates.slots.property_type;
   if (updates.status) patch.status = updates.status;
   if (updates.notes) patch.notes = updates.notes;
+  if (updates.leadScore) patch.lead_score = updates.leadScore;
   if (Object.keys(patch).length === 0) return;
 
   await supabase.from("clients").update(patch).eq("id", clientId);

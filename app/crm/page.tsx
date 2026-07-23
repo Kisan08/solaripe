@@ -10,6 +10,8 @@ type CallStatus =
   | "no_answer"
   | "failed";
 
+type LeadScore = "hot" | "warm" | "cold";
+
 interface Client {
   id: string;
   name: string;
@@ -18,6 +20,7 @@ interface Client {
   response: string | null;
   called_at: string | null;
   created_at: string;
+  lead_score: LeadScore | null;
 }
 
 const STATUS_CONFIG: Record<CallStatus, { label: string; color: string; bg: string; priority: number }> = {
@@ -34,8 +37,31 @@ const ALL_STATUSES: CallStatus[] = [
   "pending","calling","interested","not_interested","call_back","no_answer","failed",
 ];
 
+// Set once, server-side, when a call ends (lib/calling/leadScore.ts) —
+// this table is display-only, no editing here.
+const LEAD_SCORE_CONFIG: Record<LeadScore, { label: string; color: string; bg: string; priority: number }> = {
+  hot:  { label: "🔥 Hot",  color: "#991B1B", bg: "#FEE2E2", priority: 1 },
+  warm: { label: "🟡 Warm", color: "#92400E", bg: "#FEF3C7", priority: 2 },
+  cold: { label: "🔵 Cold", color: "#1E40AF", bg: "#DBEAFE", priority: 3 },
+};
+const LEAD_SCORE_NONE_PRIORITY = 4; // unscored (call not yet ended) sinks to the bottom when sorting by score
+
 function StatusBadge({ status }: { status: CallStatus }) {
   const cfg = STATUS_CONFIG[status];
+  return (
+    <span style={{
+      backgroundColor: cfg.bg, color: cfg.color,
+      padding: "2px 8px", borderRadius: 999,
+      fontSize: 11, fontWeight: 600, whiteSpace: "nowrap",
+    }}>
+      {cfg.label}
+    </span>
+  );
+}
+
+function LeadScoreBadge({ score }: { score: LeadScore | null }) {
+  if (!score) return <span style={{ color: "#D1D5DB", fontSize: 12 }}>—</span>;
+  const cfg = LEAD_SCORE_CONFIG[score];
   return (
     <span style={{
       backgroundColor: cfg.bg, color: cfg.color,
@@ -72,6 +98,7 @@ export default function CRMPage() {
   const [callingId, setCallingId] = useState<string | null>(null);
   const [callingAll, setCallingAll] = useState(false);
   const [filterStatus, setFilterStatus] = useState<CallStatus | "all">("all");
+  const [sortBy, setSortBy] = useState<"priority" | "score">("priority");
   const [search, setSearch] = useState("");
   const [toast, setToast] = useState<{ msg: string; type: "ok" | "err" } | null>(null);
   const [uploadedCount, setUploadedCount] = useState<number | null>(null);
@@ -219,10 +246,17 @@ export default function CRMPage() {
     finally { setCallingAll(false); }
   }
 
-  // Sort: interested & call_back on top, then by priority
-  const sorted = [...clients].sort((a, b) =>
-    STATUS_CONFIG[a.status].priority - STATUS_CONFIG[b.status].priority
-  );
+  // Sort: default is interested/call_back-first status priority (unchanged
+  // behavior); "score" mode instead surfaces hot leads first regardless of
+  // status, for scanning the whole list for buying signals at a glance.
+  const sorted = [...clients].sort((a, b) => {
+    if (sortBy === "score") {
+      const pa = a.lead_score ? LEAD_SCORE_CONFIG[a.lead_score].priority : LEAD_SCORE_NONE_PRIORITY;
+      const pb = b.lead_score ? LEAD_SCORE_CONFIG[b.lead_score].priority : LEAD_SCORE_NONE_PRIORITY;
+      return pa - pb;
+    }
+    return STATUS_CONFIG[a.status].priority - STATUS_CONFIG[b.status].priority;
+  });
 
   const filtered = sorted.filter((c) => {
     const matchStatus = filterStatus === "all" || c.status === filterStatus;
@@ -479,6 +513,13 @@ export default function CRMPage() {
             ))}
           </select>
 
+          <select className="crm-select" value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as "priority" | "score")}
+            title="Sort order">
+            <option value="priority">Sort: Priority</option>
+            <option value="score">Sort: Lead Score</option>
+          </select>
+
           <button className="crm-btn" onClick={callAllPending}
             disabled={callingAll || stats.pending === 0}
             style={{
@@ -518,7 +559,7 @@ export default function CRMPage() {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                 <thead>
                   <tr style={{ backgroundColor: "#F8FAFC", borderBottom: "2px solid #E2E8F0" }}>
-                    {["#", "Name", "Phone", "Status", "Response", "Called At", "Action"].map((h) => (
+                    {["#", "Name", "Phone", "Status", "Score", "Response", "Called At", "Action"].map((h) => (
                       <th key={h} style={{ padding: "12px 16px", textAlign: "left", fontWeight: 700, color: "#374151", whiteSpace: "nowrap" }}>{h}</th>
                     ))}
                   </tr>
@@ -536,6 +577,7 @@ export default function CRMPage() {
                       </td>
                       <td style={{ padding: "11px 16px", color: "#374151", whiteSpace: "nowrap" }}>{formatPhone(client.phone)}</td>
                       <td style={{ padding: "11px 16px" }}><StatusBadge status={client.status} /></td>
+                      <td style={{ padding: "11px 16px" }}><LeadScoreBadge score={client.lead_score} /></td>
                       <td style={{ padding: "11px 16px", color: "#6B7280", maxWidth: 200 }}>{client.response ?? "—"}</td>
                       <td style={{ padding: "11px 16px", color: "#9CA3AF", whiteSpace: "nowrap" }}>
                         {client.called_at ? new Date(client.called_at).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—"}
@@ -600,7 +642,10 @@ export default function CRMPage() {
                         {client.name}
                       </span>
                     </div>
-                    <StatusBadge status={client.status} />
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <LeadScoreBadge score={client.lead_score} />
+                      <StatusBadge status={client.status} />
+                    </div>
                   </div>
                   <div style={{ fontSize: 13, color: "#374151" }}>📱 {formatPhone(client.phone)}</div>
                   {client.response && (

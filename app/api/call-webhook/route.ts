@@ -26,19 +26,27 @@ export async function POST(req: NextRequest) {
   // whatever's currently on the client's row (call-response updates
   // status/notes turn by turn, so it reflects wherever the conversation
   // actually got to, not just a fully "completed" AI-decided close).
+  //
+  // Confirmed (Phase 8 investigation): this previously sent a WhatsApp
+  // message for EVERY completed call regardless of outcome — there was no
+  // status check here, and sendOwnerWhatsApp itself has no filtering
+  // either. That didn't match the described intent of "only interested
+  // leads go to WhatsApp," so the status check below is the actual fix,
+  // not a pre-existing behavior being preserved.
   if (callStatus === "completed" && clientId) {
     const { data: client } = await supabase
       .from("clients")
-      .select("name, phone, status, notes")
+      .select("name, phone, status, notes, lead_score")
       .eq("id", clientId)
       .single();
 
-    if (client) {
+    if (client && client.status === "interested") {
       const message = formatCallSummaryMessage({
         name: client.name,
         phone: client.phone,
         stage: client.status,
         notes: client.notes,
+        leadScore: client.lead_score,
       });
       // Awaited, not fire-and-forget: a Vercel serverless function can be
       // frozen the instant it returns a response, so an un-awaited promise
