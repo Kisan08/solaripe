@@ -7,9 +7,9 @@ import { Card } from "@/components/ui/card"
 import { LeadsKanban } from "@/components/leads/leads-kanban"
 import { LeadsTable } from "@/components/leads/leads-table"
 import { LeadModal } from "@/components/leads/lead-modal"
-import { useLeads, saveLead, deleteLead, updateLeadStage } from "@/lib/data"
+import { useLeads, saveLead, deleteLead } from "@/lib/data"
 import { cn } from "@/lib/utils"
-import type { Lead, LeadStage } from "@/lib/types"
+import type { Lead } from "@/lib/types"
 
 type View = "kanban" | "table"
 
@@ -36,20 +36,6 @@ export default function LeadsPage() {
     await deleteLead(id)
     await mutate()
   }
-
-  const handleStageChange = (id: string, stage: LeadStage) =>
-    mutate(
-      async (current) => {
-        await updateLeadStage(id, stage)
-        return (current ?? []).map((l) => (l.id === id ? { ...l, stage } : l))
-      },
-      {
-        optimisticData: (current) =>
-          (current ?? []).map((l) => (l.id === id ? { ...l, stage } : l)),
-        rollbackOnError: true,
-        revalidate: false,
-      },
-    )
 
   return (
     <>
@@ -149,7 +135,7 @@ export default function LeadsPage() {
             </button>
           </Card>
         ) : view === "kanban" ? (
-          <LeadsKanban leads={leads} onEdit={openEdit} onStageChange={handleStageChange} />
+          <LeadsKanban leads={leads} onEdit={openEdit} />
         ) : (
           <LeadsTable leads={leads} onEdit={openEdit} />
         )}
