@@ -40,6 +40,7 @@ export async function saveSession(session: CallSession): Promise<void> {
       intent: session.intent,
       emotion: session.emotion,
       ended: session.ended,
+      fast_path_step: session.fast_path_step,
       updated_at: new Date().toISOString(),
     })
     .eq("id", session.id);

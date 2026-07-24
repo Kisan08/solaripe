@@ -3,11 +3,13 @@ import { company } from "@/lib/company.config";
 import { getOrCreateSession } from "@/lib/calling/stateManager";
 import { buildGatherTwiml, buildHangupTwiml } from "@/lib/calling/twiml";
 
-// Turn 0 stays a fast, fixed (but CRM-personalized) greeting rather than an
-// OpenAI call — there's nothing from the customer to react to yet, so
-// generating it would only add latency before the phone even finishes
-// ringing into the conversation. Every turn from here on is AI-driven (see
-// call-response/route.ts).
+// Turn 0 stays a fast, fixed greeting rather than an AI call — there's
+// nothing from the customer to react to yet, so generating it would only
+// add latency before the phone even finishes ringing into the
+// conversation. The next one or two turns after this can ALSO be
+// scripted (see lib/calling/fastPath.ts) if the customer's reply cleanly
+// matches a simple yes/no pattern; anything else falls through to the
+// full AI flow in call-response/route.ts.
 async function handle(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const clientId = searchParams.get("clientId") || "";
@@ -28,12 +30,15 @@ async function handle(req: NextRequest) {
 
     await getOrCreateSession(callSid, clientId);
 
-    // Short, casual opener: short company name (not the full legal name),
-    // and no name+"ji" honorific — gets straight to the point instead of
-    // sounding like a formal script. Always the same line regardless of
-    // whether we know the customer's city yet — keeps the very first thing
-    // the customer hears consistent and simple.
-    const greeting = `Hello, mai ${company.shortName} se Kajal bol rahi hoon. Aapke bijli bill mein bachat ke liye solar ke baare mein do minute baat kar sakte hain?`;
+    // Ends with a direct yes/no question ("Kya aapko solar lagvana hai?")
+    // rather than a permission-to-talk question — this is what
+    // lib/calling/fastPath.ts's classifyOpeningResponse() classifies on
+    // the very next turn, so the question has to actually be the thing
+    // being classified. Full company name (company.name, not
+    // .shortName) per the given script, still parameterized rather than
+    // hardcoded so this stays consistent if the company config ever
+    // changes.
+    const greeting = `Namaste! Main Kajal bol rahi hoon, ${company.name} se. Hum ghar aur society ke liye solar panel lagate hain, jisse aapka bijli ka bill kaafi kam ho jaata hai. Kya aapko solar lagvana hai?`;
 
     const actionUrl = `${baseUrl}/api/call-response?clientId=${clientId}`;
     return new NextResponse(buildGatherTwiml(greeting, actionUrl), {

@@ -7,6 +7,7 @@ import { callOpenAiJson } from "@/lib/calling/openai";
 import { scoreLeadFromCall } from "@/lib/calling/leadScore";
 import { buildGatherTwiml, buildHangupTwiml } from "@/lib/calling/twiml";
 import { logTurn } from "@/lib/calling/logging";
+import { classifyOpeningResponse, looksLikeBillAmount, FAST_PATH_BILL_QUESTION, FAST_PATH_INTERESTED_CLOSE, FAST_PATH_DECLINE_CLOSE } from "@/lib/calling/fastPath";
 import type { CallSession } from "@/lib/calling/types";
 
 const GENTLE_REPROMPT = "Hello? Mai sun rahi hoon, aap bataiye.";
@@ -95,6 +96,96 @@ async function handleTurn(req: NextRequest): Promise<NextResponse> {
 
   session.silence_count = 0;
   session.transcript.push({ role: "customer", text: customerText, at: new Date().toISOString() });
+
+  // ── Scripted fast path ──
+  // Zero-AI-latency handling for the two most predictable exchanges in a
+  // call. Anything that doesn't cleanly match a simple keyword pattern
+  // falls straight through to the existing full AI flow below, unchanged
+  // — this block only ever short-circuits when it's confident.
+  //
+  // First-turn detection: transcript.length === 1 means the push just
+  // above is the very first customer turn ever recorded for this
+  // session — i.e. this is their reply to call-twiml's opening greeting,
+  // and nothing has been asked yet except "do you want solar."
+  if (session.transcript.length === 1 && !session.fast_path_step) {
+    const answer = classifyOpeningResponse(customerText);
+
+    if (answer === "positive") {
+      const reply = FAST_PATH_BILL_QUESTION;
+      session.transcript.push({ role: "ai", text: reply, at: new Date().toISOString() });
+      session.stage = "qualification";
+      session.fast_path_step = "awaiting_bill";
+      session.turn_count += 1;
+      await Promise.all([
+        saveSession(session),
+        applyCrmUpdates(clientId, { slots: session.slots }),
+        logTurn({
+          callSid, clientId, turn: session.turn_count, customerText, aiText: reply,
+          intent: "interested", stage: session.stage, latencyMs: 0,
+        }),
+      ]);
+      return new NextResponse(buildGatherTwiml(reply, actionUrl), { headers: { "Content-Type": "text/xml" } });
+    }
+
+    if (answer === "negative") {
+      const reply = FAST_PATH_DECLINE_CLOSE;
+      session.transcript.push({ role: "ai", text: reply, at: new Date().toISOString() });
+      session.ended = true;
+      session.intent = "not_interested";
+      session.turn_count += 1;
+      // Not routed through the AI's own endCall branch below, so lead
+      // scoring has to be called directly here — otherwise a fast-path
+      // decline would silently never get scored or written to the CRM.
+      const leadScore = scoreLeadFromCall("not_interested", "neutral", session.slots);
+      await Promise.all([
+        saveSession(session),
+        applyCrmUpdates(clientId, {
+          slots: session.slots,
+          status: "not_interested",
+          notes: "Fast-path: declined at opening question.",
+          leadScore,
+        }),
+        logTurn({
+          callSid, clientId, turn: session.turn_count, customerText, aiText: reply,
+          intent: "not_interested", stage: session.stage, latencyMs: 0,
+        }),
+      ]);
+      return new NextResponse(buildHangupTwiml(reply), { headers: { "Content-Type": "text/xml" } });
+    }
+    // answer === "unclear" — fall through to the full AI flow below,
+    // exactly as it works today.
+  } else if (session.fast_path_step === "awaiting_bill") {
+    if (looksLikeBillAmount(customerText)) {
+      session.slots = { ...session.slots, electricity_bill: customerText };
+      const reply = FAST_PATH_INTERESTED_CLOSE;
+      session.transcript.push({ role: "ai", text: reply, at: new Date().toISOString() });
+      session.ended = true;
+      session.intent = "interested";
+      session.fast_path_step = null;
+      session.turn_count += 1;
+      const leadScore = scoreLeadFromCall("interested", "neutral", session.slots);
+      await Promise.all([
+        saveSession(session),
+        applyCrmUpdates(clientId, {
+          slots: session.slots,
+          status: "interested",
+          notes: `Fast-path: interested, bill amount captured: "${customerText}".`,
+          leadScore,
+        }),
+        logTurn({
+          callSid, clientId, turn: session.turn_count, customerText, aiText: reply,
+          intent: "interested", stage: session.stage, latencyMs: 0,
+        }),
+      ]);
+      return new NextResponse(buildHangupTwiml(reply), { headers: { "Content-Type": "text/xml" } });
+    }
+    // Doesn't look like a bill amount (a question, an objection, etc.) —
+    // clear the fast-path marker and fall through to the full AI flow.
+    // session.stage is already "qualification" and the transcript already
+    // has the bill-question turn in it, so the AI picks up with correct
+    // context instead of losing the thread.
+    session.fast_path_step = null;
+  }
 
   if (!crm) {
     // No CRM record to drive the conversation — fail safe rather than

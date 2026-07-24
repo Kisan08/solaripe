@@ -71,13 +71,6 @@ export interface CallSession {
   intent: Intent | null;
   emotion: Emotion | null;
   ended: boolean;
-  // Tracks progress through the scripted fast-path opening (see
-  // lib/calling/fastPath.ts), separately from `stage` — the AI's own
-  // natural conversation can also reach "qualification", so reusing
-  // `stage` here would make a call that fell through to the AI
-  // indistinguishable from one still genuinely mid-fast-path. Set/cleared
-  // only by app/api/call-response/route.ts's fast-path block.
-  fast_path_step: "awaiting_bill" | null;
 }
 
 export interface ClientCrmContext {
