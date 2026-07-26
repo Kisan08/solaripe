@@ -193,7 +193,6 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
   const sunSphereRef = useRef<THREE.Mesh | null>(null);
   const panelMeshGroup = useRef<THREE.Group | null>(null);
   const obstacleMeshGroup = useRef<THREE.Group | null>(null);
-
   const frameRef = useRef<number>(0);
   const raycaster = useRef(new THREE.Raycaster());
   const mouse = useRef(new THREE.Vector2());
@@ -332,7 +331,6 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
     setObstacles(prev => [...prev, newObs]);
     setSelectedObstacleId(newObs.id);
   }, []);
-
 
   const updateObstacle = useCallback((id: string, patch: Partial<Obstacle3D>) => {
     setObstacles(prev => prev.map(o => o.id === id ? { ...o, ...patch } : o));
@@ -973,10 +971,7 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
     controls.update();
     controlsRef.current = controls;
 
-    // Soft sky/ground hemisphere light instead of flat ambient — cooler tint
-    // from above (sky), warmer from below (bounced off the ground), matching
-    // how a real outdoor scene actually gets lit, not a single flat fill.
-    scene.add(new THREE.HemisphereLight(0xcfe0f5, 0x6b7a5a, 0.65));
+    scene.add(new THREE.AmbientLight(0xffffff, 0.55));
     const sun = new THREE.DirectionalLight(0xfff8e8, 1.5);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
@@ -1017,45 +1012,9 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
 
     const normPoints = roofPolyMeters;
 
-    // Finite (not infinite) so the blurred satellite backdrop plane below
-    // shows through past its edges — matches the reference images' clean
-    // CG model over a real-world photo backdrop, rather than a flat green
-    // field to the horizon.
-    const grassSize = Math.max(90, roofSpanM * 3);
-    const grass = new THREE.Mesh(new THREE.PlaneGeometry(grassSize, grassSize), new THREE.MeshStandardMaterial({ color: '#7a9270', roughness: 0.95, metalness: 0 }));
+    const grass = new THREE.Mesh(new THREE.PlaneGeometry(500, 500), new THREE.MeshLambertMaterial({ color: '#6a9f4c' }));
     grass.rotation.x = -Math.PI / 2; grass.position.y = -0.05; grass.receiveShadow = true;
     scene.add(grass);
-
-    // Satellite photo backdrop — a large plane just below the grass, showing
-    // a pre-blurred Google Static Maps image of the real site past the
-    // grass's finite edge. Built async (image fetch) but the plane/fallback
-    // material is added immediately so there's no missing-ground gap while
-    // it loads.
-    const satelliteSize = grassSize * 3;
-    const satelliteMat = new THREE.MeshBasicMaterial({ color: '#4a5a42' });
-    const satellite = new THREE.Mesh(new THREE.PlaneGeometry(satelliteSize, satelliteSize), satelliteMat);
-    satellite.rotation.x = -Math.PI / 2; satellite.position.y = -0.08;
-    scene.add(satellite);
-    const gmapsKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
-    const satCenter = mapConfig.center;
-    if (gmapsKey && satCenter) {
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.onload = () => {
-        if (isDisposed) return;
-        const canvas = document.createElement('canvas');
-        canvas.width = img.width; canvas.height = img.height;
-        const ctx = canvas.getContext('2d')!;
-        ctx.filter = 'blur(6px) saturate(1.1)';
-        ctx.drawImage(img, 0, 0);
-        const tex = new THREE.CanvasTexture(canvas);
-        tex.colorSpace = THREE.SRGBColorSpace;
-        satelliteMat.map = tex;
-        satelliteMat.color.set('#ffffff');
-        satelliteMat.needsUpdate = true;
-      };
-      img.src = `https://maps.googleapis.com/maps/api/staticmap?center=${satCenter.lat},${satCenter.lng}&zoom=${Math.max(15, (mapConfig.zoom ?? 20) - 3)}&size=640x640&scale=2&maptype=satellite&key=${gmapsKey}`;
-    }
 
     // Environment (real meter sizes)
     const envGroup = new THREE.Group(); envGroup.name = 'environment';
@@ -1096,44 +1055,19 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
     envGroup.add(makeB(-nb * 0.95, nb, 14, 12, 7, 0xd0c0a8));
     scene.add(envGroup);
 
-    // Small tileable grayscale noise texture — used as a roughnessMap on
-    // the roof deck so the concrete reads as a real weathered surface with
-    // subtle variation instead of a flat, uniform gray.
-    const noiseTexture = (() => {
-      const size = 128;
-      const canvas = document.createElement('canvas');
-      canvas.width = size; canvas.height = size;
-      const ctx = canvas.getContext('2d')!;
-      const imgData = ctx.createImageData(size, size);
-      for (let i = 0; i < imgData.data.length; i += 4) {
-        const v = 150 + Math.floor(Math.random() * 90); // mid-gray band, avoids pure black/white specks
-        imgData.data[i] = imgData.data[i + 1] = imgData.data[i + 2] = v;
-        imgData.data[i + 3] = 255;
-      }
-      ctx.putImageData(imgData, 0, 0);
-      const tex = new THREE.CanvasTexture(canvas);
-      tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.RepeatWrapping;
-      tex.repeat.set(12, 12);
-      return tex;
-    })();
-
-    // Main building — warm beige/cream walls, weathered concrete roof deck
-    // (matches an actual RCC terrace, not a painted/tiled surface), both as
-    // real PBR materials so they pick up specular/ambient response instead
-    // of the flat, shadeless look Lambert gives.
+    // Main building — real-world colors: warm cream walls, weathered concrete
+    // roof deck (matches an actual RCC terrace, not a painted/tiled surface)
     const shape = new THREE.Shape();
     normPoints.forEach((p, i) => { i === 0 ? shape.moveTo(p.x, p.z) : shape.lineTo(p.x, p.z); });
     shape.closePath();
     const bg = new THREE.ExtrudeGeometry(shape, { depth: WALL_H, bevelEnabled: false });
     bg.rotateX(Math.PI / 2); bg.translate(0, WALL_H, 0);
-    const building = new THREE.Mesh(bg, new THREE.MeshStandardMaterial({ color: '#EDE0C8', roughness: 0.85, metalness: 0 }));
+    const building = new THREE.Mesh(bg, new THREE.MeshLambertMaterial({ color: '#F5F3EE' }));
     building.castShadow = true; building.receiveShadow = true;
     scene.add(building);
     const rg = new THREE.ShapeGeometry(shape);
     rg.rotateX(Math.PI / 2); rg.translate(0, WALL_H, 0);
-    const roofMesh = new THREE.Mesh(rg, new THREE.MeshStandardMaterial({
-      color: '#9E9488', side: THREE.DoubleSide, roughness: 0.9, roughnessMap: noiseTexture, metalness: 0,
-    }));
+    const roofMesh = new THREE.Mesh(rg, new THREE.MeshLambertMaterial({ color: '#9E9488', side: THREE.DoubleSide }));
     roofMesh.receiveShadow = true; roofMesh.name = 'roof';
     scene.add(roofMesh);
 
@@ -1142,14 +1076,8 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
     // fine for a short building, but a tall one just got one clump of
     // windows near the base instead of a row per storey.)
     if (WALL_H > 2.5) {
-      // Dark reflective glass (not the pale sky-blue placeholder) — a real
-      // low-roughness physical material so it actually mirrors the sky/sun
-      // like real architectural glazing.
-      const winMat = new THREE.MeshPhysicalMaterial({
-        color: '#0f1e28', roughness: 0.08, metalness: 0.15,
-        transparent: true, opacity: 0.92, clearcoat: 1, clearcoatRoughness: 0.05, side: THREE.DoubleSide,
-      });
-      const frameMat2 = new THREE.MeshStandardMaterial({ color: '#FAF7F0', roughness: 0.7, metalness: 0 });
+      const winMat = new THREE.MeshPhongMaterial({ color: '#A8D0E6', shininess: 90, opacity: 0.88, transparent: true, side: THREE.DoubleSide });
+      const frameMat2 = new THREE.MeshLambertMaterial({ color: '#FAF7F0' });
       const winW = 1.1, winH = 1.3;
       const floorH = 3.2; // typical floor-to-floor height (m)
       const nFloors = Math.max(1, Math.round(WALL_H / floorH));
@@ -1172,9 +1100,8 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
           const wx = a.x + dx * t, wz = a.z + dz * t;
           sillYs.forEach(rowY => {
             const frame = new THREE.Mesh(new THREE.BoxGeometry(winW + 0.15, winH + 0.15, 0.08), frameMat2);
-            frame.position.z = 0.04; // proud of the wall face — a real reveal, not a flat decal
             const glass = new THREE.Mesh(new THREE.PlaneGeometry(winW, winH), winMat);
-            glass.position.z = -0.02; // recessed behind the frame's outer face
+            glass.position.z = 0.05;
             const group = new THREE.Group();
             group.add(frame); group.add(glass);
             group.position.set(wx, rowY + winH / 2, wz);
@@ -1196,11 +1123,16 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
       par.userData.isBuildingMass = true; // shading analysis raycasts against this
       scene.add(par);
     }
+    const corner = normPoints.reduce((a, b) => (a.x + a.z < b.x + b.z ? a : b));
+    const arrow = new THREE.Mesh(new THREE.ConeGeometry(0.4, 1.8, 8), new THREE.MeshLambertMaterial({ color: '#F97316' }));
+    arrow.position.set(corner.x - 2, WALL_H + 2.5, corner.z - 2); scene.add(arrow);
+
     const pg = new THREE.Group(); pg.name = 'panels'; scene.add(pg);
     panelMeshGroup.current = pg;
 
     const og = new THREE.Group(); og.name = 'obstacles'; scene.add(og);
     obstacleMeshGroup.current = og;
+
     const zg = new THREE.Group(); zg.name = 'zone'; scene.add(zg);
     zoneMeshGroup.current = zg;
 
@@ -1279,48 +1211,10 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
     while (pg.children.length) pg.remove(pg.children[0]);
     const WALL_H = wallHeightM;
     const pw = PANEL_W_M, ph = PANEL_H_M;
-
-    // Dark aluminum frame — a real physically-based material (not flat
-    // Lambert) so it actually catches specular highlights like anodized
-    // metal, matching professional solar-render references.
-    const frameMat = new THREE.MeshStandardMaterial({ color: '#232527', roughness: 0.4, metalness: 0.6 });
-    // Galvanized-steel racking hardware — lighter and more reflective than
-    // the frame, matching the dull-silver look of real ballasted rails/legs.
-    const legMat = new THREE.MeshStandardMaterial({ color: '#8b9096', roughness: 0.5, metalness: 0.7 });
-    const ballastMat = new THREE.MeshStandardMaterial({ color: '#d4b83a', roughness: 0.85, metalness: 0.05 });
-
-    // Procedurally-drawn PV cell texture — deep blue-black cells separated
-    // by thin silver busbar/grid lines, built once per rebuild (not per
-    // panel) and reused across every panel's face material via `repeat`.
-    // No external asset dependency, matches the reference images' module
-    // face without needing a hosted texture file.
-    const pvTexture = (() => {
-      const size = 256;
-      const canvas = document.createElement('canvas');
-      canvas.width = size; canvas.height = size;
-      const ctx = canvas.getContext('2d')!;
-      const grad = ctx.createLinearGradient(0, 0, size, size);
-      grad.addColorStop(0, '#0d1b30');
-      grad.addColorStop(1, '#152640');
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, size, size);
-      ctx.strokeStyle = 'rgba(200, 215, 225, 0.55)';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(1, 1, size - 2, size - 2);
-      // Busbar lines within a single cell tile — 3 thin fingers, matching
-      // the fine silver grid visible on real monocrystalline cells.
-      ctx.strokeStyle = 'rgba(190, 205, 220, 0.4)';
-      ctx.lineWidth = 1;
-      for (let i = 1; i < 4; i++) {
-        const p = (i / 4) * size;
-        ctx.beginPath(); ctx.moveTo(p, 0); ctx.lineTo(p, size); ctx.stroke();
-      }
-      const tex = new THREE.CanvasTexture(canvas);
-      tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.RepeatWrapping;
-      tex.colorSpace = THREE.SRGBColorSpace; // otherwise the texture renders far too dark under sRGB output
-      tex.repeat.set(6, 10); // 6x10 cell grid — a standard 60-cell module layout
-      return tex;
-    })();
+    const frameMat = new THREE.MeshLambertMaterial({ color: '#2a2a2a' });
+    const cellMat = new THREE.LineBasicMaterial({ color: '#3a6aaa' });
+    const legMat = new THREE.MeshLambertMaterial({ color: '#4a4a4a' });
+    const ballastMat = new THREE.MeshLambertMaterial({ color: '#e8c93a' });
 
     panels.forEach((panel, panelIdx) => {
       const tiltRad = panel.tilt * Math.PI / 180;
@@ -1350,18 +1244,22 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
       pGroup.position.y = MOUNT_H + Math.sin(tiltRad) * ph / 2;
 
       const frame = new THREE.Mesh(new THREE.BoxGeometry(pw + 0.05, 0.06, ph + 0.05),
-        isSel ? new THREE.MeshStandardMaterial({ color: '#22C55E', roughness: 0.4, metalness: 0.6 }) : frameMat);
+        isSel ? new THREE.MeshLambertMaterial({ color: '#22C55E' }) : frameMat);
       pGroup.add(frame);
-      // Tint over the PV texture for selection/shading/string states —
-      // white leaves the texture's natural deep blue-black + silver grid
-      // untouched, matching the reference images' glass-like module face.
-      const tintColor = isSel ? '#22C55E' : (isShaded ? shadeColor : (showStrings ? stringColor : '#ffffff'));
-      const surf = new THREE.Mesh(new THREE.BoxGeometry(pw, 0.04, ph), new THREE.MeshPhysicalMaterial({
-        map: pvTexture, color: tintColor, roughness: 0.2, metalness: 0.1,
-        clearcoat: 0.6, clearcoatRoughness: 0.15,
+      const surf = new THREE.Mesh(new THREE.BoxGeometry(pw, 0.04, ph), new THREE.MeshPhongMaterial({
+        color: isSel ? '#22C55E' : (isShaded ? shadeColor : (showStrings ? stringColor : '#1e3a6e')),
+        emissive: isSel ? '#14532D' : '#0a1a3a',
+        emissiveIntensity: 0.25, shininess: 100, specular: new THREE.Color('#5599cc'),
       }));
       surf.position.y = 0.05; surf.castShadow = true; surf.userData.panelId = panel.id;
       pGroup.add(surf);
+      const g1 = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0.07, -ph / 2), new THREE.Vector3(0, 0.07, ph / 2)]);
+      pGroup.add(new THREE.Line(g1, cellMat));
+      for (let r = 1; r < 4; r++) {
+        const lz = -ph / 2 + r * ph / 4;
+        const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-pw / 2, 0.07, lz), new THREE.Vector3(pw / 2, 0.07, lz)]);
+        pGroup.add(new THREE.Line(g, cellMat));
+      }
       assembly.add(pGroup);
       pg.add(assembly);
     });
@@ -1531,50 +1429,27 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
       group.userData.obstacleId = o.id;
 
       const mat = new THREE.MeshLambertMaterial({ color: isSel ? '#22C55E' : color });
-      const edgeColor = isSel ? '#16A34A' : '#334155';
-
+      let mesh: THREE.Mesh;
       if (isWaterTank) {
-        // Open-top enclosure (4 thin walls) instead of a solid cylinder —
-        // matches the reference images' real RCC tank enclosure look
-        // rather than a sealed drum.
-        const wallT = 0.12;
-        const walls: [number, number, number, number, number][] = [
-          // [width, depth, x, z, rotY] — one box per side, offset half a
-          // wall-thickness out so the enclosure's outer footprint stays o.w x o.d
-          [o.w, wallT, 0, -o.d / 2 + wallT / 2, 0],
-          [o.w, wallT, 0, o.d / 2 - wallT / 2, 0],
-          [o.d, wallT, -o.w / 2 + wallT / 2, 0, Math.PI / 2],
-          [o.d, wallT, o.w / 2 - wallT / 2, 0, Math.PI / 2],
-        ];
-        walls.forEach(([w, d, x, z, rotY]) => {
-          const wall = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-          wall.position.set(x, h / 2, z);
-          wall.rotation.y = rotY;
-          wall.castShadow = true; wall.receiveShadow = true;
-          wall.userData.obstacleId = o.id;
-          group.add(wall);
-          const edges = new THREE.LineSegments(new THREE.EdgesGeometry(wall.geometry), new THREE.LineBasicMaterial({ color: edgeColor }));
-          edges.position.copy(wall.position); edges.rotation.copy(wall.rotation);
-          edges.userData.obstacleId = o.id;
-          group.add(edges);
-        });
+        const r = Math.min(o.w, o.d) / 2;
+        mesh = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 16), mat);
       } else {
-        const mesh = new THREE.Mesh(new THREE.BoxGeometry(o.w, h, o.d), mat);
-        mesh.position.y = h / 2;
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
-        mesh.userData.obstacleId = o.id;
-        group.add(mesh);
-
-        // Thin outline so obstacles read clearly against the roof (green when selected)
-        const edges = new THREE.LineSegments(
-          new THREE.EdgesGeometry(mesh.geometry),
-          new THREE.LineBasicMaterial({ color: edgeColor })
-        );
-        edges.position.copy(mesh.position);
-        edges.userData.obstacleId = o.id;
-        group.add(edges);
+        mesh = new THREE.Mesh(new THREE.BoxGeometry(o.w, h, o.d), mat);
       }
+      mesh.position.y = h / 2;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      mesh.userData.obstacleId = o.id;
+      group.add(mesh);
+
+      // Thin outline so obstacles read clearly against the roof (green when selected)
+      const edges = new THREE.LineSegments(
+        new THREE.EdgesGeometry(mesh.geometry),
+        new THREE.LineBasicMaterial({ color: isSel ? '#16A34A' : '#334155' })
+      );
+      edges.position.copy(mesh.position);
+      edges.userData.obstacleId = o.id;
+      group.add(edges);
 
       og.add(group);
     });
@@ -1988,6 +1863,7 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
               Tap a type above to place it, then <strong>✋ Move</strong> to position it or click it directly to select, resize & rotate.
             </div>
           )}
+
           {/* ── Advanced-only: manual grids, per-panel editing, sun path, height ── */}
           {advancedMode && (
             <>

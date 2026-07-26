@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import {
   ToolType, RoofPolygon, Obstacle, SolarPanel, Walkway,
-  Point, ProjectInfo, Equipment, HistoryEntry, MapConfig
+  Point, ProjectInfo, Equipment, HistoryEntry, MapConfig,
 } from '../types';
 import { saveDesign, loadDesign, type SavedDesign } from '../lib/designs';
 
