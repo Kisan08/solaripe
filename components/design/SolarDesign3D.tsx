@@ -6,12 +6,27 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { useDesignStore, metersPerPixel } from '../../store/designStore';
 import type { SolarPanel } from '../../types';
 
+// Zoom level requested for the satellite ground-plane image. 19 (not 20)
+// covers roughly double the ground area (~180m across vs ~90m) so the
+// image extends well past a typical building footprint instead of fading
+// into the paver/grass fallback just past the roof edge.
+const SATELLITE_ZOOM = 19;
+
 interface RoofPoint { x: number; y: number; }
 // x/z are METERS, centered on roof. azimuth = the panel's facing (also the array's rotation).
 interface Panel3D { id: string; x: number; z: number; tilt: number; azimuth: number; }
 // Obstacle footprint in centered METERS, same frame as panels/roof.
 interface Obstacle3D { id: string; x: number; z: number; w: number; d: number; rotDeg: number; label: string; }
-interface SolarDesign3DProps { roofPoints: RoofPoint[]; onClose: () => void; lat?: number; readOnly?: boolean; }
+interface SolarDesign3DProps {
+  roofPoints: RoofPoint[]; onClose: () => void; lat?: number; readOnly?: boolean;
+  // The roof polygon's own real-world lat/lng, distinct from the design
+  // store's mapConfig.center (which tracks the map's live pan position, not
+  // where the roof was actually traced) — see the derivation/rationale in
+  // DesignPageContent.tsx. Used to anchor the satellite ground image so it
+  // lines up with the traced roof instead of wherever the map last panned
+  // to. Falls back to mapConfig.center when unavailable (e.g. no roof yet).
+  roofCenterLatLng?: { lat: number; lng: number } | null;
+}
 
 const PANEL_W_M = 1.134;   // module width  (portrait: short side, runs along a row)
 const PANEL_H_M = 2.278;   // module height (portrait: long side, along the slope)
@@ -183,7 +198,7 @@ function panelsCentroid(ps: { x: number; z: number }[]): { x: number; z: number 
   return { x: sx / ps.length, z: sz / ps.length };
 }
 
-export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = false }: SolarDesign3DProps) {
+export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = false, roofCenterLatLng = null }: SolarDesign3DProps) {
   const mountRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -193,6 +208,7 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
   const sunSphereRef = useRef<THREE.Mesh | null>(null);
   const panelMeshGroup = useRef<THREE.Group | null>(null);
   const obstacleMeshGroup = useRef<THREE.Group | null>(null);
+  const satelliteMeshGroup = useRef<THREE.Group | null>(null);
 
   const frameRef = useRef<number>(0);
   const raycaster = useRef(new THREE.Raycaster());
@@ -204,6 +220,7 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
   const roofAreaM2 = useDesignStore(s => s.roofs[0]?.area ?? 0);
   const router = useRouter();
   const mapConfig = useDesignStore(s => s.mapConfig);
+  const projectId = useDesignStore(s => s.projectId);
   const stageScale = useDesignStore(s => s.scale);
   const traceMpp = useDesignStore(s => s.roofs[0]?.traceMpp);
 
@@ -213,7 +230,39 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
     [traceMpp, mapConfig.center?.lat, mapConfig.zoom, lat, stageScale]
   );
 
-  const [showEnv, setShowEnv] = useState(true);
+  // Real satellite ground imagery (app/api/satellite-image), cached per
+  // project in Supabase so it's only ever fetched once per project unless
+  // the user explicitly refreshes. null means "not available" — falls back
+  // to the existing paver/grass ground, never blocks rendering.
+  const [satelliteImageUrl, setSatelliteImageUrl] = useState<string | null>(null);
+  const [satelliteRefreshNonce, setSatelliteRefreshNonce] = useState(0);
+  useEffect(() => {
+    // Prefer the roof polygon's own geo-anchor over mapConfig.center — the
+    // latter tracks the map's live pan position, not where the roof was
+    // actually traced (see the derivation in DesignPageContent.tsx). Using
+    // mapConfig.center directly was the cause of the satellite image and
+    // building rendering in different places.
+    const center = roofCenterLatLng ?? mapConfig.center;
+    if (!projectId || !center) { setSatelliteImageUrl(null); return; }
+    let cancelled = false;
+    const qs = new URLSearchParams({
+      // zoom 19 (not 20) — covers roughly double the ground area (~180m
+      // across vs ~90m) so the satellite plane extends well past the
+      // building footprint instead of fading into the paver/grass
+      // fallback just past the roof edge. Must match SATELLITE_ZOOM below.
+      projectId, lat: String(center.lat), lng: String(center.lng), zoom: String(SATELLITE_ZOOM),
+      ...(satelliteRefreshNonce > 0 ? { refresh: 'true' } : {}),
+    });
+    fetch(`/api/satellite-image?${qs}`)
+      .then(res => res.json())
+      .then(data => {
+        if (cancelled) return;
+        setSatelliteImageUrl(!data.fallback && data.dataUrl ? data.dataUrl : null);
+      })
+      .catch(() => { if (!cancelled) setSatelliteImageUrl(null); });
+    return () => { cancelled = true; };
+  }, [projectId, roofCenterLatLng?.lat, roofCenterLatLng?.lng, mapConfig.center?.lat, mapConfig.center?.lng, satelliteRefreshNonce]);
+
   const [advancedMode, setAdvancedMode] = useState(false); // Simple mode is the default for EPC vendors
   // Optimal default facing: south in the northern hemisphere, north below the equator.
   const optimalAzimuth = lat >= 0 ? 180 : 0;
@@ -288,7 +337,8 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
   const roofPolyMeters = useMemo(() => {
     if (!roofDims) return [];
     const { cx, cy } = roofDims;
-    return roofPoints.map(p => ({ x: (p.x - cx) * mpp, z: (p.y - cy) * mpp }));
+    const out = roofPoints.map(p => ({ x: (p.x - cx) * mpp, z: (p.y - cy) * mpp }));
+    return out;
   }, [roofPoints, roofDims, mpp]);
 
   // Obstacles are now fully owned and edited HERE in 3D (add/move/resize/
@@ -960,7 +1010,14 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // Fade in rather than hard-cutting from the 2D canvas — 2D and 3D are
+    // two entirely different renderers (Konva vs WebGL), so there's no
+    // camera position to animate between them; a brief opacity fade is
+    // what actually smooths that switch for the user.
+    renderer.domElement.style.opacity = '0';
+    renderer.domElement.style.transition = 'opacity 350ms ease-out';
     mount.appendChild(renderer.domElement);
+    requestAnimationFrame(() => { renderer.domElement.style.opacity = '1'; });
     rendererRef.current = renderer;
 
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -976,7 +1033,12 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
     // Soft sky/ground hemisphere light instead of flat ambient — cooler tint
     // from above (sky), warmer from below (bounced off the ground), matching
     // how a real outdoor scene actually gets lit, not a single flat fill.
-    scene.add(new THREE.HemisphereLight(0xcfe0f5, 0x6b7a5a, 0.65));
+    // Ground color is warm gray-tan (matching the paver/satellite ground
+    // that's actually beneath the building now) — it used to be olive-green
+    // left over from when the fallback ground was solid grass, which was
+    // tinting every shadow-facing wall a muddy olive regardless of what
+    // ground texture was actually in use.
+    scene.add(new THREE.HemisphereLight(0xcfe0f5, 0x9c9284, 0.65));
     const sun = new THREE.DirectionalLight(0xfff8e8, 1.5);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
@@ -1026,75 +1088,71 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
     grass.rotation.x = -Math.PI / 2; grass.position.y = -0.05; grass.receiveShadow = true;
     scene.add(grass);
 
-    // Satellite photo backdrop — a large plane just below the grass, showing
-    // a pre-blurred Google Static Maps image of the real site past the
-    // grass's finite edge. Built async (image fetch) but the plane/fallback
-    // material is added immediately so there's no missing-ground gap while
-    // it loads.
-    const satelliteSize = grassSize * 3;
-    const satelliteMat = new THREE.MeshBasicMaterial({ color: '#4a5a42' });
-    const satellite = new THREE.Mesh(new THREE.PlaneGeometry(satelliteSize, satelliteSize), satelliteMat);
-    satellite.rotation.x = -Math.PI / 2; satellite.position.y = -0.08;
-    scene.add(satellite);
-    const gmapsKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
-    const satCenter = mapConfig.center;
-    if (gmapsKey && satCenter) {
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.onload = () => {
-        if (isDisposed) return;
-        const canvas = document.createElement('canvas');
-        canvas.width = img.width; canvas.height = img.height;
-        const ctx = canvas.getContext('2d')!;
-        ctx.filter = 'blur(6px) saturate(1.1)';
-        ctx.drawImage(img, 0, 0);
-        const tex = new THREE.CanvasTexture(canvas);
-        tex.colorSpace = THREE.SRGBColorSpace;
-        satelliteMat.map = tex;
-        satelliteMat.color.set('#ffffff');
-        satelliteMat.needsUpdate = true;
-      };
-      img.src = `https://maps.googleapis.com/maps/api/staticmap?center=${satCenter.lat},${satCenter.lng}&zoom=${Math.max(15, (mapConfig.zoom ?? 20) - 3)}&size=640x640&scale=2&maptype=satellite&key=${gmapsKey}`;
-    }
+    // Paved courtyard immediately around the building — a light concrete
+    // paver texture whose ALPHA channel fades radially to fully transparent,
+    // so it blends softly into the grass plane below instead of showing a
+    // hard rectangular edge. Matches the reference renders' look of a paved
+    // area right at the building, opening onto lawn further out.
+    const paverAreaSize = Math.max(30, roofSpanM * 2.2);
+    const paverTexture = (() => {
+      const size = 512;
+      const canvas = document.createElement('canvas');
+      canvas.width = size; canvas.height = size;
+      const ctx = canvas.getContext('2d')!;
+      ctx.fillStyle = '#c9c2b4';
+      ctx.fillRect(0, 0, size, size);
+      // Brick coursing — offset rows, matching a real paver-block courtyard.
+      const brickW = 40, brickH = 20;
+      ctx.strokeStyle = 'rgba(150, 142, 128, 0.5)';
+      ctx.lineWidth = 2;
+      for (let row = 0; row * brickH < size + brickH; row++) {
+        const offset = (row % 2) * (brickW / 2);
+        const y = row * brickH;
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(size, y); ctx.stroke();
+        for (let x = -brickW + offset; x < size + brickW; x += brickW) {
+          ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y + brickH); ctx.stroke();
+        }
+      }
+      // Subtle per-tile tone variation so it doesn't read as a flat repeat.
+      for (let i = 0; i < 900; i++) {
+        const x = Math.random() * size, y = Math.random() * size;
+        ctx.fillStyle = `rgba(0,0,0,${(Math.random() * 0.05).toFixed(3)})`;
+        ctx.fillRect(x, y, 3, 3);
+      }
+      // Radial alpha fade baked in: opaque at center, transparent at the
+      // rim, so the paver plane's edge disappears into the grass beneath
+      // it rather than cutting off sharply.
+      const alphaGrad = ctx.createRadialGradient(size / 2, size / 2, size * 0.28, size / 2, size / 2, size * 0.5);
+      alphaGrad.addColorStop(0, 'rgba(0,0,0,0)');
+      alphaGrad.addColorStop(1, 'rgba(0,0,0,1)');
+      ctx.globalCompositeOperation = 'destination-out';
+      ctx.fillStyle = alphaGrad;
+      ctx.fillRect(0, 0, size, size);
+      ctx.globalCompositeOperation = 'source-over';
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.wrapS = THREE.ClampToEdgeWrapping; tex.wrapT = THREE.ClampToEdgeWrapping;
+      return tex;
+    })();
+    const paverArea = new THREE.Mesh(
+      new THREE.PlaneGeometry(paverAreaSize, paverAreaSize),
+      new THREE.MeshStandardMaterial({ map: paverTexture, roughness: 0.85, metalness: 0, transparent: true })
+    );
+    paverArea.rotation.x = -Math.PI / 2; paverArea.position.y = -0.04; paverArea.receiveShadow = true;
+    scene.add(paverArea);
 
-    // Environment (real meter sizes)
-    const envGroup = new THREE.Group(); envGroup.name = 'environment';
-    const roadDist = Math.max(45, roofSpanM * 2.2);
-    const road = new THREE.Mesh(new THREE.PlaneGeometry(500, 8), new THREE.MeshLambertMaterial({ color: '#3a3a3a' }));
-    road.rotation.x = -Math.PI / 2; road.position.set(0, 0.01, -roadDist); envGroup.add(road);
-    for (let i = -240; i < 240; i += 12) {
-      const m = new THREE.Mesh(new THREE.PlaneGeometry(4, 0.35), new THREE.MeshLambertMaterial({ color: '#f5d020' }));
-      m.rotation.x = -Math.PI / 2; m.position.set(i, 0.02, -roadDist); envGroup.add(m);
-    }
-    const makeTree = (x: number, z: number, s = 1) => {
-      const t = new THREE.Group();
-      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.18 * s, 0.25 * s, 3 * s), new THREE.MeshLambertMaterial({ color: '#5d4037' }));
-      trunk.position.y = 1.5 * s; trunk.castShadow = true; t.add(trunk);
-      const fm = new THREE.MeshLambertMaterial({ color: '#2e7d32' });
-      [[0, 3.8, 0, 1.7], [-0.7, 3.1, 0.7, 1.2], [0.8, 3.3, -0.6, 1.1]].forEach(([fx, fy, fz, fr]) => {
-        const f = new THREE.Mesh(new THREE.SphereGeometry(fr * s, 8, 8), fm); f.position.set(fx * s, fy * s, fz * s); f.castShadow = true; t.add(f);
-      });
-      t.position.set(x, 0, z); return t;
-    };
-    const treeR = Math.max(30, roofSpanM * 1.6);
-    [[-treeR, -treeR * 0.9], [treeR, -treeR * 0.85], [-treeR * 1.1, treeR * 0.55], [treeR * 1.05, treeR * 0.65], [-treeR * 0.9, treeR]].forEach(([x, z]) => envGroup.add(makeTree(x, z, 0.9 + Math.random() * 0.5)));
-    const makeCar = (x: number, z: number, color: number) => {
-      const car = new THREE.Group();
-      const body = new THREE.Mesh(new THREE.BoxGeometry(4.5, 1.4, 1.8), new THREE.MeshPhongMaterial({ color, shininess: 100 }));
-      body.position.y = 0.8; body.castShadow = true; car.add(body);
-      const top = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1.0, 1.6), new THREE.MeshPhongMaterial({ color, shininess: 100 }));
-      top.position.set(-0.2, 1.8, 0); car.add(top); car.position.set(x, 0, z); return car;
-    };
-    envGroup.add(makeCar(-20, -roadDist, 0xcc2222)); envGroup.add(makeCar(22, -roadDist + 1.5, 0x2244cc));
-    const makeB = (x: number, z: number, w: number, d: number, h: number, c: number) => {
-      const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshLambertMaterial({ color: c }));
-      b.position.set(x, h / 2, z); b.castShadow = true; b.receiveShadow = true; return b;
-    };
-    const nb = Math.max(35, roofSpanM * 1.8);
-    envGroup.add(makeB(-nb, 0, 12, 15, 9, 0xc8b8a0));
-    envGroup.add(makeB(nb + 4, 6, 15, 18, 12, 0xb0a890));
-    envGroup.add(makeB(-nb * 0.95, nb, 14, 12, 7, 0xd0c0a8));
-    scene.add(envGroup);
+    // No satellite-photo backdrop — a neutral studio-style scene instead:
+    // the flat-color sky (scene.background, set above) simply meets the
+    // grass plane's edge, which is all "plain flat-color sky above plain
+    // ground" needs. A second, larger grass plane extends that same
+    // low-saturation green out to the far clip distance so there's no
+    // visible edge even at the widest zoom-out.
+    const farGround = new THREE.Mesh(
+      new THREE.PlaneGeometry(grassSize * 6, grassSize * 6),
+      new THREE.MeshStandardMaterial({ color: '#7a9270', roughness: 0.95, metalness: 0 })
+    );
+    farGround.rotation.x = -Math.PI / 2; farGround.position.y = -0.06;
+    scene.add(farGround);
 
     // Small tileable grayscale noise texture — used as a roughnessMap on
     // the roof deck so the concrete reads as a real weathered surface with
@@ -1117,6 +1175,111 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
       return tex;
     })();
 
+    // Weathering/staining color map for the roof deck — soft irregular
+    // blotches (water pooling/algae discoloration) plus a few straight
+    // runoff streaks from parapet drains, layered over the base concrete
+    // tone so the roof reads as an aged real surface instead of a flat
+    // uniform color.
+    const roofStainTexture = (() => {
+      const size = 512;
+      const canvas = document.createElement('canvas');
+      canvas.width = size; canvas.height = size;
+      const ctx = canvas.getContext('2d')!;
+      ctx.fillStyle = '#9E9488';
+      ctx.fillRect(0, 0, size, size);
+
+      // Waterproofing-sheet / tile-joint seams — the single strongest
+      // "this is a real rooftop" cue at a distance. Real Indian RCC
+      // terraces are laid in large rectangular sections with visible
+      // seams; a flat single-tone plane reads as obviously fake next to
+      // real satellite-photo neighbors.
+      ctx.strokeStyle = 'rgba(70,68,60,0.35)';
+      ctx.lineWidth = 2;
+      const cell = size / 6;
+      for (let i = 1; i < 6; i++) {
+        ctx.beginPath(); ctx.moveTo(i * cell, 0); ctx.lineTo(i * cell, size); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, i * cell); ctx.lineTo(size, i * cell); ctx.stroke();
+      }
+
+      // Weathering blotches — water pooling / algae discoloration.
+      // Noticeably higher contrast than the original pass, which was
+      // essentially invisible at normal camera distance.
+      for (let i = 0; i < 46; i++) {
+        const x = Math.random() * size, y = Math.random() * size;
+        const r = 20 + Math.random() * 85;
+        const darker = Math.random() > 0.35;
+        const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
+        const tint = darker ? 'rgba(75,72,62,ALPHA)' : 'rgba(165,160,142,ALPHA)';
+        grad.addColorStop(0, tint.replace('ALPHA', String(0.22 + Math.random() * 0.28)));
+        grad.addColorStop(1, tint.replace('ALPHA', '0'));
+        ctx.fillStyle = grad;
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+      }
+
+      // Runoff streaks from parapet drains.
+      for (let i = 0; i < 8; i++) {
+        const x = Math.random() * size;
+        const w = 5 + Math.random() * 10;
+        const grad = ctx.createLinearGradient(x, 0, x, size);
+        grad.addColorStop(0, 'rgba(65,63,55,0.32)');
+        grad.addColorStop(1, 'rgba(65,63,55,0)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(x - w / 2, 0, w, size * (0.4 + Math.random() * 0.6));
+      }
+
+      // Fine speckle grain — reads as aggregate/texture up close, subtle
+      // from a distance.
+      const grain = ctx.createImageData(size, size);
+      for (let i = 0; i < grain.data.length; i += 4) {
+        const v = Math.random() > 0.5 ? 255 : 0;
+        grain.data[i] = grain.data[i + 1] = grain.data[i + 2] = v;
+        grain.data[i + 3] = Math.random() < 0.06 ? 18 : 0;
+      }
+      ctx.putImageData(grain, 0, 0);
+
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.RepeatWrapping;
+      tex.repeat.set(3, 3);
+      return tex;
+    })();
+
+    // Facade weathering — subtle vertical monsoon-runoff staining and patchy
+    // discoloration, so the walls read as an aged real building instead of
+    // a flat single-tone extrusion.
+    const facadeTexture = (() => {
+      const size = 512;
+      const canvas = document.createElement('canvas');
+      canvas.width = size; canvas.height = size;
+      const ctx = canvas.getContext('2d')!;
+      ctx.fillStyle = '#E8D2A6';
+      ctx.fillRect(0, 0, size, size);
+      for (let i = 0; i < 10; i++) {
+        const x = Math.random() * size;
+        const w = 8 + Math.random() * 18;
+        const grad = ctx.createLinearGradient(x, 0, x, size);
+        grad.addColorStop(0, 'rgba(120,108,80,0.22)');
+        grad.addColorStop(0.6, 'rgba(120,108,80,0.1)');
+        grad.addColorStop(1, 'rgba(120,108,80,0)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(x - w / 2, 0, w, size);
+      }
+      for (let i = 0; i < 18; i++) {
+        const x = Math.random() * size, y = Math.random() * size;
+        const r = 15 + Math.random() * 45;
+        const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
+        grad.addColorStop(0, 'rgba(140,128,100,0.15)');
+        grad.addColorStop(1, 'rgba(140,128,100,0)');
+        ctx.fillStyle = grad;
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+      }
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.RepeatWrapping;
+      tex.repeat.set(6, 1);
+      return tex;
+    })();
+
     // Main building — warm beige/cream walls, weathered concrete roof deck
     // (matches an actual RCC terrace, not a painted/tiled surface), both as
     // real PBR materials so they pick up specular/ambient response instead
@@ -1126,31 +1289,70 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
     shape.closePath();
     const bg = new THREE.ExtrudeGeometry(shape, { depth: WALL_H, bevelEnabled: false });
     bg.rotateX(Math.PI / 2); bg.translate(0, WALL_H, 0);
-    const building = new THREE.Mesh(bg, new THREE.MeshStandardMaterial({ color: '#EDE0C8', roughness: 0.85, metalness: 0 }));
+    const building = new THREE.Mesh(bg, new THREE.MeshStandardMaterial({ color: '#ffffff', map: facadeTexture, roughness: 0.8, metalness: 0 }));
     building.castShadow = true; building.receiveShadow = true;
     scene.add(building);
     const rg = new THREE.ShapeGeometry(shape);
     rg.rotateX(Math.PI / 2); rg.translate(0, WALL_H, 0);
     const roofMesh = new THREE.Mesh(rg, new THREE.MeshStandardMaterial({
-      color: '#9E9488', side: THREE.DoubleSide, roughness: 0.9, roughnessMap: noiseTexture, metalness: 0,
+      color: '#ffffff', map: roofStainTexture, side: THREE.DoubleSide, roughness: 0.9, roughnessMap: noiseTexture, metalness: 0,
     }));
     roofMesh.receiveShadow = true; roofMesh.name = 'roof';
     scene.add(roofMesh);
+
+    // Soft contact shadow — a dark radial-alpha blob sitting just above the
+    // paver/grass, roughly under the building footprint. Approximates the
+    // ambient-occlusion darkening real buildings show at their base, which
+    // the sun's cast shadow alone doesn't give (especially near solar noon,
+    // when the real shadow falls almost straight down and reads as barely
+    // there). Same fading-alpha-texture technique as the paver courtyard.
+    {
+      const xs = normPoints.map(p => p.x), zs = normPoints.map(p => p.z);
+      const footW = Math.max(...xs) - Math.min(...xs), footD = Math.max(...zs) - Math.min(...zs);
+      const cx = (Math.max(...xs) + Math.min(...xs)) / 2, cz = (Math.max(...zs) + Math.min(...zs)) / 2;
+      const shadowTex = (() => {
+        const size = 256;
+        const canvas = document.createElement('canvas');
+        canvas.width = size; canvas.height = size;
+        const ctx = canvas.getContext('2d')!;
+        const grad = ctx.createRadialGradient(size / 2, size / 2, size * 0.42, size / 2, size / 2, size * 0.5);
+        grad.addColorStop(0, 'rgba(0,0,0,0.55)');
+        grad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, size, size);
+        return new THREE.CanvasTexture(canvas);
+      })();
+      // Tighter to the footprint (1.12x, was 1.35x) with a harder inner
+      // edge (0.42 vs 0.28) so the dark band hugs the base of the walls
+      // instead of spreading into a vague halo — the building was reading
+      // as floating without a clear ground-contact line.
+      const shadowBlob = new THREE.Mesh(
+        new THREE.PlaneGeometry(footW * 1.12, footD * 1.12),
+        new THREE.MeshBasicMaterial({ map: shadowTex, transparent: true, depthWrite: false })
+      );
+      shadowBlob.rotation.x = -Math.PI / 2;
+      shadowBlob.position.set(cx, -0.01, cz);
+      scene.add(shadowBlob);
+    }
 
     // Windows — one row per floor, spread up the FULL height of the building.
     // (Previously used a single fixed sill height capped near the ground —
     // fine for a short building, but a tall one just got one clump of
     // windows near the base instead of a row per storey.)
     if (WALL_H > 2.5) {
-      // Dark reflective glass (not the pale sky-blue placeholder) — a real
-      // low-roughness physical material so it actually mirrors the sky/sun
-      // like real architectural glazing.
+      // Dark blue-gray reflective glass — NOT near-black: with no
+      // environment map in this scene to reflect, a very dark/low-roughness
+      // material has nothing to bounce light off and reads as flat black
+      // squares. Keeping the base color a lighter slate blue-gray means the
+      // hemisphere/sun light still visibly lights the surface directly,
+      // while roughness/metalness/clearcoat still give it a glassy sheen.
       const winMat = new THREE.MeshPhysicalMaterial({
-        color: '#0f1e28', roughness: 0.08, metalness: 0.15,
-        transparent: true, opacity: 0.92, clearcoat: 1, clearcoatRoughness: 0.05, side: THREE.DoubleSide,
+        color: '#3a5568', roughness: 0.22, metalness: 0.3,
+        transparent: true, opacity: 0.92, clearcoat: 0.8, clearcoatRoughness: 0.15, side: THREE.DoubleSide,
       });
       const frameMat2 = new THREE.MeshStandardMaterial({ color: '#FAF7F0', roughness: 0.7, metalness: 0 });
-      const winW = 1.1, winH = 1.3;
+      // Wider than tall — real windows, not the near-square placeholder.
+      const winW = 1.5, winH = 0.95;
       const floorH = 3.2; // typical floor-to-floor height (m)
       const nFloors = Math.max(1, Math.round(WALL_H / floorH));
       const actualFloorH = WALL_H / nFloors; // spread evenly across the real height
@@ -1165,7 +1367,9 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
         const dx = b.x - a.x, dz = b.z - a.z, len = Math.hypot(dx, dz);
         if (len < winW * 2.2) continue; // too short a segment for a window to read well
         const wallAngle = -Math.atan2(dz, dx);
-        const nWindows = Math.max(1, Math.floor(len / 3.2));
+        // Wider spacing than before — fewer, more deliberately-placed
+        // windows instead of a dense punched-hole strip.
+        const nWindows = Math.max(1, Math.floor(len / 5.5));
         const spacing = len / (nWindows + 1);
         for (let w = 1; w <= nWindows; w++) {
           const t = (spacing * w) / len;
@@ -1186,21 +1390,34 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
     }
 
     const PH = 1.0;
-    const pm = new THREE.MeshLambertMaterial({ color: '#D8CCB8' });
+    const pm = new THREE.MeshStandardMaterial({ color: '#D8CCB8', roughness: 0.85, metalness: 0 });
+    // Thin coping cap along the parapet top — a slightly lighter, overhanging
+    // slab (real parapets almost always have one) so the roofline reads as a
+    // finished edge with some depth instead of a plain extruded box.
+    const copingMat = new THREE.MeshStandardMaterial({ color: '#EDE6D8', roughness: 0.6, metalness: 0 });
+    const copingOverhang = 0.05, copingH = 0.06;
     for (let i = 0; i < normPoints.length; i++) {
       const a = normPoints[i], b = normPoints[(i + 1) % normPoints.length];
       const dx = b.x - a.x, dz = b.z - a.z, len = Math.hypot(dx, dz);
+      const rotY = -Math.atan2(dz, dx);
       const par = new THREE.Mesh(new THREE.BoxGeometry(len, PH, 0.3), pm);
       par.position.set((a.x + b.x) / 2, WALL_H + PH / 2, (a.z + b.z) / 2);
-      par.rotation.y = -Math.atan2(dz, dx); par.castShadow = true;
+      par.rotation.y = rotY; par.castShadow = true;
       par.userData.isBuildingMass = true; // shading analysis raycasts against this
       scene.add(par);
+
+      const coping = new THREE.Mesh(new THREE.BoxGeometry(len + copingOverhang * 2, copingH, 0.3 + copingOverhang * 2), copingMat);
+      coping.position.set((a.x + b.x) / 2, WALL_H + PH + copingH / 2, (a.z + b.z) / 2);
+      coping.rotation.y = rotY; coping.castShadow = true; coping.receiveShadow = true;
+      scene.add(coping);
     }
     const pg = new THREE.Group(); pg.name = 'panels'; scene.add(pg);
     panelMeshGroup.current = pg;
 
     const og = new THREE.Group(); og.name = 'obstacles'; scene.add(og);
     obstacleMeshGroup.current = og;
+    const sg = new THREE.Group(); sg.name = 'satellite'; scene.add(sg);
+    satelliteMeshGroup.current = sg;
     const zg = new THREE.Group(); zg.name = 'zone'; scene.add(zg);
     zoneMeshGroup.current = zg;
 
@@ -1240,11 +1457,6 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
       if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement);
     };
   }, [roofPoints, roofDims, roofPolyMeters, wallHeightM]);
-
-  useEffect(() => {
-    const env = sceneRef.current?.getObjectByName('environment');
-    if (env) env.visible = showEnv;
-  }, [showEnv]);
 
   useEffect(() => {
     const sun = sunRef.current, sphere = sunSphereRef.current, scene = sceneRef.current;
@@ -1299,18 +1511,24 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
       const canvas = document.createElement('canvas');
       canvas.width = size; canvas.height = size;
       const ctx = canvas.getContext('2d')!;
+      // Deeper, more saturated navy — the previous gradient washed out to a
+      // grayish blue once lit (roughness 0.2 with no env map means the sky
+      // hemisphere light's diffuse contribution brightens a lighter base
+      // color quite a bit). Starting darker/more saturated keeps it reading
+      // as premium navy instead of muted gray-blue once lit.
       const grad = ctx.createLinearGradient(0, 0, size, size);
-      grad.addColorStop(0, '#0d1b30');
-      grad.addColorStop(1, '#152640');
+      grad.addColorStop(0, '#040d1f');
+      grad.addColorStop(1, '#0a1a38');
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, size, size);
-      ctx.strokeStyle = 'rgba(200, 215, 225, 0.55)';
+      ctx.strokeStyle = 'rgba(225, 235, 245, 0.85)';
       ctx.lineWidth = 2;
       ctx.strokeRect(1, 1, size - 2, size - 2);
       // Busbar lines within a single cell tile — 3 thin fingers, matching
-      // the fine silver grid visible on real monocrystalline cells.
-      ctx.strokeStyle = 'rgba(190, 205, 220, 0.4)';
-      ctx.lineWidth = 1;
+      // the fine silver grid visible on real monocrystalline cells. Higher
+      // contrast/opacity than before so the grid reads crisp, not faint.
+      ctx.strokeStyle = 'rgba(215, 228, 240, 0.75)';
+      ctx.lineWidth = 1.25;
       for (let i = 1; i < 4; i++) {
         const p = (i / 4) * size;
         ctx.beginPath(); ctx.moveTo(p, 0); ctx.lineTo(p, size); ctx.stroke();
@@ -1521,43 +1739,126 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
       return { h: 0.8, color: '#A8A29E' };
     };
 
+    // Shared light-gray matte "louvered vent" texture for AC units and roof
+    // vents — built once per effect run rather than per obstacle, reused
+    // across every AC/vent instance via RepeatWrapping.
+    const ventTexture = (() => {
+      const size = 64;
+      const canvas = document.createElement('canvas');
+      canvas.width = size; canvas.height = size;
+      const ctx = canvas.getContext('2d')!;
+      ctx.fillStyle = '#D6DBE1';
+      ctx.fillRect(0, 0, size, size);
+      ctx.strokeStyle = 'rgba(71,85,105,0.5)';
+      ctx.lineWidth = 2;
+      for (let y = 5; y < size; y += 7) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(size, y); ctx.stroke();
+      }
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.RepeatWrapping;
+      return tex;
+    })();
+
+    // Deterministic per-obstacle pick (stable across rerenders, varies by
+    // obstacle id) — used to give each water-tank cluster a 2-4 tank count
+    // instead of every cluster looking identical.
+    const seededPick = (id: string, from: number, to: number) => {
+      let hash = 0;
+      for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) | 0;
+      return from + (Math.abs(hash) % (to - from + 1));
+    };
+
     obstacles.forEach(o => {
       const { h, color } = heightFor(o.label);
-      const isWaterTank = o.label.toLowerCase().includes('water');
+      const l = o.label.toLowerCase();
+      const isWaterTank = l.includes('water');
+      const isStaircase = l.includes('stair');
+      const isVentLike = l.includes('ac') || l.includes('hvac') || l.includes('vent');
       const isSel = o.id === selectedObstacleId;
       const group = new THREE.Group();
       group.position.set(o.x, WALL_H, o.z);
       group.rotation.y = o.rotDeg * Math.PI / 180;
       group.userData.obstacleId = o.id;
 
-      const mat = new THREE.MeshLambertMaterial({ color: isSel ? '#22C55E' : color });
+      const mat = isVentLike && !isSel
+        ? new THREE.MeshStandardMaterial({ map: ventTexture, color: '#ffffff', roughness: 0.9, metalness: 0 })
+        : new THREE.MeshLambertMaterial({ color: isSel ? '#22C55E' : color });
       const edgeColor = isSel ? '#16A34A' : '#334155';
 
       if (isWaterTank) {
-        // Open-top enclosure (4 thin walls) instead of a solid cylinder —
-        // matches the reference images' real RCC tank enclosure look
-        // rather than a sealed drum.
-        const wallT = 0.12;
-        const walls: [number, number, number, number, number][] = [
-          // [width, depth, x, z, rotY] — one box per side, offset half a
-          // wall-thickness out so the enclosure's outer footprint stays o.w x o.d
-          [o.w, wallT, 0, -o.d / 2 + wallT / 2, 0],
-          [o.w, wallT, 0, o.d / 2 - wallT / 2, 0],
-          [o.d, wallT, -o.w / 2 + wallT / 2, 0, Math.PI / 2],
-          [o.d, wallT, o.w / 2 - wallT / 2, 0, Math.PI / 2],
-        ];
-        walls.forEach(([w, d, x, z, rotY]) => {
-          const wall = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-          wall.position.set(x, h / 2, z);
-          wall.rotation.y = rotY;
-          wall.castShadow = true; wall.receiveShadow = true;
-          wall.userData.obstacleId = o.id;
-          group.add(wall);
-          const edges = new THREE.LineSegments(new THREE.EdgesGeometry(wall.geometry), new THREE.LineBasicMaterial({ color: edgeColor }));
-          edges.position.copy(wall.position); edges.rotation.copy(wall.rotation);
+        // A cluster of 2-4 cylindrical tanks instead of a single box/
+        // enclosure — light gray/white with a touch of metalness, a
+        // slightly wider rim disc, and a domed cap so each tank reads as a
+        // real overhead water tank rather than a generic block.
+        const tankCount = seededPick(o.id, 2, 4);
+        const tankMat = new THREE.MeshStandardMaterial({ color: isSel ? '#22C55E' : '#E8EBEF', roughness: 0.45, metalness: 0.15 });
+        const rimMat = new THREE.MeshStandardMaterial({ color: isSel ? '#16A34A' : '#C7CDD4', roughness: 0.4, metalness: 0.25 });
+        const spacing = Math.max(o.w, o.d) / tankCount;
+        const diameter = Math.min(spacing * 0.82, Math.min(o.w, o.d) * 0.9);
+        const radius = Math.max(diameter / 2, 0.15);
+        const tankH = Math.max(h * 0.75, 0.4);
+        const alongWidth = o.w >= o.d;
+
+        for (let i = 0; i < tankCount; i++) {
+          const offset = (i - (tankCount - 1) / 2) * spacing;
+          const tx = alongWidth ? offset : 0;
+          const tz = alongWidth ? 0 : offset;
+
+          const bodyGeo = new THREE.CylinderGeometry(radius, radius, tankH, 20);
+          const body = new THREE.Mesh(bodyGeo, tankMat);
+          body.position.set(tx, tankH / 2, tz);
+          body.castShadow = true; body.receiveShadow = true;
+          body.userData.obstacleId = o.id;
+          group.add(body);
+
+          const rim = new THREE.Mesh(new THREE.CylinderGeometry(radius * 1.08, radius * 1.08, tankH * 0.08, 20), rimMat);
+          rim.position.set(tx, tankH - tankH * 0.04, tz);
+          rim.castShadow = true;
+          rim.userData.obstacleId = o.id;
+          group.add(rim);
+
+          const cap = new THREE.Mesh(new THREE.SphereGeometry(radius * 0.9, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2), rimMat);
+          cap.position.set(tx, tankH, tz);
+          cap.castShadow = true;
+          cap.userData.obstacleId = o.id;
+          group.add(cap);
+
+          const edges = new THREE.LineSegments(new THREE.EdgesGeometry(bodyGeo), new THREE.LineBasicMaterial({ color: edgeColor }));
+          edges.position.copy(body.position);
           edges.userData.obstacleId = o.id;
           group.add(edges);
-        });
+        }
+      } else if (isStaircase) {
+        // Boxy stair-access structure: main volume, a shallow sloped roof
+        // cap with a small eave overhang, and a darker inset door panel on
+        // the front face — reads as a rooftop stair headroom structure,
+        // not a plain cube.
+        const body = new THREE.Mesh(new THREE.BoxGeometry(o.w, h, o.d), mat);
+        body.position.y = h / 2;
+        body.castShadow = true; body.receiveShadow = true;
+        body.userData.obstacleId = o.id;
+        group.add(body);
+        const bodyEdges = new THREE.LineSegments(new THREE.EdgesGeometry(body.geometry), new THREE.LineBasicMaterial({ color: edgeColor }));
+        bodyEdges.position.copy(body.position);
+        bodyEdges.userData.obstacleId = o.id;
+        group.add(bodyEdges);
+
+        const overhang = 0.15;
+        const capMat = new THREE.MeshStandardMaterial({ color: isSel ? '#16A34A' : '#8B8378', roughness: 0.85, metalness: 0 });
+        const cap = new THREE.Mesh(new THREE.BoxGeometry(o.w + overhang * 2, 0.1, o.d + overhang * 2), capMat);
+        cap.position.y = h + 0.1;
+        cap.rotation.x = THREE.MathUtils.degToRad(6);
+        cap.castShadow = true; cap.receiveShadow = true;
+        cap.userData.obstacleId = o.id;
+        group.add(cap);
+
+        const doorW = Math.min(0.9, o.w * 0.45), doorH = Math.min(h * 0.85, 2.0);
+        const doorMat = new THREE.MeshStandardMaterial({ color: '#3F3B36', roughness: 0.6, metalness: 0 });
+        const door = new THREE.Mesh(new THREE.PlaneGeometry(doorW, doorH), doorMat);
+        door.position.set(0, doorH / 2, o.d / 2 + 0.005);
+        door.userData.obstacleId = o.id;
+        group.add(door);
       } else {
         const mesh = new THREE.Mesh(new THREE.BoxGeometry(o.w, h, o.d), mat);
         mesh.position.y = h / 2;
@@ -1579,6 +1880,47 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
       og.add(group);
     });
   }, [obstacles, roofDims, wallHeightM, selectedObstacleId]);
+
+  // Real satellite ground imagery — a flat plane sized to the same
+  // real-world ground coverage the fetched Static Maps image represents
+  // (640 logical px × metersPerPixel at the requested zoom), centered at
+  // the scene origin same as the building. Both the map trace and this
+  // fresh fetch are north-up and centered on the same lat/lng, so this
+  // lines up with the building footprint without needing extra rotation —
+  // "roughly aligns," not pixel-perfect registration. Sits above the
+  // paver/grass ground (which stays as the surrounding context past the
+  // image's edge, and as the total fallback if no image loaded).
+  useEffect(() => {
+    const sg = satelliteMeshGroup.current;
+    if (!sg) return;
+    while (sg.children.length) sg.remove(sg.children[0]);
+    const geoCenter = roofCenterLatLng ?? mapConfig.center;
+    if (!satelliteImageUrl || !geoCenter) return;
+
+    const groundMpp = metersPerPixel(geoCenter.lat, SATELLITE_ZOOM);
+    const imageSizeM = 640 * groundMpp;
+
+    const loader = new THREE.TextureLoader();
+    loader.load(satelliteImageUrl, (tex) => {
+      tex.colorSpace = THREE.SRGBColorSpace;
+      const mesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(imageSizeM, imageSizeM),
+        new THREE.MeshStandardMaterial({ map: tex, roughness: 0.95, metalness: 0 })
+      );
+      mesh.rotation.x = -Math.PI / 2;
+      // Sits between the paver (-0.04) and the contact-shadow blob (-0.01)
+      // so the shadow still darkens visibly on top of it. A 0.02 gap from
+      // the paver — matching the paver/far-grass precedent below — instead
+      // of the original 0.01, which wasn't enough separation to reliably
+      // win the depth test against the paver plane at typical camera
+      // distance (the paver kept showing through).
+      mesh.position.y = -0.02;
+      mesh.receiveShadow = true;
+      sg.add(mesh);
+    }, undefined, (err) => {
+      console.error('[satellite] texture load error', err);
+    });
+  }, [satelliteImageUrl, roofCenterLatLng?.lat, roofCenterLatLng?.lng, mapConfig.center?.lat, mapConfig.center?.lng]);
 
   // Render the zone rectangle (live while dragging, persists until Fill/Clear)
   useEffect(() => {
@@ -1833,7 +2175,6 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
           {readOnly ? (
             <>
-              <button onClick={() => setShowEnv(s => !s)} style={{ padding: '5px 12px', borderRadius: 5, border: '1px solid var(--design-border)', background: showEnv ? 'var(--design-primary)' : 'var(--design-input-bg)', color: showEnv ? '#fff' : 'var(--design-muted)', fontSize: 11, cursor: 'pointer' }}>{showEnv ? '🌳 Env ON' : '🌳 Env OFF'}</button>
               <span style={{ fontSize: 10, color: 'var(--design-muted-2)' }}>Drag to orbit · scroll to zoom</span>
             </>
           ) : (
@@ -1845,7 +2186,6 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
               >
                 {advancedMode ? '⚙ Advanced' : '⚡ Simple'}
               </button>
-              <button onClick={() => setShowEnv(s => !s)} style={{ padding: '5px 12px', borderRadius: 5, border: '1px solid var(--design-border)', background: showEnv ? 'var(--design-primary)' : 'var(--design-input-bg)', color: showEnv ? '#fff' : 'var(--design-muted)', fontSize: 11, cursor: 'pointer' }}>{showEnv ? '🌳 Env ON' : '🌳 Env OFF'}</button>
               <div style={{ display: 'flex', gap: 3, background: 'var(--design-panel-elevated)', padding: 3, borderRadius: 8, border: '1px solid var(--design-border)' }}>
                 {([['orbit', '🔄 Orbit'], ['zone', '📐 Zone'], ['select', '⬚ Select'], ['drag', '✋ Move']] as const).map(([m, label]) => (
                   <button key={m} onClick={() => setMode(m)} style={{ padding: '5px 12px', borderRadius: 6, border: 'none', background: mode === m ? TX.navy : 'transparent', color: mode === m ? '#fff' : 'var(--design-muted)', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>{label}</button>

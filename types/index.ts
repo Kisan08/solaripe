@@ -30,7 +30,17 @@ export interface RoofPolygon {
   color: string;
   opacity: number;
   area: number; // m²
-  traceMpp?: number;  
+  traceMpp?: number;
+  // The roof polygon's real-world centroid, captured ONCE at trace time —
+  // NOT recomputed later against the live map/container state. The 2D
+  // canvas's container width differs between the 2D drawing view and the
+  // 3D view (no side panel in 3D), so recomputing "screen center" against
+  // whatever the CURRENT container width happens to be at render time
+  // produced a spurious, consistently-westward offset whenever the roof's
+  // trace-time canvas width differed from the 3D view's width. Storing the
+  // result once here (mirroring traceMpp's same rationale) avoids that
+  // entirely — every later consumer just reads a stable value.
+  centroidLatLng?: { lat: number; lng: number };
 }
 
 export interface Obstacle {

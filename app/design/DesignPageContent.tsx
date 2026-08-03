@@ -1,12 +1,12 @@
 'use client';
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { useSearchParams, usePathname } from 'next/navigation';
 import {
   MapPin, Home, Square, Hexagon, MousePointer2, Trash2, Box,
   Navigation, PenLine, CheckCircle2, Save, FileText, Link2, AlertTriangle,
 } from 'lucide-react';
 import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
-import { useDesignStore } from '../../store/designStore';
+import { useDesignStore, metersPerPixel } from '../../store/designStore';
 import { DesignCanvas } from '../../components/design/DesignCanvas';
 import { MapBackground, MapBackgroundRef } from '../../components/map/MapBackground';
 import { SolarDesign3D } from '../../components/design/SolarDesign3D';
@@ -200,10 +200,10 @@ export default function DesignPageContent() {
 
   const {
     activeTool, setActiveTool, roofs, obstacles, panels, equipment, project, updateProject,
-    showGrid, toggleGrid, snapEnabled, toggleSnap, zoomIn, zoomOut, fitToScreen, scale,
+    showGrid, toggleGrid, snapEnabled, toggleSnap, zoomIn, zoomOut, fitToScreen, scale, offset,
     undo, redo, historyIndex, history, cursorPos, saveStatus, setSaveStatus,
     autoFillRoof, selectedIds, setSelectedIds, removeRoof,
-    saveToSupabase, projectId, layerVisibility, toggleLayerVisibility,
+    saveToSupabase, projectId, layerVisibility, toggleLayerVisibility, mapConfig,
   } = useDesignStore();
 
   // Handles both loading an existing project's design AND — for a direct
@@ -269,6 +269,32 @@ export default function DesignPageContent() {
   const bestRoof = roofs.length > 0 ? roofs[0] : null;
   const orientation = bestRoof ? getOptimalOrientation(bestRoof.azimuth) : null;
 
+  // The roof polygon's own real-world lat/lng — NOT the same point as
+  // mapConfig.center (which tracks the map's live pan/zoom, not where the
+  // roof was traced). Preferred source: bestRoof.centroidLatLng, captured
+  // ONCE in DesignCanvas.tsx at the exact moment the roof was traced (see
+  // that file's computeCentroidLatLng for the full rationale — recomputing
+  // this later against the CURRENT container size was producing a
+  // consistently westward offset, since the 2D drawing view and 3D view
+  // have different container widths). Falls back to a live recompute only
+  // for roofs saved before this field existed.
+  const roofCenterLatLng = useMemo(() => {
+    if (bestRoof?.centroidLatLng) return bestRoof.centroidLatLng;
+    if (!bestRoof || bestRoof.points.length < 3 || dimensions.width === 0 || dimensions.height === 0) return null;
+    const xs = bestRoof.points.map(p => p.x), ys = bestRoof.points.map(p => p.y);
+    const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+    const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+    const screenX = cx * scale + offset.x;
+    const screenY = cy * scale + offset.y;
+    const dxPx = screenX - dimensions.width / 2;
+    const dyPx = screenY - dimensions.height / 2;
+    const mppScreen = metersPerPixel(mapConfig.center.lat, mapConfig.zoom);
+    const dxM = dxPx * mppScreen, dyM = dyPx * mppScreen;
+    const dLat = -dyM / 111320; // screen-down = south = decreasing latitude
+    const dLng = dxM / (111320 * Math.cos(mapConfig.center.lat * Math.PI / 180));
+    return { lat: mapConfig.center.lat + dLat, lng: mapConfig.center.lng + dLng };
+  }, [bestRoof, scale, offset, dimensions, mapConfig.center, mapConfig.zoom]);
+
   // Pushes the actual design numbers into the quote generator via URL params
   // it already reads (yearly_units, panel_count, roof_area, system_size,
   // name, address) — this is what "AI Design Banner" on that page expects.
@@ -327,7 +353,7 @@ export default function DesignPageContent() {
       <div className="solaripe-design-workspace" data-theme="dark" style={{ height: '100vh', width: '100%', background: 'var(--design-bg)', fontFamily: 'Inter, system-ui, sans-serif' }}>
         <DesignThemeStyles />
         {bestRoof ? (
-          <SolarDesign3D roofPoints={bestRoof.points} onClose={() => {}} lat={currentLocation.lat} readOnly />
+          <SolarDesign3D roofPoints={bestRoof.points} onClose={() => {}} lat={currentLocation.lat} roofCenterLatLng={roofCenterLatLng} readOnly />
         ) : (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--design-muted)', fontSize: 14 }}>
             This design isn't ready to view yet.
@@ -538,7 +564,7 @@ export default function DesignPageContent() {
 
           {/* 3D overlay */}
           {view3D && (
-            <SolarDesign3D roofPoints={(roofs[0])?.points || []} onClose={() => setView3D(false)} lat={currentLocation.lat} />
+            <SolarDesign3D roofPoints={(roofs[0])?.points || []} onClose={() => setView3D(false)} lat={currentLocation.lat} roofCenterLatLng={roofCenterLatLng} />
           )}
 
           {/* Mode badge */}

@@ -2,7 +2,7 @@
 import React, { useRef, useState, useCallback, useEffect, useMemo } from 'react';
 import { Stage, Layer, Line, Rect, Circle, Text, Group, Transformer } from 'react-konva';
 import Konva from 'konva';
-import { useDesignStore } from '../../store/designStore';
+import { useDesignStore, metersPerPixel } from '../../store/designStore';
 import { Point, RoofPolygon, Obstacle, SolarPanel } from '../../types';
 import {
   generateId, polygonArea, pxToM2, snapPoint,
@@ -241,16 +241,48 @@ export function DesignCanvas({ width, height, mapElement }: DesignCanvasProps) {
     removePanel, removeObstacle,
     drawingPoints, addDrawingPoint, clearDrawing, setDrawingPoints,
     showGrid, snapEnabled, setCursorPos, equipment,
-    layerVisibility,
+    layerVisibility, mapConfig,
   } = useDesignStore();
 
   const stageRef = useRef<Konva.Stage>(null);
   const [mousePos, setMousePos] = useState<Point | null>(null);
   const [isPanning, setIsPanning] = useState(false);
   const lastPanPos = useRef<Point | null>(null);
+  // A double-click's two mousedowns both reach handleMouseDown BEFORE the
+  // browser's dblclick event fires (mousedown, click, mousedown, click,
+  // dblclick is the real DOM order) — so closing a polygon by
+  // double-clicking was silently adding one or two spurious extra vertices
+  // at the closing point before handleDblClick ever ran. This timestamp
+  // lets the polygon branch below recognize "this mousedown is the second
+  // half of a double-click" and skip adding a point for it.
+  const lastPolyClickAt = useRef(0);
   const [rectStart, setRectStart] = useState<Point | null>(null);
   const [obstacleStart, setObstacleStart] = useState<Point | null>(null);
   const [obstacleLabel, setObstacleLabel] = useState('AC Unit');
+
+  // A roof polygon's real-world centroid, captured ONCE at trace time —
+  // NOT recomputed later against the live map/container state. The 2D
+  // canvas's container width (this component's own `width` prop) differs
+  // from the 3D view's container width (no side panel there), so
+  // recomputing "screen center = container width / 2" post-hoc against
+  // whatever width happens to be current at render time produced a
+  // spurious, consistently westward offset. Same rationale as traceMpp
+  // above, but for position instead of scale.
+  const computeCentroidLatLng = useCallback((points: Point[]): { lat: number; lng: number } | undefined => {
+    if (!mapConfig.center) return undefined;
+    const xs = points.map(p => p.x), ys = points.map(p => p.y);
+    const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+    const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+    const screenX = cx * scale + offset.x;
+    const screenY = cy * scale + offset.y;
+    const dxPx = screenX - width / 2;
+    const dyPx = screenY - height / 2;
+    const mppScreen = metersPerPixel(mapConfig.center.lat, mapConfig.zoom);
+    const dxM = dxPx * mppScreen, dyM = dyPx * mppScreen;
+    const dLat = -dyM / 111320; // screen-down = south = decreasing latitude
+    const dLng = dxM / (111320 * Math.cos(mapConfig.center.lat * Math.PI / 180));
+    return { lat: mapConfig.center.lat + dLat, lng: mapConfig.center.lng + dLng };
+  }, [mapConfig, scale, offset, width, height]);
 
   // Convert stage coordinates (including pan/zoom) to scene coordinates
   const toScene = useCallback((clientX: number, clientY: number): Point => {
@@ -325,7 +357,10 @@ export function DesignCanvas({ width, height, mapElement }: DesignCanvasProps) {
     const pt = getSnapped(scene);
 
     if (activeTool === 'polygon') {
-      addDrawingPoint(pt);
+      const now = Date.now();
+      const isSecondClickOfDoubleClick = now - lastPolyClickAt.current < 350;
+      lastPolyClickAt.current = now;
+      if (!isSecondClickOfDoubleClick) addDrawingPoint(pt);
     } else if (activeTool === 'rectangle') {
       setRectStart(pt);
     } else if (activeTool === 'obstacle') {
@@ -381,7 +416,7 @@ export function DesignCanvas({ width, height, mapElement }: DesignCanvasProps) {
         id: generateId(), type: 'roof', points,
         slope: 10, azimuth: 180,
         color: '#38BDF8', opacity: 0.25, area,
-        traceMpp,
+        traceMpp, centroidLatLng: computeCentroidLatLng(points),
       };
       addRoof(roof);
       setSelectedIds([roof.id]);
@@ -422,26 +457,50 @@ export function DesignCanvas({ width, height, mapElement }: DesignCanvasProps) {
       setSelectedIds([obs.id]);
       setObstacleStart(null);
     }
-  }, [activeTool, rectStart, mousePos, addRoof, setSelectedIds, obstacleStart, obstacleLabel, addObstacle]);
+  }, [activeTool, rectStart, mousePos, addRoof, setSelectedIds, obstacleStart, obstacleLabel, addObstacle, computeCentroidLatLng]);
 
   // Double-click to close polygon
   const handleDblClick = useCallback(() => {
     if (activeTool === 'polygon' && drawingPoints.length >= 3) {
+      // The closing double-click's constituent mousedowns land on/near the
+      // first vertex, leaving one or more trailing near-duplicates of
+      // points[0] — confirmed via the log above. shape.closePath() in
+      // SolarDesign3D.tsx already implicitly connects the last point back
+      // to the first, so a stored duplicate produces a zero-length closing
+      // edge; Three.js's earcut triangulation doesn't handle that
+      // degenerate edge cleanly and was rendering it as a spurious notch in
+      // one corner of the 3D building. The mousedown handler above now
+      // suppresses the second click of a double-click so this should
+      // rarely fire more than once, but loop (rather than a single strip)
+      // as a belt-and-suspenders in case more than one still slipped
+      // through. Fixed at the source here so every consumer (2D area/
+      // render and the 3D extrusion) gets a clean polygon.
+      const EPS = 0.5;
+      const points = drawingPoints.slice();
+      while (
+        points.length > 3
+        && Math.abs(points[0].x - points[points.length - 1].x) < EPS
+        && Math.abs(points[0].y - points[points.length - 1].y) < EPS
+      ) {
+        points.pop();
+      }
+
       // Capture the real-world scale AT TRACE TIME
       const traceMpp = sceneMetersPerPixel();
-      const area = pxToM2(polygonArea(drawingPoints), traceMpp);
+      const area = pxToM2(polygonArea(points), traceMpp);
+
       const roof: RoofPolygon = {
         id: generateId(), type: 'roof',
-        points: drawingPoints,
+        points,
         slope: 10, azimuth: 180,
         color: '#38BDF8', opacity: 0.25, area,
-        traceMpp,
+        traceMpp, centroidLatLng: computeCentroidLatLng(points),
       };
       addRoof(roof);
       setSelectedIds([roof.id]);
       clearDrawing();
     }
-  }, [activeTool, drawingPoints, addRoof, setSelectedIds, clearDrawing]);
+  }, [activeTool, drawingPoints, addRoof, setSelectedIds, clearDrawing, computeCentroidLatLng]);
 
   // Cursor
   useEffect(() => {

@@ -125,6 +125,28 @@ export const MapBackground = forwardRef<MapBackgroundRef, MapBackgroundProps>(({
       listeners.push(map.addListener('idle', syncMapConfig));
       syncMapConfig(); // capture initial state
 
+      // Google Maps never detects its own container resizing on its own —
+      // it has no ResizeObserver internally, so its cached viewport/
+      // projection goes stale the moment the container's actual pixel size
+      // changes (DevTools docking, sidebar toggling, window resize). The
+      // Konva drawing stage layered on top DOES resize immediately (it gets
+      // explicit width/height props from DesignPageContent's own
+      // ResizeObserver), so the two layers drift out of alignment — this
+      // was the root cause of the roof polygon appearing to jump to the
+      // wrong spot on the map after any container resize, which then fed a
+      // wrong lat/lng into the 3D satellite-image anchor downstream.
+      // google.maps.event.trigger(map,'resize') forces Maps to re-measure
+      // its container, but it also re-centers on (0,0) as a side effect —
+      // so the previous center must be restored right after.
+      const roResizeObserver = new ResizeObserver(() => {
+        if (!window.google?.maps?.event) return;
+        const centerBeforeResize = map.getCenter();
+        window.google.maps.event.trigger(map, 'resize');
+        if (centerBeforeResize) map.setCenter(centerBeforeResize);
+      });
+      roResizeObserver.observe(mapDivRef.current);
+      listeners.push({ remove: () => roResizeObserver.disconnect() });
+
     });
 
     return () => {
