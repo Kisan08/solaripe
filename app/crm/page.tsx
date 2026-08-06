@@ -80,6 +80,13 @@ function formatPhone(p: string) {
   return p;
 }
 
+// Same normalization make-call/route.ts uses server-side for the Twilio
+// `to` field — kept identical here so a manual dial and an AI call always
+// resolve to the same number.
+function telHref(p: string) {
+  return `tel:+91${p.replace(/\D/g, "").slice(-10)}`;
+}
+
 function exportToCSV(clients: Client[]) {
   const header = ["Name", "Phone", "Status", "Response", "Called At", "Created At"];
   const rows = clients.map((c) => [c.name, c.phone, c.status, c.response ?? "", c.called_at ?? "", c.created_at]);
@@ -595,6 +602,19 @@ export default function CRMPage() {
                             }}>
                             {client.status === "interested" ? "✅ Done" : callingId === client.id || client.status === "calling" ? "📞 Calling…" : "📞 Call"}
                           </button>
+                          {/* Manual dial — plain tel: link, no /api/make-call, no
+                              Supabase/Twilio side effects. Purely hands off to
+                              the device's own dialer; status only changes if
+                              the user updates it afterward via the existing UI. */}
+                          <a href={telHref(client.phone)} title="Call manually (opens your phone's dialer)"
+                            style={{
+                              display: "inline-flex", alignItems: "center", justifyContent: "center",
+                              backgroundColor: "#F3F4F6", color: "#374151", border: "1px solid #E5E7EB",
+                              borderRadius: 6, padding: "6px 10px", fontSize: 12, fontWeight: 700,
+                              textDecoration: "none", whiteSpace: "nowrap",
+                            }}>
+                            ☎️
+                          </a>
                           {client.status !== "pending" && (
                             <button onClick={() => resetOne(client)} title="Reset to Pending"
                               style={{ backgroundColor: "#F3F4F6", color: "#6B7280", border: "none", borderRadius: 6, padding: "6px 10px", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
@@ -670,6 +690,17 @@ export default function CRMPage() {
                       }}>
                       {client.status === "interested" ? "✅ Done" : callingId === client.id || client.status === "calling" ? "📞 Calling…" : "📞 Call"}
                     </button>
+                    {/* Manual dial — plain tel: link, no API call, no
+                        Supabase/Twilio side effects. */}
+                    <a href={telHref(client.phone)} title="Call manually (opens your phone's dialer)"
+                      style={{
+                        display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4,
+                        backgroundColor: "#F3F4F6", color: "#374151", border: "1px solid #E5E7EB",
+                        borderRadius: 7, padding: "9px 14px", fontSize: 13, fontWeight: 700,
+                        textDecoration: "none", whiteSpace: "nowrap",
+                      }}>
+                      ☎️ Manual
+                    </a>
                     {client.status !== "pending" && (
                       <button onClick={() => resetOne(client)}
                         style={{ backgroundColor: "#F3F4F6", color: "#6B7280", border: "none", borderRadius: 7, padding: "9px 14px", fontSize: 16, fontWeight: 700, cursor: "pointer" }}>

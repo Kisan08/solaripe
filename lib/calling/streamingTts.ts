@@ -3,7 +3,8 @@
 // directly — that's exactly the format Twilio Media Streams expects, so
 // bytes from ElevenLabs can be forwarded straight back over the Twilio
 // WebSocket with no resampling/transcoding step in between.
-const VOICE_ID = "FFmp1h1BMl0iVHA0JxrI";
+//const VOICE_ID = "FFmp1h1BMl0iVHA0JxrI";
+const VOICE_ID = "ExdX3FQINb1npPZsg2MY";
 
 export async function streamElevenLabsTts(
   text: string,
