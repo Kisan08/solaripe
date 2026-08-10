@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation"
 import { motion } from "framer-motion"
 import { Sidebar } from "@/components/sidebar"
 import { BottomNav } from "@/components/bottom-nav"
+import { GigiWidget } from "@/components/gigi/GigiWidget"
 
 // Routes that should render standalone — no sidebar, no bottom nav, no
 // app chrome at all. A logged-out visitor on /login or /signup has no
@@ -62,6 +63,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </main>
       </div>
       <BottomNav />
+      <GigiWidget />
     </div>
   )
 }

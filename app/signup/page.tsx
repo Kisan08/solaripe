@@ -2,7 +2,6 @@
 
 import { useActionState } from "react";
 import Link from "next/link";
-import { Sun } from "lucide-react";
 import { signUpAction, type AuthActionResult } from "@/lib/auth/actions";
 
 const initialState: AuthActionResult = {};
@@ -16,11 +15,9 @@ export default function SignupPage() {
   return (
     <div className="min-h-screen bg-[#F4F6F9] flex items-center justify-center px-4">
       <div className="w-full max-w-sm">
-        <div className="flex items-center justify-center gap-2 mb-6">
-          <div className="flex size-9 items-center justify-center rounded-lg bg-primary">
-            <Sun className="size-5 text-primary-foreground" aria-hidden="true" />
-          </div>
-          <span className="text-lg font-bold tracking-tight text-gray-900">Solaripe</span>
+        <div className="flex flex-col items-center justify-center gap-2 mb-6">
+          <img src="/brand/amsu-mark.png" alt="" className="h-12 w-auto" />
+          <img src="/brand/amsu-wordmark.png" alt="Amsu" className="h-9 w-auto" />
         </div>
 
         <div className="bg-white rounded-2xl border border-gray-100 p-6">

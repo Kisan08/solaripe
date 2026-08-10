@@ -1,5 +1,6 @@
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
+import { cleanPhone } from "@/lib/phone";
 
 // Session-aware client (not the plain anon one) — RLS (auth.uid() =
 // tenant_id, see supabase/migrations/0005_tenant_scope_crm.sql) does the
@@ -16,11 +17,6 @@ export async function GET() {
   }
 
   return NextResponse.json(data ?? []);
-}
-
-function cleanPhone(raw: string): string | null {
-  const digits = String(raw).replace(/\D/g, "").slice(-10);
-  return digits.length === 10 && /^[6-9]/.test(digits) ? digits : null;
 }
 
 // Manual single-client add, alongside the existing bulk file import
@@ -55,4 +51,25 @@ export async function POST(req: NextRequest) {
   }
 
   return NextResponse.json(data);
+}
+
+// Real delete, not a status change. Safe at the DB level with no app-side
+// cascade needed: call_sessions.client_id is ON DELETE CASCADE and
+// call_logs.client_id is ON DELETE SET NULL (supabase/migrations/
+// 0001_ai_calling.sql:19,40) — Postgres handles both automatically. RLS
+// scopes the delete to the current tenant's own row.
+export async function DELETE(req: NextRequest) {
+  const id = req.nextUrl.searchParams.get("id");
+  if (!id) {
+    return NextResponse.json({ error: "id is required" }, { status: 400 });
+  }
+
+  const supabase = await createServerSupabaseClient();
+  const { error } = await supabase.from("clients").delete().eq("id", id);
+
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  return NextResponse.json({ ok: true });
 }

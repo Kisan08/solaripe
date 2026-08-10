@@ -11,9 +11,9 @@ const geistMono = Geist_Mono({
 })
 
 export const metadata: Metadata = {
-  title: 'Solaripe — Solar EPC Operating System',
+  title: 'Amsu — Solar EPC Operating System',
   description:
-    'Solaripe is the all-in-one CRM and project management platform built for Indian solar EPCs. Track leads, manage projects, and close more proposals.',
+    'Amsu is the all-in-one CRM and project management platform built for Indian solar EPCs. Track leads, manage projects, and close more proposals.',
   generator: 'v0.app',
 }
 

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { motion } from "framer-motion"
-import { LogOut, Sun } from "lucide-react"
+import { LogOut } from "lucide-react"
 import { NAV_ITEMS } from "@/lib/nav"
 import { cn } from "@/lib/utils"
 import { createClient } from "@/lib/supabase/client"
@@ -49,12 +49,10 @@ export function Sidebar() {
       )}
     >
       <div className="flex h-16 shrink-0 items-center gap-2.5 px-[22px]">
-        <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary">
-          <Sun className="size-5 text-primary-foreground" aria-hidden="true" />
-        </div>
+        <img src="/brand/amsu-mark.png" alt="Amsu" className="size-8 shrink-0 object-contain" />
         <div className="flex flex-col leading-none whitespace-nowrap opacity-0 transition-opacity duration-150 group-hover:opacity-100">
           <span className="text-base font-bold tracking-tight text-foreground">
-            Solaripe
+            Amsu
           </span>
           <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
             Solar EPC OS
@@ -104,14 +102,24 @@ export function Sidebar() {
         })}
       </nav>
 
-      <div className="shrink-0 border-t border-sidebar-border p-4">
-        <div className="flex items-center gap-3 rounded-lg bg-secondary px-3 py-2.5">
-          <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+      <div className="shrink-0 border-t border-sidebar-border p-2">
+        {/* Matches the nav items' own px-3 inset above (not this div's own
+            padding) so the avatar sits at the same horizontal position as
+            the icons and stays inside the 68px collapsed rail — it was
+            previously p-4 wrapping a px-3 pill around a size-8 (32px)
+            avatar, ~88px of required width against a 68px rail, so the
+            circle was getting clipped by the rail's overflow-hidden. */}
+        <div className="flex items-center gap-3 rounded-lg bg-secondary px-2 py-2">
+          <div className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-[10px] font-semibold text-primary-foreground">
             {(companyName ?? "?").slice(0, 2).toUpperCase()}
           </div>
           <div className="flex flex-1 items-center justify-between gap-2 leading-tight whitespace-nowrap opacity-0 transition-opacity duration-150 group-hover:opacity-100 overflow-hidden">
-            <span className="text-xs font-semibold text-foreground truncate">
-              {companyName ?? "Loading…"}
+            <span className="text-xs font-semibold text-foreground truncate" title={companyName ?? undefined}>
+              {/* First word only — "Suryodaya Solar Solutions" reads as
+                  "Suryodaya" here, which actually fits the expanded rail's
+                  width instead of ellipsizing mid-name. Full name is still
+                  available on hover via the title attribute above. */}
+              {companyName ? companyName.split(" ")[0] : "Loading…"}
             </span>
             <form action={signOutAction}>
               <button

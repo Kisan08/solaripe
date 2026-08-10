@@ -82,6 +82,25 @@ export function LeadModal({
     if (!form.name.trim()) return
     setSaving(true)
     try {
+      // Only for new leads — editing an existing lead shouldn't re-warn
+      // about a phone number it already had.
+      if (!lead && form.phone.trim()) {
+        const dupRes = await fetch("/api/check-phone", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ phone: form.phone, excludeTable: "leads" }),
+        })
+        const { matches } = await dupRes.json().catch(() => ({ matches: [] }))
+        if (matches?.length > 0) {
+          const m = matches[0]
+          const when = m.created_at ? new Date(m.created_at).toLocaleDateString("en-IN") : "unknown date"
+          const proceed = window.confirm(
+            `This number already exists as a ${m.label}: ${m.name} — created ${when}. Continue adding it as a lead anyway?`
+          )
+          if (!proceed) { setSaving(false); return }
+        }
+      }
+
       await onSave({
         ...(lead ? { id: lead.id } : {}),
         name: form.name.trim(),

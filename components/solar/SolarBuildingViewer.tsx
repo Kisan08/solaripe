@@ -6,7 +6,7 @@ import * as THREE from "three";
 /**
  * SolarBuildingViewer
  * ---------------------------------------------------------------------------
- * Reusable 3D building + rooftop solar visualizer for Solaripe / Wattflow.
+ * Reusable 3D building + rooftop solar visualizer for Amsu.
  *
  * Feed it:
  *  - a roof footprint polygon (in meters, local coordinates)

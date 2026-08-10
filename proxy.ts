@@ -11,7 +11,7 @@ import { isPlatformAdmin } from "@/lib/admin";
 // PUBLIC routes (no session required):
 // - /login, /signup
 // - /design when ?client=1 is present (shared read-only 3D view links sent
-//   to customers, who are never Solaripe users)
+//   to customers, who are never Amsu users)
 // - everything under /api/* — Twilio webhooks (call-twiml/call-response/
 //   call-webhook) are called directly by Twilio with no browser session at
 //   all, and the cron/notify routes have their own bearer-token auth
@@ -74,11 +74,20 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    // Run on everything except Next's own static/image assets and the
-    // favicon — /api/* is still matched (so this middleware runs and can
-    // reach isPublicPath's explicit api bypass), it's excluded by logic
-    // above, not by the matcher, to keep the "what's public" decision in
-    // one readable place.
-    "/((?!_next/static|_next/image|favicon.ico).*)",
+    // Run on everything except Next's own static/image assets, the
+    // favicon, and plain static files served straight out of public/
+    // (logos, icons, client photos, etc.) — /api/* is still matched (so
+    // this middleware runs and can reach isPublicPath's explicit api
+    // bypass), it's excluded by logic above, not by the matcher, to keep
+    // the "what's public" decision in one readable place.
+    //
+    // The extension exclusion was added after amsu-logo.svg on the
+    // logged-out /login page came back as a redirect-to-/login instead of
+    // the image: any public/ asset referenced from an unauthenticated
+    // page was being treated as a protected route requiring a session,
+    // same as any other path. It happened to go unnoticed before this
+    // because /login and /signup previously only used a Lucide icon
+    // component there, never an actual public/ image file.
+    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpe?g|gif|webp|ico|avif)$).*)",
   ],
 };

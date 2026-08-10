@@ -3,7 +3,7 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 // SERVER-ONLY, service-role — the ONE deliberate exception to tenant RLS.
 // Used exclusively by the ?client=1 shared read-only design view, for
-// visitors who are never logged in at all (customers, not Solaripe users).
+// visitors who are never logged in at all (customers, not Amsu users).
 //
 // This is intentionally NOT a general bypass: it takes exactly one
 // projectId and returns exactly the design + project fields the client

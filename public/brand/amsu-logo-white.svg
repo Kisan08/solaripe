@@ -1,0 +1,11 @@
+<svg width="340" height="100" viewBox="0 0 680 200" xmlns="http://www.w3.org/2000/svg">
+<polygon points="48.04,140 103,164.8 97,175.2" fill="#FAC775"/>
+<polygon points="48.56,108.72 104.6,166.14 95.4,173.86" fill="#EF9F27"/>
+<polygon points="65.8,76 105.64,167.95 94.36,172.05" fill="#BA7517"/>
+<polygon points="100,50 106,170 94,170" fill="#854F0B"/>
+<polygon points="134.2,76 105.64,172.05 94.36,167.95" fill="#BA7517"/>
+<polygon points="151.44,108.72 104.6,173.86 95.4,166.14" fill="#EF9F27"/>
+<polygon points="151.96,140 103,175.2 97,164.8" fill="#FAC775"/>
+<circle cx="100" cy="171" r="5" fill="#2A1500"/>
+<text x="190" y="128" font-family="Arial, Helvetica, sans-serif" font-size="58" font-weight="600" letter-spacing="-1.5" fill="#FFFFFF">Amsu</text>
+</svg>

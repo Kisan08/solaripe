@@ -192,6 +192,20 @@ export default function CRMPage() {
   async function handleAddClient() {
     setAdding(true);
     try {
+      const dupRes = await fetch("/api/check-phone", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: addPhone, excludeTable: "clients" }),
+      });
+      const { matches } = await dupRes.json().catch(() => ({ matches: [] }));
+      if (matches?.length > 0) {
+        const m = matches[0];
+        const when = m.created_at ? new Date(m.created_at).toLocaleDateString("en-IN") : "unknown date";
+        const proceed = window.confirm(
+          `This number already exists as a ${m.label}: ${m.name} — created ${when}. Continue adding it as a client anyway?`
+        );
+        if (!proceed) { setAdding(false); return; }
+      }
+
       const res = await fetch("/api/crm/clients", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: addName, phone: addPhone }),
@@ -233,6 +247,20 @@ export default function CRMPage() {
       setClients((prev) => prev.map((c) => c.id === client.id ? { ...c, status: "pending", response: null, called_at: null } : c));
       showToast(`${client.name} reset to pending`, "ok");
     } catch { showToast("Reset failed", "err"); }
+  }
+
+  async function deleteOne(client: Client) {
+    const confirmed = window.confirm(
+      `Delete ${client.name}? This removes them from the AI Calling list along with their call history. This can't be undone.`
+    );
+    if (!confirmed) return;
+
+    try {
+      const res = await fetch(`/api/crm/clients?id=${encodeURIComponent(client.id)}`, { method: "DELETE" });
+      if (!res.ok) throw new Error();
+      setClients((prev) => prev.filter((c) => c.id !== client.id));
+      showToast(`${client.name} deleted`, "ok");
+    } catch { showToast("Delete failed", "err"); }
   }
 
   async function callAllPending() {
@@ -621,6 +649,10 @@ export default function CRMPage() {
                               ↺
                             </button>
                           )}
+                          <button onClick={() => deleteOne(client)} title="Delete client"
+                            style={{ backgroundColor: "#FEF2F2", color: "#991B1B", border: "1px solid #FEE2E2", borderRadius: 6, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                            🗑️
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -707,6 +739,10 @@ export default function CRMPage() {
                         ↺
                       </button>
                     )}
+                    <button onClick={() => deleteOne(client)} title="Delete client"
+                      style={{ backgroundColor: "#FEF2F2", color: "#991B1B", border: "1px solid #FEE2E2", borderRadius: 7, padding: "9px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                      🗑️
+                    </button>
                   </div>
                 </div>
               ))}
