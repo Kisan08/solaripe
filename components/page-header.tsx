@@ -1,7 +1,6 @@
 "use client"
 
 import type React from "react"
-import { Sun } from "lucide-react"
 
 export function PageHeader({
   title,
@@ -16,9 +15,11 @@ export function PageHeader({
     <header className="sticky top-0 z-20 border-b border-border bg-card/90 backdrop-blur-md">
       <div className="flex items-center justify-between gap-4 px-5 py-4 md:px-8">
         <div className="flex items-center gap-3">
-          <div className="flex size-9 items-center justify-center rounded-lg bg-primary md:hidden">
-            <Sun className="size-5 text-primary-foreground" aria-hidden="true" />
-          </div>
+          <img
+            src="/brand/amsu-mark.png"
+            alt="Amsu"
+            className="size-9 shrink-0 object-contain md:hidden"
+          />
           <div>
             <h1 className="text-lg font-bold tracking-tight text-foreground md:text-xl">
               {title}
