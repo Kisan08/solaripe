@@ -110,6 +110,19 @@ export function GigiWidget() {
   // with "hey gigi" duplicated into the command sent to /api/gigi.
   const wakeResultIndexRef = useRef(-1);
   const wakeEndOffsetRef = useRef(0);
+  // SpeechRecognition result indices RESET to 0 every time .start() is
+  // called on an instance, even when we're internally restarting the SAME
+  // JS object after Chrome's onend auto-stop (e.g. from the pause right
+  // after saying "hey gigi"). Without this generation guard, a stale
+  // wakeResultIndexRef (say, 0, from the pre-restart session) could
+  // coincidentally match the RESTARTED session's own index-0 result — the
+  // user's actual real command — causing it to be mis-treated as "the
+  // wake phrase's own result re-finalizing" and sliced/mangled using the
+  // old wake-word offset. Bumped every real .start() call; a wake-word
+  // match is only honored as "the same result" if the generation also
+  // matches.
+  const sessionGenerationRef = useRef(0);
+  const wakeResultGenerationRef = useRef(-1);
   // Timestamp active-listening mode was entered (manual mic click, or the
   // moment "hey gigi" was detected) — used by isViableCommand()'s settle
   // window, see its comment above.
@@ -248,6 +261,7 @@ export function GigiWidget() {
     setBusy(true);
 
     const resumeIfNeeded = () => {
+      console.log("[gigi:voice] resumeIfNeeded — resumeMode:", resumeMode, "wakeEnabled:", wakeEnabledRef.current);
       if (resumeMode === "active") startRecognitionSession("active", "active");
       else if (resumeMode === "wake" && wakeEnabledRef.current) startRecognitionSession("wake", "wake");
     };
@@ -289,6 +303,7 @@ export function GigiWidget() {
   // `resumeMode` is what to restart into after a captured command's reply
   // has been handled — see send()'s resumeIfNeeded.
   function startRecognitionSession(initialMode: MicMode, resumeMode: MicMode | null) {
+    console.log("[gigi:voice] startRecognitionSession — initialMode:", initialMode, "resumeMode:", resumeMode);
     const Ctor = getSpeechRecognitionCtor();
     if (!Ctor) return;
 
@@ -326,10 +341,11 @@ export function GigiWidget() {
       const text = commandBufferRef.current.trim();
       const elapsed = Date.now() - activeModeEnteredAtRef.current;
       if (!isViableCommand(text, elapsed)) {
-        console.log("[gigi] ignoring low-confidence transcript:", JSON.stringify(text));
+        console.log("[gigi:voice] REJECTED low-confidence transcript:", JSON.stringify(text), "elapsedMs:", elapsed, "clearOnReject:", clearOnReject);
         if (clearOnReject) commandBufferRef.current = "";
         return;
       }
+      console.log("[gigi:voice] ACCEPTED command, sending:", JSON.stringify(text));
       commandBufferRef.current = "";
       keepListeningRef.current = false;
       recognition.stop();
@@ -344,17 +360,22 @@ export function GigiWidget() {
         const transcriptRaw: string = result[0].transcript ?? "";
         const lower = transcriptRaw.toLowerCase();
 
+        console.log("[gigi:voice] onresult — mode:", modeRef.current, "i:", i, "isFinal:", result.isFinal, "transcript:", JSON.stringify(transcriptRaw));
+
         if (modeRef.current === "wake") {
           const { matched, endIndex } = matchWakeWord(lower);
           if (!matched) continue;
 
+          console.log("[gigi:voice] WAKE WORD MATCHED — endIndex:", endIndex, "switching to active mode");
           modeRef.current = "active";
           setMicMode("active");
           activeModeEnteredAtRef.current = Date.now();
           wakeResultIndexRef.current = i;
+          wakeResultGenerationRef.current = sessionGenerationRef.current;
           wakeEndOffsetRef.current = endIndex;
           const remainder = transcriptRaw.slice(endIndex).trim();
           commandBufferRef.current = remainder;
+          console.log("[gigi:voice] remainder after stripping wake phrase:", JSON.stringify(remainder));
           if (result.isFinal && remainder) {
             finishCommand(true);
             return;
@@ -363,13 +384,14 @@ export function GigiWidget() {
         }
 
         // modeRef.current === "active" from here on.
-        if (i === wakeResultIndexRef.current) {
+        if (i === wakeResultIndexRef.current && sessionGenerationRef.current === wakeResultGenerationRef.current) {
           // Same result Chrome keeps re-firing as it finalizes — re-derive
           // the command from the wake-word offset each time instead of
           // appending, or "hey gigi" would end up duplicated into the text
           // sent to /api/gigi.
           const remainder = transcriptRaw.slice(wakeEndOffsetRef.current).trim();
           commandBufferRef.current = remainder;
+          console.log("[gigi:voice] re-finalizing wake-boundary result, remainder:", JSON.stringify(remainder));
           if (result.isFinal && remainder) finishCommand(true);
           continue;
         }
@@ -378,6 +400,7 @@ export function GigiWidget() {
           const chunk = transcriptRaw.trim();
           if (chunk) {
             commandBufferRef.current = (commandBufferRef.current ? commandBufferRef.current + " " : "") + chunk;
+            console.log("[gigi:voice] accumulating command chunk, buffer now:", JSON.stringify(commandBufferRef.current));
             finishCommand(false);
             return;
           }
@@ -387,6 +410,7 @@ export function GigiWidget() {
 
     recognition.onerror = (e: any) => {
       if (!isCurrent()) return;
+      console.log("[gigi:voice] onerror —", e.error, "mode:", modeRef.current);
       // "no-speech"/"aborted"/"network" are transient/expected (Chrome
       // fires these routinely on pauses or brief connectivity blips) —
       // let onend's restart logic silently retry. Only a genuinely fatal
@@ -404,6 +428,7 @@ export function GigiWidget() {
 
     recognition.onend = () => {
       if (!isCurrent()) return;
+      console.log("[gigi:voice] onend — keepListening:", keepListeningRef.current, "mode:", modeRef.current);
       if (keepListeningRef.current) {
         // A short cooldown before restarting — calling start() immediately
         // inside onend is a known trigger for Chrome to immediately
@@ -411,7 +436,27 @@ export function GigiWidget() {
         // the wake-listening session survive Chrome's periodic auto-stops
         // indefinitely without the user noticing a gap.
         window.setTimeout(() => {
-          if (isCurrent() && keepListeningRef.current) recognition.start();
+          if (!isCurrent() || !keepListeningRef.current) return;
+          // The restarted session's result indices reset to 0 — any
+          // wake-boundary index/generation tracked from BEFORE this
+          // restart is no longer valid. This is the concrete fix for
+          // "hey gigi" (or a mangled fragment of it) getting sent as the
+          // command: without this reset, a stale wakeResultIndexRef could
+          // coincidentally match the new session's own index 0 — the
+          // user's real command — and get wrongly sliced using the old
+          // wake-word offset.
+          wakeResultIndexRef.current = -1;
+          wakeEndOffsetRef.current = 0;
+          try {
+            recognition.start();
+            sessionGenerationRef.current += 1;
+            console.log("[gigi:voice] restarted after onend, generation:", sessionGenerationRef.current);
+          } catch (err) {
+            console.error("[gigi:voice] recognition.start() threw on restart", err);
+            keepListeningRef.current = false;
+            setListening(false);
+            setMicMode(null);
+          }
         }, 300);
         return;
       }
@@ -422,7 +467,16 @@ export function GigiWidget() {
     recognitionRef.current = recognition;
     keepListeningRef.current = true;
     setListening(true);
-    recognition.start();
+    try {
+      recognition.start();
+      sessionGenerationRef.current += 1;
+      console.log("[gigi:voice] session started, generation:", sessionGenerationRef.current);
+    } catch (err) {
+      console.error("[gigi:voice] recognition.start() threw on initial start", err);
+      keepListeningRef.current = false;
+      setListening(false);
+      setMicMode(null);
+    }
   }
 
   function toggleMic() {
