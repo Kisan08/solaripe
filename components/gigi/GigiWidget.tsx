@@ -55,6 +55,30 @@ function matchWakeWord(lowerTranscript: string): { matched: boolean; endIndex: n
   return { matched: false, endIndex: -1 };
 }
 
+// Guards against a real, reproduced bug: right at the "hey gigi" boundary,
+// Chrome sometimes finalizes a short trailing breath/filler sound (e.g.
+// "i.") as part of/right after the wake phrase's own segment, which would
+// otherwise get auto-sent to /api/gigi as if it were the actual command.
+const MIN_COMMAND_CHARS = 4;
+const FILLER_WORDS = new Set([
+  "i", "um", "uh", "uhh", "umm", "hmm", "huh", "the", "a", "and", "so", "yeah", "ok", "okay",
+]);
+// A grace window right after entering active-listening mode (whether via
+// wake-word detection or the manual mic button) during which even a
+// final result has to look like a real, substantive phrase before it's
+// accepted — filters the spurious short tail fragment without waiting on
+// an artificial delay before recognition can start capturing at all.
+const ACTIVE_MODE_SETTLE_MS = 300;
+
+function isViableCommand(text: string, msSinceActiveModeStarted: number): boolean {
+  const cleaned = text.trim().replace(/[.,!?]+$/g, "");
+  if (!cleaned) return false;
+  if (cleaned.length < MIN_COMMAND_CHARS) return false;
+  if (FILLER_WORDS.has(cleaned.toLowerCase())) return false;
+  if (msSinceActiveModeStarted < ACTIVE_MODE_SETTLE_MS) return false;
+  return true;
+}
+
 type MicMode = "active" | "wake";
 type VoiceState = "off" | "wake" | "active" | "thinking" | "speaking";
 
@@ -86,6 +110,10 @@ export function GigiWidget() {
   // with "hey gigi" duplicated into the command sent to /api/gigi.
   const wakeResultIndexRef = useRef(-1);
   const wakeEndOffsetRef = useRef(0);
+  // Timestamp active-listening mode was entered (manual mic click, or the
+  // moment "hey gigi" was detected) — used by isViableCommand()'s settle
+  // window, see its comment above.
+  const activeModeEnteredAtRef = useRef(0);
   const wakeEnabledRef = useRef(false);
   // The wake-word recognition session is armed once from the mount effect
   // (and re-arms itself imperatively from within send()'s own closure
@@ -274,13 +302,22 @@ export function GigiWidget() {
     commandBufferRef.current = "";
     wakeResultIndexRef.current = -1;
     wakeEndOffsetRef.current = 0;
+    if (initialMode === "active") activeModeEnteredAtRef.current = Date.now();
 
     function finishCommand() {
       const text = commandBufferRef.current.trim();
+      const elapsed = Date.now() - activeModeEnteredAtRef.current;
+      if (!isViableCommand(text, elapsed)) {
+        // Too short / a filler word / arrived within the post-wake-word
+        // settle window — likely a spurious fragment, not the real
+        // command. Don't stop or send; just keep listening for more.
+        console.log("[gigi] ignoring low-confidence transcript:", JSON.stringify(text));
+        return;
+      }
       commandBufferRef.current = "";
       keepListeningRef.current = false;
       recognition.stop();
-      if (text) send(text, resumeMode);
+      send(text, resumeMode);
     }
 
     recognition.onresult = (e: any) => {
@@ -297,6 +334,7 @@ export function GigiWidget() {
 
           modeRef.current = "active";
           setMicMode("active");
+          activeModeEnteredAtRef.current = Date.now();
           wakeResultIndexRef.current = i;
           wakeEndOffsetRef.current = endIndex;
           const remainder = transcriptRaw.slice(endIndex).trim();
@@ -453,6 +491,12 @@ export function GigiWidget() {
                 </button>
               )}
               {synthesisSupported && (
+                // setSpeakEnabled is called ONLY from this click handler —
+                // nowhere else in this file, including speak()'s onerror/
+                // catch paths, may flip it. A TTS failure should skip
+                // speaking that one reply (voiceOutputFailed handles that)
+                // without silently opting the user out of voice for every
+                // reply after.
                 <button
                   onClick={() => {
                     primeSpeechSynthesis();
