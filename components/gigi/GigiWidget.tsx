@@ -11,7 +11,7 @@
 // this is placeholder-quality browser TTS/STT, not the ElevenLabs/Deepgram
 // pipeline used by the real calling flow.
 import { useEffect, useRef, useState } from "react";
-import { MessageCircle, X, Send, Mic, Volume2, VolumeX, Ear, EarOff } from "lucide-react";
+import { MessageCircle, X, Send, Mic, Volume2, VolumeX, Ear, EarOff, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface ChatMessage {
@@ -70,6 +70,7 @@ export function GigiWidget() {
   const [voiceSupported, setVoiceSupported] = useState(false);
   const [synthesisSupported, setSynthesisSupported] = useState(false);
   const [wakeEnabled, setWakeEnabled] = useState(false);
+  const [voiceOutputFailed, setVoiceOutputFailed] = useState(false);
 
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   // Whether recognition SHOULD keep running — checked in onend to decide
@@ -95,6 +96,17 @@ export function GigiWidget() {
   // live state. Mirroring messages into a ref keeps send() reading the
   // ACTUAL latest conversation regardless of which stale closure calls it.
   const messagesRef = useRef<ChatMessage[]>([]);
+  // iOS Safari can return an empty getVoices() list until 'voiceschanged'
+  // fires (sometimes not until well after mount) — cache the list from
+  // that event instead of re-querying at speak-time, where it may still be
+  // empty on first use.
+  const voicesRef = useRef<SpeechSynthesisVoice[]>([]);
+  // iOS Safari also requires speak() to happen inside (or very soon after)
+  // a direct user-gesture call stack the FIRST time, or it silently drops
+  // it — later async speak() calls (e.g. after a fetch resolves) work fine
+  // once one real utterance has gone through inside a gesture handler.
+  // This one-time "priming" utterance (empty text, silent) unlocks that.
+  const speechPrimedRef = useRef(false);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -102,7 +114,15 @@ export function GigiWidget() {
 
   useEffect(() => {
     setVoiceSupported(getSpeechRecognitionCtor() !== null);
-    setSynthesisSupported(typeof window !== "undefined" && "speechSynthesis" in window);
+    const hasSynthesis = typeof window !== "undefined" && "speechSynthesis" in window;
+    setSynthesisSupported(hasSynthesis);
+
+    let updateVoices: (() => void) | null = null;
+    if (hasSynthesis) {
+      updateVoices = () => { voicesRef.current = window.speechSynthesis.getVoices(); };
+      updateVoices();
+      window.speechSynthesis.addEventListener("voiceschanged", updateVoices);
+    }
 
     const stored = typeof window !== "undefined" ? window.localStorage.getItem(WAKE_STORAGE_KEY) : null;
     if (stored === "1" && getSpeechRecognitionCtor()) {
@@ -114,12 +134,28 @@ export function GigiWidget() {
     return () => {
       keepListeningRef.current = false;
       recognitionRef.current?.abort();
-      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      if (hasSynthesis) {
         window.speechSynthesis.cancel();
+        if (updateVoices) window.speechSynthesis.removeEventListener("voiceschanged", updateVoices);
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Call once from inside a real click handler (mic button, wake toggle,
+  // launcher button) before any await/async gap — see speechPrimedRef's
+  // comment above for why this specifically matters on iOS Safari.
+  function primeSpeechSynthesis() {
+    if (speechPrimedRef.current || !synthesisSupported) return;
+    speechPrimedRef.current = true;
+    try {
+      const primer = new SpeechSynthesisUtterance("");
+      primer.volume = 0;
+      window.speechSynthesis.speak(primer);
+    } catch (err) {
+      console.error("[gigi] speech priming failed", err);
+    }
+  }
 
   function speak(text: string, onDone?: () => void) {
     if (!speakEnabled || !synthesisSupported) {
@@ -129,14 +165,34 @@ export function GigiWidget() {
     window.speechSynthesis.cancel();
 
     const utterance = new SpeechSynthesisUtterance(text);
-    const voices = window.speechSynthesis.getVoices();
+    const voices = voicesRef.current.length > 0 ? voicesRef.current : window.speechSynthesis.getVoices();
     const preferred = voices.find((v) => /en-IN|hi-IN/i.test(v.lang));
     if (preferred) utterance.voice = preferred;
 
-    utterance.onstart = () => setSpeaking(true);
-    utterance.onend = () => { setSpeaking(false); onDone?.(); };
-    utterance.onerror = () => { setSpeaking(false); onDone?.(); };
-    window.speechSynthesis.speak(utterance);
+    utterance.onstart = () => {
+      console.log("[gigi] speech started");
+      setSpeaking(true);
+      setVoiceOutputFailed(false);
+    };
+    utterance.onend = () => {
+      console.log("[gigi] speech ended");
+      setSpeaking(false);
+      onDone?.();
+    };
+    utterance.onerror = (e: SpeechSynthesisErrorEvent) => {
+      console.error("[gigi] speech error", e.error);
+      setSpeaking(false);
+      setVoiceOutputFailed(true);
+      onDone?.();
+    };
+
+    try {
+      window.speechSynthesis.speak(utterance);
+    } catch (err) {
+      console.error("[gigi] speechSynthesis.speak threw", err);
+      setVoiceOutputFailed(true);
+      onDone?.();
+    }
   }
 
   // resumeMode: what to automatically start listening for again once the
@@ -316,6 +372,7 @@ export function GigiWidget() {
   }
 
   function toggleMic() {
+    primeSpeechSynthesis();
     // Barge-in: clicking the mic always interrupts any reply Gigi is
     // currently reading out, rather than listening over it.
     if (synthesisSupported) window.speechSynthesis.cancel();
@@ -334,6 +391,7 @@ export function GigiWidget() {
   }
 
   function toggleWake() {
+    primeSpeechSynthesis();
     const next = !wakeEnabled;
     setWakeEnabled(next);
     wakeEnabledRef.current = next;
@@ -397,6 +455,7 @@ export function GigiWidget() {
               {synthesisSupported && (
                 <button
                   onClick={() => {
+                    primeSpeechSynthesis();
                     setSpeakEnabled((v) => {
                       const next = !v;
                       if (!next) window.speechSynthesis.cancel();
@@ -408,6 +467,11 @@ export function GigiWidget() {
                 >
                   {speakEnabled ? <Volume2 className="size-4" /> : <VolumeX className="size-4" />}
                 </button>
+              )}
+              {synthesisSupported && speakEnabled && voiceOutputFailed && (
+                <span title="Voice output isn't working on this device — replies will still show as text.">
+                  <AlertTriangle className="size-4 text-amber-500" />
+                </span>
               )}
               <button
                 onClick={() => {
@@ -493,7 +557,10 @@ export function GigiWidget() {
       )}
 
       <button
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          primeSpeechSynthesis();
+          setOpen((v) => !v);
+        }}
         className="fixed bottom-20 right-4 z-50 flex size-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg transition-transform hover:scale-105 md:bottom-6 md:right-6"
         title="Ask Gigi"
       >

@@ -104,6 +104,21 @@ export async function POST(req: NextRequest) {
       cookieHeader,
     });
 
+    // A clean, unambiguous success has nothing left to phrase — every tool
+    // executor's own summary (lib/gigi/tools.ts) is already a clear,
+    // spoken-friendly confirmation ("Added Kisan as a new lead."). Skip the
+    // second Groq round trip entirely for this common case; it's only
+    // needed when result.ok is false, since THAT'S where a raw error,
+    // duplicate-phone warning, or ambiguous-match question needs natural
+    // conversational phrasing (unchanged below).
+    if (result.ok) {
+      return NextResponse.json({
+        reply: result.summary,
+        tool: toolCall.function.name,
+        result,
+      });
+    }
+
     const second = await callGroqWithTools([
       ...messages,
       { role: "assistant", content: first.content, tool_calls: first.tool_calls },

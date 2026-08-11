@@ -536,7 +536,10 @@ async function execUpdateProjectPayment(
   const field = `t${tranche}_paid`;
   const { error } = await supabase.from("projects").update({ [field]: true }).eq("id", project.id);
   if (error) return { ok: false, summary: `Failed to update ${project.name}'s payment: ${error.message}` };
-  return { ok: true, summary: `Marked tranche ${tranche} as paid for ${project.name}.` };
+  // Same milestone names shown in components/projects/project-card.tsx —
+  // reads more naturally than a bare "tranche N" when spoken aloud.
+  const TRANCHE_LABELS: Record<number, string> = { 1: "Advance", 2: "Material", 3: "Install", 4: "Handover" };
+  return { ok: true, summary: `Marked the ${TRANCHE_LABELS[tranche as number]} payment (T${tranche}) as paid for ${project.name}.` };
 }
 
 async function execSendWhatsappFollowup(
@@ -785,7 +788,7 @@ async function execInitiateCall(
   if (!res.ok) {
     return { ok: false, summary: `Failed to place the call: ${body.error ?? "unknown error"}` };
   }
-  return { ok: true, summary: "Call initiated.", data: body };
+  return { ok: true, summary: "Okay, calling them now.", data: body };
 }
 
 export async function executeTool(
