@@ -44,13 +44,33 @@ const WAKE_STORAGE_KEY = "gigi-wake-enabled";
 
 // Loose, case-insensitive match — Chrome's STT has been observed mishearing
 // "Gigi" as "Jiji" in real testing, so this covers known variants rather
-// than requiring an exact "hey gigi".
-const WAKE_PATTERNS = ["hey gigi", "hey jiji", "hey g g", "hey g", "a gigi", "ok gigi", "okay gigi", "hey giggy"];
+// than requiring an exact "hey gigi". Longest-first so a more specific
+// phrase (e.g. "hey giggy") is preferred over a shorter one that happens
+// to be its prefix (e.g. "hey g") when both could match.
+const WAKE_PATTERNS = ["hey gigi", "hey jiji", "hey giggy", "okay gigi", "ok gigi", "hey g g", "a gigi", "hey g"]
+  .sort((a, b) => b.length - a.length);
 
-function matchWakeWord(lowerTranscript: string): { matched: boolean; endIndex: number } {
-  for (const pattern of WAKE_PATTERNS) {
-    const idx = lowerTranscript.indexOf(pattern);
-    if (idx !== -1) return { matched: true, endIndex: idx + pattern.length };
+// Built once: each pattern's words joined by a separator that tolerates
+// whatever punctuation/whitespace Chrome inserts between them (it commonly
+// revises "hey gigi" into "Hey, Gigi." between interim and final results —
+// a plain indexOf() for the literal phrase misses that entirely, which is
+// the confirmed cause of "hey gigi" sometimes never being detected at
+// all), plus trailing punctuation right after the phrase so it doesn't
+// leak into the extracted command remainder.
+const WAKE_REGEXES = WAKE_PATTERNS.map((pattern) => {
+  const words = pattern.split(" ").map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp(words.join("[,\\s]+") + "[,.!?]*", "i");
+});
+
+// Matches against the ORIGINAL (not lowercased) transcript — the "i" flag
+// handles case-insensitivity — so the returned endIndex stays valid for
+// slicing the real, original-casing remainder straight out of transcriptRaw.
+function matchWakeWord(transcriptRaw: string): { matched: boolean; endIndex: number } {
+  for (const regex of WAKE_REGEXES) {
+    const m = transcriptRaw.match(regex);
+    if (m && m.index !== undefined) {
+      return { matched: true, endIndex: m.index + m[0].length };
+    }
   }
   return { matched: false, endIndex: -1 };
 }
@@ -358,12 +378,11 @@ export function GigiWidget() {
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const result = e.results[i];
         const transcriptRaw: string = result[0].transcript ?? "";
-        const lower = transcriptRaw.toLowerCase();
 
         console.log("[gigi:voice] onresult — mode:", modeRef.current, "i:", i, "isFinal:", result.isFinal, "transcript:", JSON.stringify(transcriptRaw));
 
         if (modeRef.current === "wake") {
-          const { matched, endIndex } = matchWakeWord(lower);
+          const { matched, endIndex } = matchWakeWord(transcriptRaw);
           if (!matched) continue;
 
           console.log("[gigi:voice] WAKE WORD MATCHED — endIndex:", endIndex, "switching to active mode");
