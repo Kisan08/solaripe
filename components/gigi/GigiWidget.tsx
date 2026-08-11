@@ -432,31 +432,23 @@ export function GigiWidget() {
       if (keepListeningRef.current) {
         // A short cooldown before restarting — calling start() immediately
         // inside onend is a known trigger for Chrome to immediately
-        // re-error instead of actually listening again. This is what lets
-        // the wake-listening session survive Chrome's periodic auto-stops
-        // indefinitely without the user noticing a gap.
+        // re-error instead of actually listening again.
         window.setTimeout(() => {
           if (!isCurrent() || !keepListeningRef.current) return;
-          // The restarted session's result indices reset to 0 — any
-          // wake-boundary index/generation tracked from BEFORE this
-          // restart is no longer valid. This is the concrete fix for
-          // "hey gigi" (or a mangled fragment of it) getting sent as the
-          // command: without this reset, a stale wakeResultIndexRef could
-          // coincidentally match the new session's own index 0 — the
-          // user's real command — and get wrongly sliced using the old
-          // wake-word offset.
-          wakeResultIndexRef.current = -1;
-          wakeEndOffsetRef.current = 0;
-          try {
-            recognition.start();
-            sessionGenerationRef.current += 1;
-            console.log("[gigi:voice] restarted after onend, generation:", sessionGenerationRef.current);
-          } catch (err) {
-            console.error("[gigi:voice] recognition.start() threw on restart", err);
-            keepListeningRef.current = false;
-            setListening(false);
-            setMicMode(null);
-          }
+          // Reusing the SAME SpeechRecognition object across many restarts
+          // is known to get Chrome into a permanently-broken state where
+          // every subsequent .start() immediately fires an "aborted" error
+          // forever — exactly what was observed live (generation kept
+          // climbing, 40, 41, 42... with an onerror/onend pair between
+          // every single one, never actually capturing anything again).
+          // Building a brand-new instance per restart avoids that: the old
+          // (possibly wedged) object is abandoned — its isCurrent() guard
+          // means any further stray events from it are ignored — and the
+          // new one gets a clean underlying recognition session.
+          console.log("[gigi:voice] restarting with a FRESH recognition instance, mode:", modeRef.current);
+          const preservedBuffer = commandBufferRef.current;
+          startRecognitionSession(modeRef.current, resumeMode);
+          commandBufferRef.current = preservedBuffer;
         }, 300);
         return;
       }
