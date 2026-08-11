@@ -177,8 +177,14 @@ export function GigiWidget() {
     if (speechPrimedRef.current || !synthesisSupported) return;
     speechPrimedRef.current = true;
     try {
+      // Empty text is inherently silent on its own — deliberately NOT
+      // setting primer.volume = 0 here. Some WebKit builds don't fully
+      // reset per-utterance volume state between calls, so a muted primer
+      // risks leaving every REAL utterance that follows silently muted
+      // too (speak() still "succeeds" — onstart/onend fire, no error —
+      // it just produces no audible sound, which looks exactly like what
+      // was reported).
       const primer = new SpeechSynthesisUtterance("");
-      primer.volume = 0;
       window.speechSynthesis.speak(primer);
     } catch (err) {
       console.error("[gigi] speech priming failed", err);
@@ -193,6 +199,9 @@ export function GigiWidget() {
     window.speechSynthesis.cancel();
 
     const utterance = new SpeechSynthesisUtterance(text);
+    // Explicit, defensive full volume — some WebKit builds have been
+    // observed not resetting per-utterance volume state between calls.
+    utterance.volume = 1;
     const voices = voicesRef.current.length > 0 ? voicesRef.current : window.speechSynthesis.getVoices();
     const preferred = voices.find((v) => /en-IN|hi-IN/i.test(v.lang));
     if (preferred) utterance.voice = preferred;
@@ -304,14 +313,21 @@ export function GigiWidget() {
     wakeEndOffsetRef.current = 0;
     if (initialMode === "active") activeModeEnteredAtRef.current = Date.now();
 
-    function finishCommand() {
+    // clearOnReject: whether a rejected (too-short/filler) attempt should
+    // wipe commandBufferRef. Safe (and necessary) for the wake-boundary
+    // branches below, since they always OVERWRITE commandBufferRef fresh
+    // from the raw transcript slice next time regardless — clearing loses
+    // nothing there. NOT safe for genuine multi-chunk accumulation (a
+    // later, separate result index that APPENDS onto commandBufferRef):
+    // clearing there would have silently glued a stale rejected fragment
+    // (e.g. "i.") onto the front of the real command that arrives next,
+    // producing "i. Can you add a lead?" instead of the clean command.
+    function finishCommand(clearOnReject: boolean) {
       const text = commandBufferRef.current.trim();
       const elapsed = Date.now() - activeModeEnteredAtRef.current;
       if (!isViableCommand(text, elapsed)) {
-        // Too short / a filler word / arrived within the post-wake-word
-        // settle window — likely a spurious fragment, not the real
-        // command. Don't stop or send; just keep listening for more.
         console.log("[gigi] ignoring low-confidence transcript:", JSON.stringify(text));
+        if (clearOnReject) commandBufferRef.current = "";
         return;
       }
       commandBufferRef.current = "";
@@ -340,7 +356,7 @@ export function GigiWidget() {
           const remainder = transcriptRaw.slice(endIndex).trim();
           commandBufferRef.current = remainder;
           if (result.isFinal && remainder) {
-            finishCommand();
+            finishCommand(true);
             return;
           }
           continue;
@@ -354,7 +370,7 @@ export function GigiWidget() {
           // sent to /api/gigi.
           const remainder = transcriptRaw.slice(wakeEndOffsetRef.current).trim();
           commandBufferRef.current = remainder;
-          if (result.isFinal && remainder) finishCommand();
+          if (result.isFinal && remainder) finishCommand(true);
           continue;
         }
 
@@ -362,7 +378,7 @@ export function GigiWidget() {
           const chunk = transcriptRaw.trim();
           if (chunk) {
             commandBufferRef.current = (commandBufferRef.current ? commandBufferRef.current + " " : "") + chunk;
-            finishCommand();
+            finishCommand(false);
             return;
           }
         }
