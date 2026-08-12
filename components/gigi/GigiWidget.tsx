@@ -100,15 +100,7 @@ function isViableCommand(text: string, msSinceActiveModeStarted: number): boolea
 }
 
 type MicMode = "active" | "wake";
-type VoiceState = "off" | "wake" | "active" | "followup" | "thinking" | "speaking";
-// What to do once a voice-originated reply has been shown/spoken: enter a
-// short "follow-up window" (Alexa/Google-Assistant style) of active
-// listening so the user can speak a new command without repeating "hey
-// gigi" — falling back to background wake-listening (or fully off, if
-// wake isn't enabled) if nothing is said in time. null = don't auto-resume
-// (typed messages).
-type ResumeAfterReply = "followup" | null;
-const FOLLOWUP_WINDOW_MS = 9000;
+type VoiceState = "off" | "wake" | "active" | "thinking" | "speaking";
 
 export function GigiWidget() {
   const [open, setOpen] = useState(false);
@@ -123,9 +115,6 @@ export function GigiWidget() {
   const [synthesisSupported, setSynthesisSupported] = useState(false);
   const [wakeEnabled, setWakeEnabled] = useState(false);
   const [voiceOutputFailed, setVoiceOutputFailed] = useState(false);
-  // Distinct from plain "active" — true while in the post-reply follow-up
-  // window (see startFollowUpWindow), drives the "Still listening…" state.
-  const [inFollowUp, setInFollowUp] = useState(false);
 
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   // Whether recognition SHOULD keep running — checked in onend to decide
@@ -179,7 +168,6 @@ export function GigiWidget() {
   // once one real utterance has gone through inside a gesture handler.
   // This one-time "priming" utterance (empty text, silent) unlocks that.
   const speechPrimedRef = useRef(false);
-  const followUpTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -201,12 +189,11 @@ export function GigiWidget() {
     if (stored === "1" && getSpeechRecognitionCtor()) {
       setWakeEnabled(true);
       wakeEnabledRef.current = true;
-      startRecognitionSession("wake", "followup");
+      startRecognitionSession("wake", "wake");
     }
 
     return () => {
       keepListeningRef.current = false;
-      clearFollowUpTimer();
       recognitionRef.current?.abort();
       if (hasSynthesis) {
         window.speechSynthesis.cancel();
@@ -237,59 +224,10 @@ export function GigiWidget() {
     }
   }
 
-  function clearFollowUpTimer() {
-    if (followUpTimeoutRef.current !== null) {
-      window.clearTimeout(followUpTimeoutRef.current);
-      followUpTimeoutRef.current = null;
-    }
-  }
-
-  // Leaving the follow-up window for any reason other than its own timeout
-  // (a real command got captured, or the user manually stopped/disabled
-  // voice) — cancels the pending fallback-to-wake timer and drops the
-  // "Still listening…" UI state.
-  function exitFollowUp() {
-    clearFollowUpTimer();
-    setInFollowUp(false);
-  }
-
-  // Alexa/Google-Assistant-style follow-up: right after a voice-originated
-  // reply, listen actively (no wake word needed) for FOLLOWUP_WINDOW_MS —
-  // if the user speaks a new command in that window it's captured
-  // normally; if not, fall back to background wake-listening (or fully
-  // off, if the wake word isn't enabled).
-  function startFollowUpWindow() {
-    console.log("[gigi:voice] entering follow-up window,", FOLLOWUP_WINDOW_MS, "ms");
-    clearFollowUpTimer();
-    startRecognitionSession("active", "followup");
-    setInFollowUp(true);
-    followUpTimeoutRef.current = window.setTimeout(() => {
-      console.log("[gigi:voice] follow-up window expired — no command captured, falling back");
-      followUpTimeoutRef.current = null;
-      setInFollowUp(false);
-      keepListeningRef.current = false;
-      recognitionRef.current?.stop();
-      if (wakeEnabledRef.current) {
-        startRecognitionSession("wake", "followup");
-      }
-    }, FOLLOWUP_WINDOW_MS);
-  }
-
   function speak(text: string, onDone?: () => void) {
-    console.log("[gigi:tts] speak() called — text:", JSON.stringify(text), "speakEnabled:", speakEnabled, "synthesisSupported:", synthesisSupported);
     if (!speakEnabled || !synthesisSupported) {
-      console.log("[gigi:tts] skipping speak — speakEnabled or synthesisSupported is false");
       onDone?.();
       return;
-    }
-
-    // Defensive: an earlier interrupted/overlapping call can sometimes
-    // leave the synthesis queue PAUSED rather than idle, which silently
-    // blocks every speak() call after it — no error fires, speak() just
-    // queues and never plays.
-    if (window.speechSynthesis.paused) {
-      console.log("[gigi:tts] speechSynthesis.paused was true — calling resume()");
-      window.speechSynthesis.resume();
     }
     window.speechSynthesis.cancel();
 
@@ -297,48 +235,42 @@ export function GigiWidget() {
     // Explicit, defensive full volume — some WebKit builds have been
     // observed not resetting per-utterance volume state between calls.
     utterance.volume = 1;
-
-    // Always prefer a FRESH getVoices() call over the cached ref — a voice
-    // object captured early (e.g. right as the first 'voiceschanged' fired)
-    // can go stale/invalid on some browsers, and assigning a stale voice
-    // to utterance.voice fails silently (no error, just no sound). The ref
-    // is only a fallback for the rare case a live call unexpectedly
-    // returns nothing.
-    const freshVoices = window.speechSynthesis.getVoices();
-    const voices = freshVoices.length > 0 ? freshVoices : voicesRef.current;
+    const voices = voicesRef.current.length > 0 ? voicesRef.current : window.speechSynthesis.getVoices();
     const preferred = voices.find((v) => /en-IN|hi-IN/i.test(v.lang));
     if (preferred) utterance.voice = preferred;
-    console.log("[gigi:tts] voices available:", voices.length, "chosen:", preferred ? `${preferred.name} (${preferred.lang})` : "default/system voice");
 
     utterance.onstart = () => {
-      console.log("[gigi:tts] onstart — audio should be playing now");
+      console.log("[gigi] speech started");
       setSpeaking(true);
       setVoiceOutputFailed(false);
     };
     utterance.onend = () => {
-      console.log("[gigi:tts] onend — utterance finished normally");
+      console.log("[gigi] speech ended");
       setSpeaking(false);
       onDone?.();
     };
     utterance.onerror = (e: SpeechSynthesisErrorEvent) => {
-      console.error("[gigi:tts] onerror —", e.error, e);
+      console.error("[gigi] speech error", e.error);
       setSpeaking(false);
       setVoiceOutputFailed(true);
       onDone?.();
     };
 
     try {
-      console.log("[gigi:tts] calling window.speechSynthesis.speak()");
       window.speechSynthesis.speak(utterance);
-      console.log("[gigi:tts] speak() returned without throwing — speaking:", window.speechSynthesis.speaking, "pending:", window.speechSynthesis.pending);
     } catch (err) {
-      console.error("[gigi:tts] speechSynthesis.speak() THREW synchronously:", err);
+      console.error("[gigi] speechSynthesis.speak threw", err);
       setVoiceOutputFailed(true);
       onDone?.();
     }
   }
 
-  async function send(overrideText?: string, resumeAfterReply: ResumeAfterReply = null) {
+  // resumeMode: what to automatically start listening for again once the
+  // reply has been spoken — "active" keeps a hands-free back-and-forth
+  // going (manual mic-button flow), "wake" drops back to quiet
+  // background wake-word listening (wake-word-triggered flow), null means
+  // don't auto-resume (typed messages).
+  async function send(overrideText?: string, resumeMode: MicMode | null = null) {
     const text = (overrideText ?? input).trim();
     if (!text || busy) return;
 
@@ -349,8 +281,9 @@ export function GigiWidget() {
     setBusy(true);
 
     const resumeIfNeeded = () => {
-      console.log("[gigi:voice] resumeIfNeeded — resumeAfterReply:", resumeAfterReply);
-      if (resumeAfterReply === "followup") startFollowUpWindow();
+      console.log("[gigi:voice] resumeIfNeeded — resumeMode:", resumeMode, "wakeEnabled:", wakeEnabledRef.current);
+      if (resumeMode === "active") startRecognitionSession("active", "active");
+      else if (resumeMode === "wake" && wakeEnabledRef.current) startRecognitionSession("wake", "wake");
     };
 
     try {
@@ -387,10 +320,10 @@ export function GigiWidget() {
   // recognition session. `initialMode` is "active" for the plain mic
   // button (capture a command right away) or "wake" for background
   // wake-word listening (watch for "hey gigi" before capturing anything).
-  // `resumeAfterReply` is what to do once a command captured by THIS
-  // session gets a reply — see send()'s resumeIfNeeded / startFollowUpWindow.
-  function startRecognitionSession(initialMode: MicMode, resumeAfterReply: ResumeAfterReply) {
-    console.log("[gigi:voice] startRecognitionSession — initialMode:", initialMode, "resumeAfterReply:", resumeAfterReply);
+  // `resumeMode` is what to restart into after a captured command's reply
+  // has been handled — see send()'s resumeIfNeeded.
+  function startRecognitionSession(initialMode: MicMode, resumeMode: MicMode | null) {
+    console.log("[gigi:voice] startRecognitionSession — initialMode:", initialMode, "resumeMode:", resumeMode);
     const Ctor = getSpeechRecognitionCtor();
     if (!Ctor) return;
 
@@ -433,11 +366,10 @@ export function GigiWidget() {
         return;
       }
       console.log("[gigi:voice] ACCEPTED command, sending:", JSON.stringify(text));
-      exitFollowUp();
       commandBufferRef.current = "";
       keepListeningRef.current = false;
       recognition.stop();
-      send(text, resumeAfterReply);
+      send(text, resumeMode);
     }
 
     recognition.onresult = (e: any) => {
@@ -534,7 +466,7 @@ export function GigiWidget() {
           // new one gets a clean underlying recognition session.
           console.log("[gigi:voice] restarting with a FRESH recognition instance, mode:", modeRef.current);
           const preservedBuffer = commandBufferRef.current;
-          startRecognitionSession(modeRef.current, resumeAfterReply);
+          startRecognitionSession(modeRef.current, resumeMode);
           commandBufferRef.current = preservedBuffer;
         }, 300);
         return;
@@ -566,7 +498,6 @@ export function GigiWidget() {
     setSpeaking(false);
 
     if (listening && micMode === "active") {
-      exitFollowUp();
       keepListeningRef.current = false;
       recognitionRef.current?.stop();
       return;
@@ -575,7 +506,7 @@ export function GigiWidget() {
     // Also supersedes an idle background wake-listening session, if one is
     // running — the isCurrent() guard means its now-stale events are
     // simply ignored.
-    startRecognitionSession("active", "followup");
+    startRecognitionSession("active", "active");
   }
 
   function toggleWake() {
@@ -586,12 +517,8 @@ export function GigiWidget() {
     if (typeof window !== "undefined") window.localStorage.setItem(WAKE_STORAGE_KEY, next ? "1" : "0");
 
     if (next) {
-      if (!listening) startRecognitionSession("wake", "followup");
+      if (!listening) startRecognitionSession("wake", "wake");
     } else if (listening && micMode === "wake") {
-      // Only cuts off idle background wake-listening — an in-progress
-      // follow-up window (micMode "active") is left alone; the follow-up's
-      // own timeout already checks wakeEnabledRef before falling back to
-      // wake mode, so disabling here just means that fallback won't happen.
       keepListeningRef.current = false;
       recognitionRef.current?.stop();
     }
@@ -601,8 +528,6 @@ export function GigiWidget() {
     ? "thinking"
     : speaking
     ? "speaking"
-    : listening && micMode === "active" && inFollowUp
-    ? "followup"
     : listening && micMode === "active"
     ? "active"
     : listening && micMode === "wake"
@@ -613,7 +538,6 @@ export function GigiWidget() {
     off: "Voice off",
     wake: 'Listening for "Hey Gigi"',
     active: "Listening…",
-    followup: "Still listening…",
     thinking: "Thinking…",
     speaking: "Speaking…",
   };
@@ -621,7 +545,6 @@ export function GigiWidget() {
     off: "bg-muted-foreground/40",
     wake: "bg-blue-500 animate-pulse",
     active: "bg-red-500 animate-pulse",
-    followup: "bg-orange-500 animate-pulse",
     thinking: "bg-amber-500 animate-pulse",
     speaking: "bg-emerald-500 animate-pulse",
   };
@@ -680,9 +603,8 @@ export function GigiWidget() {
                   // Closing the panel does NOT turn off wake-listening —
                   // that's a background feature independent of the panel
                   // being open. Only an active (post-wake-word) capture or
-                  // a manual mic/follow-up session gets cut off here.
+                  // a manual mic session gets cut off here.
                   if (micMode === "active") {
-                    exitFollowUp();
                     keepListeningRef.current = false;
                     recognitionRef.current?.stop();
                   }
@@ -730,16 +652,16 @@ export function GigiWidget() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && send()}
-              placeholder={voiceState === "active" || voiceState === "followup" ? "Listening…" : "Message Gigi…"}
+              placeholder={voiceState === "active" ? "Listening…" : "Message Gigi…"}
               className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
             />
             {voiceSupported && (
               <button
                 onClick={toggleMic}
-                title={voiceState === "active" || voiceState === "followup" ? "Stop listening" : "Speak a command"}
+                title={voiceState === "active" ? "Stop listening" : "Speak a command"}
                 className={cn(
                   "flex size-9 shrink-0 items-center justify-center rounded-lg border",
-                  voiceState === "active" || voiceState === "followup"
+                  voiceState === "active"
                     ? "animate-pulse border-red-300 bg-red-50 text-red-600"
                     : "border-border bg-background text-foreground hover:bg-secondary",
                 )}
