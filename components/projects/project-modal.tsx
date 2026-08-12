@@ -116,14 +116,16 @@ export function ProjectModal({
         const dupRes = await fetch("/api/check-phone", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ phone: form.phone, excludeTable: "projects" }),
+          body: JSON.stringify({ phone: form.phone, currentTable: "projects" }),
         })
         const { matches } = await dupRes.json().catch(() => ({ matches: [] }))
         if (matches?.length > 0) {
           const m = matches[0]
           const when = m.created_at ? new Date(m.created_at).toLocaleDateString("en-IN") : "unknown date"
           const proceed = window.confirm(
-            `This number already exists as a ${m.label}: ${m.name} — created ${when}. Continue creating this project anyway?`
+            // m.label already reads naturally as "a Project" (cross-table)
+            // or "another Project" (same-table) — see describeDuplicateMatch().
+            `This number already exists as ${m.label}: ${m.name} — created ${when}. Continue creating this project anyway?`
           )
           if (!proceed) { setSaving(false); return }
         }

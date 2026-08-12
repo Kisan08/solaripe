@@ -10,7 +10,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { GigiTool } from "./groq";
 import { cleanPhone } from "@/lib/phone";
-import { findDuplicatePhone, TABLE_LABELS } from "@/lib/duplicateCheck";
+import { findDuplicatePhone, describeDuplicateMatch, type DuplicatePhoneMatch } from "@/lib/duplicateCheck";
 import { LEAD_STAGES, CALL_STATUSES } from "@/lib/types";
 import { sendWhatsAppTo } from "@/lib/whatsappNotify";
 
@@ -284,10 +284,13 @@ export interface ToolResult {
 }
 
 // Builds the "heads up, this number already exists elsewhere" sentence
-// Gigi should hand back instead of inserting, shared by add_lead/create_project.
-function duplicateWarning(action: string, phone: string, match: { table: string; name: string }): string {
-  const label = TABLE_LABELS[match.table as keyof typeof TABLE_LABELS];
-  return `Heads up — ${phone} is already registered as a ${label} under the name ${match.name}. I did NOT ${action} yet. Want me to go ahead and add it anyway?`;
+// Gigi should hand back instead of inserting, shared by add_lead/
+// add_calling_client/create_project. describeDuplicateMatch() already
+// phrases same-table matches as "another Lead" vs cross-table ones as
+// "a Lead"/"an AI Calling client" — findDuplicatePhone now searches (and
+// can match) the same table being inserted into too, not just the others.
+function duplicateWarning(action: string, phone: string, match: DuplicatePhoneMatch): string {
+  return `Heads up — ${phone} is already registered as ${describeDuplicateMatch(match)} under the name ${match.name}. I did NOT ${action} yet. Want me to go ahead and add it anyway?`;
 }
 
 interface MatchRow {

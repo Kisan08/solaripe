@@ -189,14 +189,16 @@ export default function CRMPage() {
     try {
       const dupRes = await fetch("/api/check-phone", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: addPhone, excludeTable: "clients" }),
+        body: JSON.stringify({ phone: addPhone, currentTable: "clients" }),
       });
       const { matches } = await dupRes.json().catch(() => ({ matches: [] }));
       if (matches?.length > 0) {
         const m = matches[0];
         const when = m.created_at ? new Date(m.created_at).toLocaleDateString("en-IN") : "unknown date";
+        // m.label already reads naturally as "an AI Calling client"
+        // (cross-table) or "another AI Calling client" (same-table).
         const proceed = window.confirm(
-          `This number already exists as a ${m.label}: ${m.name} — created ${when}. Continue adding it as a client anyway?`
+          `This number already exists as ${m.label}: ${m.name} — created ${when}. Continue adding it as a client anyway?`
         );
         if (!proceed) { setAdding(false); return; }
       }
