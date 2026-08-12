@@ -18,6 +18,24 @@ export type LeadSource =
 export type ProjectType = "EPC" | "OPEX" | "AMC" | "PPA"
 export type ProjectStatus = "In Progress" | "Completed" | "On Hold"
 
+// The AI Calling dial list's call-outcome status (the `clients` table's
+// `status` column — separate from the sales-pipeline `leads.stage` above).
+// Single shared source for this list — previously duplicated between
+// app/crm/page.tsx's own type and a hardcoded array in lib/gigi/tools.ts,
+// which could silently drift apart.
+export type CallStatus =
+  | "pending"
+  | "calling"
+  | "interested"
+  | "not_interested"
+  | "call_back"
+  | "no_answer"
+  | "failed"
+
+export const CALL_STATUSES: CallStatus[] = [
+  "pending", "calling", "interested", "not_interested", "call_back", "no_answer", "failed",
+]
+
 export interface Lead {
   id: string
   name: string

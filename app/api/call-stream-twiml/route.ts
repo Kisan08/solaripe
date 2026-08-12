@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 
+// ⏸ PAUSED (not abandoned): blocked on ElevenLabs paid-plan access to the
+// library-voice API this pipeline needs for TTS. Intentionally left intact
+// and untouched so work can resume the moment that's unblocked — a
+// deliberate hold, not orphaned code.
+//
 // Standalone POC for a real-time streaming voice pipeline (Deepgram STT +
 // Groq LLM + ElevenLabs TTS over a Twilio Media Stream) — completely
 // separate from the production Gather/Say flow in call-twiml/route.ts and

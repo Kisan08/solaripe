@@ -4,6 +4,7 @@ import { useEffect, useState } from "react"
 import { Trash2, Loader2 } from "lucide-react"
 import { Modal } from "@/components/ui/modal"
 import { Field, Input, Select, Textarea } from "@/components/ui/field"
+import { cleanPhone } from "@/lib/phone"
 import {
   LEAD_SOURCES,
   LEAD_STAGES,
@@ -11,6 +12,17 @@ import {
   type LeadSource,
   type LeadStage,
 } from "@/lib/types"
+
+// Same normalization as components/projects/project-modal.tsx — attempts
+// the canonical 10-digit form so cross-table duplicate-phone lookups (an
+// exact string match) can find this record later; falls back to the raw
+// typed value rather than dropping real user input that doesn't look like
+// a standard Indian mobile number.
+function normalizePhoneForStorage(raw: string): string | null {
+  const trimmed = raw.trim()
+  if (!trimmed) return null
+  return cleanPhone(trimmed) ?? trimmed
+}
 
 type FormState = {
   name: string
@@ -104,7 +116,7 @@ export function LeadModal({
       await onSave({
         ...(lead ? { id: lead.id } : {}),
         name: form.name.trim(),
-        phone: form.phone || null,
+        phone: normalizePhoneForStorage(form.phone),
         email: form.email || null,
         address: form.address || null,
         system_size: form.system_size ? Number(form.system_size) : null,

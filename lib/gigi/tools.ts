@@ -11,7 +11,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { GigiTool } from "./groq";
 import { cleanPhone } from "@/lib/phone";
 import { findDuplicatePhone, TABLE_LABELS } from "@/lib/duplicateCheck";
-import { LEAD_STAGES } from "@/lib/types";
+import { LEAD_STAGES, CALL_STATUSES } from "@/lib/types";
 import { sendWhatsAppTo } from "@/lib/whatsappNotify";
 
 export const GIGI_TOOLS: GigiTool[] = [
@@ -139,7 +139,7 @@ export const GIGI_TOOLS: GigiTool[] = [
           identifier: { type: "string", description: "The contact's name or phone number." },
           new_status: {
             type: "string",
-            enum: ["pending", "calling", "interested", "not_interested", "call_back", "no_answer", "failed"],
+            enum: [...CALL_STATUSES],
             description: "The call-outcome status to set.",
           },
           response: { type: "string", description: "An optional free-text note about their response, if mentioned." },
@@ -447,7 +447,11 @@ async function execCreateProject(
     .from("projects")
     .insert({
       client_name,
-      phone: args.phone?.trim() || null,
+      // Store the normalized 10-digit form when it parsed cleanly (same
+      // rule the manual project/lead forms now use) — falling back to the
+      // raw typed value rather than dropping it, since `phone` is null for
+      // anything that doesn't look like a standard Indian mobile number.
+      phone: phone || args.phone?.trim() || null,
       address: args.address?.trim() || null,
       system_size: typeof args.system_size === "number" ? args.system_size : null,
       project_type: args.project_type ?? "EPC",
@@ -494,12 +498,11 @@ async function execUpdateClientStatus(
 ): Promise<ToolResult> {
   const identifier = args.identifier?.trim();
   const newStatus = args.new_status?.trim();
-  const validStatuses = ["pending", "calling", "interested", "not_interested", "call_back", "no_answer", "failed"];
   if (!identifier || !newStatus) {
     return { ok: false, summary: "Missing identifier or new status — could not update the calling client." };
   }
-  if (!validStatuses.includes(newStatus)) {
-    return { ok: false, summary: `"${newStatus}" isn't a valid status. Valid statuses: ${validStatuses.join(", ")}.` };
+  if (!(CALL_STATUSES as readonly string[]).includes(newStatus)) {
+    return { ok: false, summary: `"${newStatus}" isn't a valid status. Valid statuses: ${CALL_STATUSES.join(", ")}.` };
   }
 
   const matches = await findMatches(supabase, "clients", identifier);
@@ -729,7 +732,7 @@ async function execGenerateQuote(
     .single();
 
   if (clientError || !clientRow) {
-    return { ok: false, summary: "Could not find that client." };
+    return notFoundResult("client", args.clientId);
   }
 
   // A CRM client isn't necessarily a project yet — if one exists for the

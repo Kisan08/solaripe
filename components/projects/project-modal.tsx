@@ -4,6 +4,7 @@ import { useEffect, useState } from "react"
 import { Trash2, Loader2 } from "lucide-react"
 import { Modal } from "@/components/ui/modal"
 import { Field, Input, Select, Textarea } from "@/components/ui/field"
+import { cleanPhone } from "@/lib/phone"
 import {
   PROJECT_STATUSES,
   PROJECT_TYPES,
@@ -11,6 +12,18 @@ import {
   type ProjectStatus,
   type ProjectType,
 } from "@/lib/types"
+
+// Attempts to normalize to the canonical 10-digit form (same rule Gigi's
+// tools and the manual "+ Add Client" route already use) so future
+// cross-table duplicate-phone lookups — which do an exact string match —
+// can actually find this record. Falls back to the raw typed value rather
+// than silently dropping it if it doesn't look like a standard Indian
+// mobile number (e.g. a landline), so real user input is never lost.
+function normalizePhoneForStorage(raw: string): string | null {
+  const trimmed = raw.trim()
+  if (!trimmed) return null
+  return cleanPhone(trimmed) ?? trimmed
+}
 
 type FormState = {
   client_name: string
@@ -97,10 +110,29 @@ export function ProjectModal({
     if (!form.client_name.trim()) return
     setSaving(true)
     try {
+      // Only for new projects — editing an existing one shouldn't re-warn
+      // about a phone number it already had.
+      if (!project && form.phone.trim()) {
+        const dupRes = await fetch("/api/check-phone", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ phone: form.phone, excludeTable: "projects" }),
+        })
+        const { matches } = await dupRes.json().catch(() => ({ matches: [] }))
+        if (matches?.length > 0) {
+          const m = matches[0]
+          const when = m.created_at ? new Date(m.created_at).toLocaleDateString("en-IN") : "unknown date"
+          const proceed = window.confirm(
+            `This number already exists as a ${m.label}: ${m.name} — created ${when}. Continue creating this project anyway?`
+          )
+          if (!proceed) { setSaving(false); return }
+        }
+      }
+
       await onSave({
         ...(project ? { id: project.id } : {}),
         client_name: form.client_name.trim(),
-        phone: form.phone || null,
+        phone: normalizePhoneForStorage(form.phone),
         address: form.address || null,
         system_size: form.system_size ? Number(form.system_size) : null,
         project_type: form.project_type,

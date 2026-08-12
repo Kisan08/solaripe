@@ -281,16 +281,12 @@ export function GigiWidget() {
     setBusy(true);
 
     const resumeIfNeeded = () => {
-      console.log("[gigi:voice] resumeIfNeeded — resumeMode:", resumeMode, "wakeEnabled:", wakeEnabledRef.current);
       if (resumeMode === "active") startRecognitionSession("active", "active");
       else if (resumeMode === "wake" && wakeEnabledRef.current) startRecognitionSession("wake", "wake");
     };
 
     try {
       const outgoingHistory = next.map((m) => ({ role: m.role, content: m.content }));
-      // TEMPORARY diagnostic for the wake-word history bug — remove once
-      // confirmed fixed in the browser console.
-      console.log("[gigi] outgoing conversationHistory length:", outgoingHistory.length);
       const res = await fetch("/api/gigi", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -323,7 +319,6 @@ export function GigiWidget() {
   // `resumeMode` is what to restart into after a captured command's reply
   // has been handled — see send()'s resumeIfNeeded.
   function startRecognitionSession(initialMode: MicMode, resumeMode: MicMode | null) {
-    console.log("[gigi:voice] startRecognitionSession — initialMode:", initialMode, "resumeMode:", resumeMode);
     const Ctor = getSpeechRecognitionCtor();
     if (!Ctor) return;
 
@@ -361,11 +356,9 @@ export function GigiWidget() {
       const text = commandBufferRef.current.trim();
       const elapsed = Date.now() - activeModeEnteredAtRef.current;
       if (!isViableCommand(text, elapsed)) {
-        console.log("[gigi:voice] REJECTED low-confidence transcript:", JSON.stringify(text), "elapsedMs:", elapsed, "clearOnReject:", clearOnReject);
         if (clearOnReject) commandBufferRef.current = "";
         return;
       }
-      console.log("[gigi:voice] ACCEPTED command, sending:", JSON.stringify(text));
       commandBufferRef.current = "";
       keepListeningRef.current = false;
       recognition.stop();
@@ -379,13 +372,10 @@ export function GigiWidget() {
         const result = e.results[i];
         const transcriptRaw: string = result[0].transcript ?? "";
 
-        console.log("[gigi:voice] onresult — mode:", modeRef.current, "i:", i, "isFinal:", result.isFinal, "transcript:", JSON.stringify(transcriptRaw));
-
         if (modeRef.current === "wake") {
           const { matched, endIndex } = matchWakeWord(transcriptRaw);
           if (!matched) continue;
 
-          console.log("[gigi:voice] WAKE WORD MATCHED — endIndex:", endIndex, "switching to active mode");
           modeRef.current = "active";
           setMicMode("active");
           activeModeEnteredAtRef.current = Date.now();
@@ -394,7 +384,6 @@ export function GigiWidget() {
           wakeEndOffsetRef.current = endIndex;
           const remainder = transcriptRaw.slice(endIndex).trim();
           commandBufferRef.current = remainder;
-          console.log("[gigi:voice] remainder after stripping wake phrase:", JSON.stringify(remainder));
           if (result.isFinal && remainder) {
             finishCommand(true);
             return;
@@ -410,7 +399,6 @@ export function GigiWidget() {
           // sent to /api/gigi.
           const remainder = transcriptRaw.slice(wakeEndOffsetRef.current).trim();
           commandBufferRef.current = remainder;
-          console.log("[gigi:voice] re-finalizing wake-boundary result, remainder:", JSON.stringify(remainder));
           if (result.isFinal && remainder) finishCommand(true);
           continue;
         }
@@ -419,7 +407,6 @@ export function GigiWidget() {
           const chunk = transcriptRaw.trim();
           if (chunk) {
             commandBufferRef.current = (commandBufferRef.current ? commandBufferRef.current + " " : "") + chunk;
-            console.log("[gigi:voice] accumulating command chunk, buffer now:", JSON.stringify(commandBufferRef.current));
             finishCommand(false);
             return;
           }
@@ -429,7 +416,6 @@ export function GigiWidget() {
 
     recognition.onerror = (e: any) => {
       if (!isCurrent()) return;
-      console.log("[gigi:voice] onerror —", e.error, "mode:", modeRef.current);
       // "no-speech"/"aborted"/"network" are transient/expected (Chrome
       // fires these routinely on pauses or brief connectivity blips) —
       // let onend's restart logic silently retry. Only a genuinely fatal
@@ -437,6 +423,7 @@ export function GigiWidget() {
       // and surface a message. Background wake-listening stays silent even
       // then, since it's not a user-initiated command attempt.
       if (e.error === "no-speech" || e.error === "aborted" || e.error === "network") return;
+      console.error("[gigi:voice] fatal recognition error —", e.error, "mode:", modeRef.current);
       keepListeningRef.current = false;
       setListening(false);
       setMicMode(null);
@@ -447,7 +434,6 @@ export function GigiWidget() {
 
     recognition.onend = () => {
       if (!isCurrent()) return;
-      console.log("[gigi:voice] onend — keepListening:", keepListeningRef.current, "mode:", modeRef.current);
       if (keepListeningRef.current) {
         // A short cooldown before restarting — calling start() immediately
         // inside onend is a known trigger for Chrome to immediately
@@ -457,14 +443,10 @@ export function GigiWidget() {
           // Reusing the SAME SpeechRecognition object across many restarts
           // is known to get Chrome into a permanently-broken state where
           // every subsequent .start() immediately fires an "aborted" error
-          // forever — exactly what was observed live (generation kept
-          // climbing, 40, 41, 42... with an onerror/onend pair between
-          // every single one, never actually capturing anything again).
-          // Building a brand-new instance per restart avoids that: the old
-          // (possibly wedged) object is abandoned — its isCurrent() guard
-          // means any further stray events from it are ignored — and the
-          // new one gets a clean underlying recognition session.
-          console.log("[gigi:voice] restarting with a FRESH recognition instance, mode:", modeRef.current);
+          // forever. Building a brand-new instance per restart avoids that:
+          // the old (possibly wedged) object is abandoned — its isCurrent()
+          // guard means any further stray events from it are ignored — and
+          // the new one gets a clean underlying recognition session.
           const preservedBuffer = commandBufferRef.current;
           startRecognitionSession(modeRef.current, resumeMode);
           commandBufferRef.current = preservedBuffer;
@@ -481,7 +463,6 @@ export function GigiWidget() {
     try {
       recognition.start();
       sessionGenerationRef.current += 1;
-      console.log("[gigi:voice] session started, generation:", sessionGenerationRef.current);
     } catch (err) {
       console.error("[gigi:voice] recognition.start() threw on initial start", err);
       keepListeningRef.current = false;

@@ -1,14 +1,7 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
-
-type CallStatus =
-  | "pending"
-  | "calling"
-  | "interested"
-  | "not_interested"
-  | "call_back"
-  | "no_answer"
-  | "failed";
+import { CALL_STATUSES, type CallStatus } from "@/lib/types";
+import { cleanPhone } from "@/lib/phone";
 
 type LeadScore = "hot" | "warm" | "cold";
 
@@ -33,9 +26,7 @@ const STATUS_CONFIG: Record<CallStatus, { label: string; color: string; bg: stri
   not_interested: { label: "Not Interested", color: "#991B1B", bg: "#FEE2E2", priority: 7 },
 };
 
-const ALL_STATUSES: CallStatus[] = [
-  "pending","calling","interested","not_interested","call_back","no_answer","failed",
-];
+const ALL_STATUSES: CallStatus[] = CALL_STATUSES;
 
 // Set once, server-side, when a call ends (lib/calling/leadScore.ts) —
 // this table is display-only, no editing here.
@@ -81,10 +72,14 @@ function formatPhone(p: string) {
 }
 
 // Same normalization make-call/route.ts uses server-side for the Twilio
-// `to` field — kept identical here so a manual dial and an AI call always
-// resolve to the same number.
-function telHref(p: string) {
-  return `tel:+91${p.replace(/\D/g, "").slice(-10)}`;
+// `to` field (via the shared cleanPhone) — kept identical here so a manual
+// dial and an AI call always resolve to the same number. Returns null
+// for anything that isn't a genuine 10-digit Indian mobile number (too
+// short, missing, garbled) instead of producing a malformed tel: link —
+// callers must handle the null case rather than rendering a broken link.
+function telHref(p: string): string | null {
+  const cleaned = cleanPhone(p);
+  return cleaned ? `tel:+91${cleaned}` : null;
 }
 
 function exportToCSV(clients: Client[]) {
@@ -339,6 +334,7 @@ export default function CRMPage() {
         @media (min-width: 641px) {
           .crm-mobile-list { display: none !important; }
           .crm-desktop-table { display: block !important; }
+          .crm-mobile-logo { display: none !important; }
         }
       `}</style>
 
@@ -412,7 +408,10 @@ export default function CRMPage() {
           hardcoded blue branding bar with its own "Home" link. Navigation
           now lives entirely in the shared sidebar. */}
       <div style={{ padding: "24px 20px 16px", borderBottom: "1px solid #E2E8F0", background: "#fff" }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, color: "#0F172A", margin: 0 }}>AI Calling</h1>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <img src="/brand/amsu-mark.png" alt="Amsu" className="crm-mobile-logo" style={{ width: 28, height: 28, objectFit: "contain", flexShrink: 0 }} />
+          <h1 style={{ fontSize: 22, fontWeight: 700, color: "#0F172A", margin: 0 }}>AI Calling</h1>
+        </div>
         <p style={{ fontSize: 13, color: "#64748B", margin: "4px 0 0" }}>Import leads and let the AI caller work through your pending list.</p>
       </div>
 
@@ -633,16 +632,31 @@ export default function CRMPage() {
                           {/* Manual dial — plain tel: link, no /api/make-call, no
                               Supabase/Twilio side effects. Purely hands off to
                               the device's own dialer; status only changes if
-                              the user updates it afterward via the existing UI. */}
-                          <a href={telHref(client.phone)} title="Call manually (opens your phone's dialer)"
-                            style={{
-                              display: "inline-flex", alignItems: "center", justifyContent: "center",
-                              backgroundColor: "#F3F4F6", color: "#374151", border: "1px solid #E5E7EB",
-                              borderRadius: 6, padding: "6px 10px", fontSize: 12, fontWeight: 700,
-                              textDecoration: "none", whiteSpace: "nowrap",
-                            }}>
-                            ☎️
-                          </a>
+                              the user updates it afterward via the existing UI.
+                              telHref() returns null for anything shorter than a
+                              real 10-digit number — show a disabled indicator
+                              instead of a broken tel: link in that case. */}
+                          {telHref(client.phone) ? (
+                            <a href={telHref(client.phone)!} title="Call manually (opens your phone's dialer)"
+                              style={{
+                                display: "inline-flex", alignItems: "center", justifyContent: "center",
+                                backgroundColor: "#F3F4F6", color: "#374151", border: "1px solid #E5E7EB",
+                                borderRadius: 6, padding: "6px 10px", fontSize: 12, fontWeight: 700,
+                                textDecoration: "none", whiteSpace: "nowrap",
+                              }}>
+                              ☎️
+                            </a>
+                          ) : (
+                            <span title="No valid phone number"
+                              style={{
+                                display: "inline-flex", alignItems: "center", justifyContent: "center",
+                                backgroundColor: "#F9FAFB", color: "#D1D5DB", border: "1px solid #F3F4F6",
+                                borderRadius: 6, padding: "6px 10px", fontSize: 12, fontWeight: 700,
+                                cursor: "not-allowed", whiteSpace: "nowrap",
+                              }}>
+                              ☎️
+                            </span>
+                          )}
                           {client.status !== "pending" && (
                             <button onClick={() => resetOne(client)} title="Reset to Pending"
                               style={{ backgroundColor: "#F3F4F6", color: "#6B7280", border: "none", borderRadius: 6, padding: "6px 10px", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
@@ -723,16 +737,29 @@ export default function CRMPage() {
                       {client.status === "interested" ? "✅ Done" : callingId === client.id || client.status === "calling" ? "📞 Calling…" : "📞 Call"}
                     </button>
                     {/* Manual dial — plain tel: link, no API call, no
-                        Supabase/Twilio side effects. */}
-                    <a href={telHref(client.phone)} title="Call manually (opens your phone's dialer)"
-                      style={{
-                        display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4,
-                        backgroundColor: "#F3F4F6", color: "#374151", border: "1px solid #E5E7EB",
-                        borderRadius: 7, padding: "9px 14px", fontSize: 13, fontWeight: 700,
-                        textDecoration: "none", whiteSpace: "nowrap",
-                      }}>
-                      ☎️ Manual
-                    </a>
+                        Supabase/Twilio side effects. telHref() returns null
+                        for anything shorter than a real 10-digit number. */}
+                    {telHref(client.phone) ? (
+                      <a href={telHref(client.phone)!} title="Call manually (opens your phone's dialer)"
+                        style={{
+                          display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4,
+                          backgroundColor: "#F3F4F6", color: "#374151", border: "1px solid #E5E7EB",
+                          borderRadius: 7, padding: "9px 14px", fontSize: 13, fontWeight: 700,
+                          textDecoration: "none", whiteSpace: "nowrap",
+                        }}>
+                        ☎️ Manual
+                      </a>
+                    ) : (
+                      <span title="No valid phone number"
+                        style={{
+                          display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4,
+                          backgroundColor: "#F9FAFB", color: "#D1D5DB", border: "1px solid #F3F4F6",
+                          borderRadius: 7, padding: "9px 14px", fontSize: 13, fontWeight: 700,
+                          cursor: "not-allowed", whiteSpace: "nowrap",
+                        }}>
+                        ☎️ No number
+                      </span>
+                    )}
                     {client.status !== "pending" && (
                       <button onClick={() => resetOne(client)}
                         style={{ backgroundColor: "#F3F4F6", color: "#6B7280", border: "none", borderRadius: 7, padding: "9px 14px", fontSize: 16, fontWeight: 700, cursor: "pointer" }}>

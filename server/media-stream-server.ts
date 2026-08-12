@@ -1,3 +1,10 @@
+// ⏸ PAUSED (not abandoned): blocked on ElevenLabs paid-plan access to the
+// library-voice API this pipeline needs for TTS. Intentionally left intact,
+// wired, and untouched so work can resume the moment that's unblocked —
+// this is a deliberate hold, not orphaned/forgotten code. If you're a
+// future session picking this up: nothing here is broken, it's just
+// waiting on that external dependency.
+//
 // Standalone POC: real-time streaming voice pipeline (Twilio Media Stream
 // -> Deepgram STT -> Groq LLM -> ElevenLabs TTS -> back to Twilio).
 //

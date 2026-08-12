@@ -1,12 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { cleanPhone } from "@/lib/phone";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function cleanPhone(raw: string): string | null {
-  const digits = String(raw).replace(/\D/g, "").slice(-10);
-  return digits.length === 10 && /^[6-9]/.test(digits) ? digits : null;
-}
 
 function cleanName(raw: string): string {
   return String(raw ?? "")
