@@ -115,6 +115,10 @@ export function GigiWidget() {
   const [synthesisSupported, setSynthesisSupported] = useState(false);
   const [wakeEnabled, setWakeEnabled] = useState(false);
   const [voiceOutputFailed, setVoiceOutputFailed] = useState(false);
+  // React-visible mirror of speechPrimedRef — the ref alone can't drive a
+  // re-render, and the "tap to enable voice replies" nudge needs to
+  // disappear the instant priming happens.
+  const [speechPrimed, setSpeechPrimed] = useState(false);
 
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   // Whether recognition SHOULD keep running — checked in onend to decide
@@ -168,6 +172,12 @@ export function GigiWidget() {
   // once one real utterance has gone through inside a gesture handler.
   // This one-time "priming" utterance (empty text, silent) unlocks that.
   const speechPrimedRef = useRef(false);
+  // Guards a speak() call made before any user gesture this session (e.g.
+  // a reply triggered purely by "hey gigi" on a page that auto-started
+  // wake-listening from localStorage on mount) — browsers can silently
+  // swallow such an utterance with no error event at all. If onstart
+  // hasn't fired within this window, treat it as a likely silent failure.
+  const unprimedSpeakTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -209,6 +219,7 @@ export function GigiWidget() {
   function primeSpeechSynthesis() {
     if (speechPrimedRef.current || !synthesisSupported) return;
     speechPrimedRef.current = true;
+    setSpeechPrimed(true);
     try {
       // Empty text is inherently silent on its own — deliberately NOT
       // setting primer.volume = 0 here. Some WebKit builds don't fully
@@ -239,18 +250,28 @@ export function GigiWidget() {
     const preferred = voices.find((v) => /en-IN|hi-IN/i.test(v.lang));
     if (preferred) utterance.voice = preferred;
 
+    const clearUnprimedWatch = () => {
+      if (unprimedSpeakTimeoutRef.current !== null) {
+        window.clearTimeout(unprimedSpeakTimeoutRef.current);
+        unprimedSpeakTimeoutRef.current = null;
+      }
+    };
+
     utterance.onstart = () => {
       console.log("[gigi] speech started");
+      clearUnprimedWatch();
       setSpeaking(true);
       setVoiceOutputFailed(false);
     };
     utterance.onend = () => {
       console.log("[gigi] speech ended");
+      clearUnprimedWatch();
       setSpeaking(false);
       onDone?.();
     };
     utterance.onerror = (e: SpeechSynthesisErrorEvent) => {
       console.error("[gigi] speech error", e.error);
+      clearUnprimedWatch();
       setSpeaking(false);
       setVoiceOutputFailed(true);
       onDone?.();
@@ -258,6 +279,18 @@ export function GigiWidget() {
 
     try {
       window.speechSynthesis.speak(utterance);
+      // No user gesture has happened yet this session (e.g. this reply was
+      // triggered purely by "hey gigi" on an auto-started wake session) —
+      // browsers can drop such an utterance with NO error event at all, so
+      // onerror alone can't catch it. If onstart hasn't fired shortly
+      // after, treat it as a silent failure caused by that missing gesture.
+      if (!speechPrimedRef.current) {
+        unprimedSpeakTimeoutRef.current = window.setTimeout(() => {
+          unprimedSpeakTimeoutRef.current = null;
+          console.error("[gigi] speech never started — likely blocked by missing user gesture");
+          setVoiceOutputFailed(true);
+        }, 1500);
+      }
     } catch (err) {
       console.error("[gigi] speechSynthesis.speak threw", err);
       setVoiceOutputFailed(true);
@@ -575,7 +608,13 @@ export function GigiWidget() {
                 </button>
               )}
               {synthesisSupported && speakEnabled && voiceOutputFailed && (
-                <span title="Voice output isn't working on this device — replies will still show as text.">
+                <span
+                  title={
+                    speechPrimed
+                      ? "Voice output isn't working on this device — replies will still show as text."
+                      : "Tap anywhere in the Gigi panel once to enable voice replies."
+                  }
+                >
                   <AlertTriangle className="size-4 text-amber-500" />
                 </span>
               )}
@@ -660,6 +699,25 @@ export function GigiWidget() {
             </button>
           </div>
         </div>
+      )}
+
+      {/* One-time nudge: wake-listening auto-started from localStorage on
+          mount has no user gesture behind it, so a reply triggered purely
+          by "hey gigi" before any click this session can fail to play with
+          no error at all (a genuine browser autoplay-policy constraint,
+          not something to silently work around). Shown only in that exact
+          window — disappears the moment this, or any other button in the
+          widget, gets clicked (all of them call primeSpeechSynthesis) —
+          and never reappears afterward until a full page reload. */}
+      {synthesisSupported && !speechPrimed && voiceState === "wake" && (
+        <button
+          onClick={primeSpeechSynthesis}
+          className="fixed bottom-36 right-4 z-50 flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-2 text-xs font-medium text-foreground shadow-lg animate-pulse md:bottom-24 md:right-6"
+          title="Voice replies need one tap to enable this session"
+        >
+          <span className="size-1.5 rounded-full bg-blue-500" />
+          Tap to enable voice replies
+        </button>
       )}
 
       <button
