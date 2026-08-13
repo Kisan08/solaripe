@@ -229,7 +229,7 @@ export default function AdminProductsPage() {
                 <label className="block text-xs font-medium text-gray-500 mb-1">Category</label>
                 <select value={form.category}
                   onChange={e => setForm(f => ({ ...f, category: e.target.value as ProductCategory, specs: {} }))}
-                  className="w-full px-3 py-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400 capitalize">
+                  className="w-full px-3 py-2.5 text-base rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400 capitalize">
                   {CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
                 </select>
               </div>
@@ -237,32 +237,32 @@ export default function AdminProductsPage() {
                 <label className="block text-xs font-medium text-gray-500 mb-1">Warranty (years)</label>
                 <input type="number" value={form.warranty_years}
                   onChange={e => setForm(f => ({ ...f, warranty_years: e.target.value }))}
-                  className="w-full px-3 py-2.5 text-sm rounded-xl border border-gray-200 outline-none focus:border-blue-400" />
+                  className="w-full px-3 py-2.5 text-base rounded-xl border border-gray-200 outline-none focus:border-blue-400" />
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">Brand</label>
                 <input type="text" value={form.brand} placeholder="Waaree / Premier"
                   onChange={e => setForm(f => ({ ...f, brand: e.target.value }))}
-                  className="w-full px-3 py-2.5 text-sm rounded-xl border border-gray-200 outline-none focus:border-blue-400" />
+                  className="w-full px-3 py-2.5 text-base rounded-xl border border-gray-200 outline-none focus:border-blue-400" />
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">Model</label>
                 <input type="text" value={form.model} placeholder="TOPCon Bifacial"
                   onChange={e => setForm(f => ({ ...f, model: e.target.value }))}
-                  className="w-full px-3 py-2.5 text-sm rounded-xl border border-gray-200 outline-none focus:border-blue-400" />
+                  className="w-full px-3 py-2.5 text-base rounded-xl border border-gray-200 outline-none focus:border-blue-400" />
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">Wattage / Spec</label>
                 <input type="text" value={form.wattage_or_spec} placeholder="580 Wp"
                   onChange={e => setForm(f => ({ ...f, wattage_or_spec: e.target.value }))}
-                  className="w-full px-3 py-2.5 text-sm rounded-xl border border-gray-200 outline-none focus:border-blue-400" />
+                  className="w-full px-3 py-2.5 text-base rounded-xl border border-gray-200 outline-none focus:border-blue-400" />
               </div>
               {SPEC_FIELDS[form.category].map(({ key, label }) => (
                 <div key={key}>
                   <label className="block text-xs font-medium text-gray-500 mb-1">{label}</label>
                   <input type="text" value={form.specs[key] ?? ''}
                     onChange={e => setForm(f => ({ ...f, specs: { ...f.specs, [key]: e.target.value } }))}
-                    className="w-full px-3 py-2.5 text-sm rounded-xl border border-gray-200 outline-none focus:border-blue-400" />
+                    className="w-full px-3 py-2.5 text-base rounded-xl border border-gray-200 outline-none focus:border-blue-400" />
                 </div>
               ))}
             </div>

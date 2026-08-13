@@ -152,7 +152,7 @@ export default function SettingsPage() {
                       ...v,
                       [key]: type === 'number' ? parseFloat(e.target.value) || 0 : e.target.value
                     }))}
-                    className="w-full px-3 py-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 transition-all"
+                    className="w-full px-3 py-2.5 text-base rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 transition-all"
                   />
                 </div>
               ))}
@@ -269,7 +269,7 @@ export default function SettingsPage() {
                   value={values.tagline}
                   onChange={e => setValues(v => ({ ...v, tagline: e.target.value }))}
                   placeholder="Engineering · Procurement · Construction (EPC) – Solar Division"
-                  className="w-full px-3 py-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 transition-all"
+                  className="w-full px-3 py-2.5 text-base rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 transition-all"
                 />
               </div>
             </div>
@@ -280,7 +280,7 @@ export default function SettingsPage() {
                 value={values.default_terms}
                 onChange={e => setValues(v => ({ ...v, default_terms: e.target.value }))}
                 rows={3}
-                className="w-full px-3 py-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 transition-all resize-none"
+                className="w-full px-3 py-2.5 text-base rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 transition-all resize-none"
               />
             </div>
 
@@ -299,13 +299,13 @@ export default function SettingsPage() {
                   <div key={i} className="grid grid-cols-[1fr_1fr_1fr_auto] gap-2 items-center">
                     <input type="text" placeholder="Item" value={row.item}
                       onChange={e => setValues(v => ({ ...v, default_warranty: v.default_warranty.map((r, j) => j === i ? { ...r, item: e.target.value } : r) }))}
-                      className="px-2.5 py-2 text-xs rounded-lg border border-gray-200 outline-none focus:border-blue-400" />
+                      className="px-2.5 py-2 text-base rounded-lg border border-gray-200 outline-none focus:border-blue-400" />
                     <input type="text" placeholder="Coverage" value={row.coverage}
                       onChange={e => setValues(v => ({ ...v, default_warranty: v.default_warranty.map((r, j) => j === i ? { ...r, coverage: e.target.value } : r) }))}
-                      className="px-2.5 py-2 text-xs rounded-lg border border-gray-200 outline-none focus:border-blue-400" />
+                      className="px-2.5 py-2 text-base rounded-lg border border-gray-200 outline-none focus:border-blue-400" />
                     <input type="text" placeholder="Period" value={row.period}
                       onChange={e => setValues(v => ({ ...v, default_warranty: v.default_warranty.map((r, j) => j === i ? { ...r, period: e.target.value } : r) }))}
-                      className="px-2.5 py-2 text-xs rounded-lg border border-gray-200 outline-none focus:border-blue-400" />
+                      className="px-2.5 py-2 text-base rounded-lg border border-gray-200 outline-none focus:border-blue-400" />
                     <button onClick={() => setValues(v => ({ ...v, default_warranty: v.default_warranty.filter((_, j) => j !== i) }))}
                       className="p-2 text-gray-400 hover:text-red-600">
                       <Trash2 size={14} />
@@ -334,7 +334,7 @@ export default function SettingsPage() {
                       <div key={i} className="flex items-center gap-2">
                         <input type="text" value={item}
                           onChange={e => setValues(v => ({ ...v, default_scope: { ...v.default_scope, [kind]: v.default_scope[kind].map((x, j) => j === i ? e.target.value : x) } }))}
-                          className="flex-1 px-2.5 py-2 text-xs rounded-lg border border-gray-200 outline-none focus:border-blue-400" />
+                          className="flex-1 px-2.5 py-2 text-base rounded-lg border border-gray-200 outline-none focus:border-blue-400" />
                         <button onClick={() => setValues(v => ({ ...v, default_scope: { ...v.default_scope, [kind]: v.default_scope[kind].filter((_, j) => j !== i) } }))}
                           className="p-2 text-gray-400 hover:text-red-600">
                           <Trash2 size={14} />
@@ -364,11 +364,11 @@ export default function SettingsPage() {
                   <div key={i} className="grid grid-cols-[1fr_100px] gap-2 items-center">
                     <input type="text" placeholder="Milestone label" value={m.label}
                       onChange={e => setValues(v => ({ ...v, default_payment_schedule: v.default_payment_schedule.map((x, j) => j === i ? { ...x, label: e.target.value } : x) }))}
-                      className="px-2.5 py-2 text-xs rounded-lg border border-gray-200 outline-none focus:border-blue-400" />
+                      className="px-2.5 py-2 text-base rounded-lg border border-gray-200 outline-none focus:border-blue-400" />
                     <div className="relative">
                       <input type="number" value={m.percent} min={0} max={100}
                         onChange={e => setValues(v => ({ ...v, default_payment_schedule: v.default_payment_schedule.map((x, j) => j === i ? { ...x, percent: parseFloat(e.target.value) || 0 } : x) }))}
-                        className="w-full px-2.5 py-2 text-xs rounded-lg border border-gray-200 outline-none focus:border-blue-400" />
+                        className="w-full px-2.5 py-2 text-base rounded-lg border border-gray-200 outline-none focus:border-blue-400" />
                       <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-gray-400">%</span>
                     </div>
                   </div>

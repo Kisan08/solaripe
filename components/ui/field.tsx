@@ -16,8 +16,13 @@ export function Label({
   )
 }
 
+// text-base (16px), not text-sm — iOS Safari (and mobile Chrome) auto-zooms
+// the viewport when a focused input's font-size is below 16px, leaving the
+// page stuck zoomed in until the user manually pinches back out. This is
+// the single shared base for every Input/Textarea/Select in the app, so
+// keeping it at 16px here is what makes the fix apply everywhere at once.
 const fieldBase =
-  "w-full rounded-lg border border-input bg-card px-3 py-2 text-sm text-foreground shadow-sm outline-none transition-colors placeholder:text-muted-foreground/70 focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:opacity-50"
+  "w-full rounded-lg border border-input bg-card px-3 py-2 text-base text-foreground shadow-sm outline-none transition-colors placeholder:text-muted-foreground/70 focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:opacity-50"
 
 export function Input({
   className,

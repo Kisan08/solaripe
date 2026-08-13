@@ -67,7 +67,7 @@ function ImageUploadField({ label, url, uploading, onUpload }: { label: string; 
   )
 }
 
-const inputCls = "w-full px-2.5 py-2 text-xs rounded-lg border border-gray-200 outline-none focus:border-blue-400"
+const inputCls = "w-full px-2.5 py-2 text-base rounded-lg border border-gray-200 outline-none focus:border-blue-400"
 
 /* ─── Client Logos ─── */
 

@@ -314,8 +314,8 @@ export default function CRMPage() {
       <style>{`
         .crm-stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 16px; }
         .crm-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; background: #fff; border-radius: 10px; padding: 14px 16px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); margin-bottom: 16px; position: relative; z-index: 2; }
-        .crm-search { border: 1px solid #D1D5DB; border-radius: 7px; padding: 8px 12px; font-size: 13px; width: 200px; outline: none; position: relative; z-index: 1; }
-        .crm-select { border: 1px solid #D1D5DB; border-radius: 7px; padding: 8px 10px; font-size: 13px; cursor: pointer; background: #fff; color: #374151; -webkit-appearance: menulist; position: relative; z-index: 1; }
+        .crm-search { border: 1px solid #D1D5DB; border-radius: 7px; padding: 8px 12px; font-size: 16px; width: 200px; outline: none; position: relative; z-index: 1; }
+        .crm-select { border: 1px solid #D1D5DB; border-radius: 7px; padding: 8px 10px; font-size: 16px; cursor: pointer; background: #fff; color: #374151; -webkit-appearance: menulist; position: relative; z-index: 1; }
         .crm-select option { color: #374151; background: #fff; }
         .crm-card { background: #fff; border-radius: 10px; padding: 14px 16px; margin-bottom: 10px; box-shadow: 0 1px 4px rgba(0,0,0,0.06); display: grid; gap: 8px; }
         .crm-card.interested { border-left: 4px solid #065F46; background: #F0FDF4; }
@@ -370,7 +370,7 @@ export default function CRMPage() {
             <input type="text" value={addName} onChange={(e) => setAddName(e.target.value)}
               placeholder="Client name" autoFocus
               style={{
-                width: "100%", padding: "9px 12px", fontSize: 14, borderRadius: 8,
+                width: "100%", padding: "9px 12px", fontSize: 16, borderRadius: 8,
                 border: "1px solid #E2E8F0", marginBottom: 12, boxSizing: "border-box",
               }} />
 
@@ -378,7 +378,7 @@ export default function CRMPage() {
             <input type="tel" value={addPhone} onChange={(e) => setAddPhone(e.target.value)}
               placeholder="10-digit mobile number"
               style={{
-                width: "100%", padding: "9px 12px", fontSize: 14, borderRadius: 8,
+                width: "100%", padding: "9px 12px", fontSize: 16, borderRadius: 8,
                 border: "1px solid #E2E8F0", marginBottom: 18, boxSizing: "border-box",
               }} />
 

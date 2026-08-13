@@ -954,7 +954,7 @@ function Field({ label, name, value, onChange, type = "text", placeholder = "" }
     <div>
       <label className="block text-xs font-medium text-gray-500 mb-1">{label}</label>
       <input type={type} name={name} value={value} onChange={onChange} placeholder={placeholder}
-        className="w-full px-3 py-2 text-sm rounded-lg bg-white border border-gray-200 text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 placeholder-gray-400 transition-all" />
+        className="w-full px-3 py-2 text-base rounded-lg bg-white border border-gray-200 text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 placeholder-gray-400 transition-all" />
     </div>
   );
 }
@@ -967,7 +967,7 @@ function SelectField({ label, name, value, onChange, options }: {
     <div>
       <label className="block text-xs font-medium text-gray-500 mb-1">{label}</label>
       <select name={name} value={value} onChange={onChange}
-        className="w-full px-3 py-2 text-sm rounded-lg bg-white border border-gray-200 text-gray-900 outline-none focus:border-blue-400 transition-all">
+        className="w-full px-3 py-2 text-base rounded-lg bg-white border border-gray-200 text-gray-900 outline-none focus:border-blue-400 transition-all">
         {options.map(o => <option key={o}>{o}</option>)}
       </select>
     </div>
@@ -1339,7 +1339,7 @@ function QuotePageInner() {
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">Panel Model (optional)</label>
                 <select value={selectedPanelId} onChange={e => setSelectedPanelId(e.target.value)}
-                  className="w-full px-3 py-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400">
+                  className="w-full px-3 py-2.5 text-base rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400">
                   <option value="">Default (Waaree / Premier 580 Wp)</option>
                   {panelOptions.map(p => (
                     <option key={p.id} value={p.id}>{p.brand} {p.model}{p.wattage_or_spec ? ` — ${p.wattage_or_spec}` : ""}</option>
@@ -1349,7 +1349,7 @@ function QuotePageInner() {
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">Inverter Model (optional)</label>
                 <select value={selectedInverterId} onChange={e => setSelectedInverterId(e.target.value)}
-                  className="w-full px-3 py-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400">
+                  className="w-full px-3 py-2.5 text-base rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400">
                   <option value="">Default (Waaree String)</option>
                   {inverterOptions.map(p => (
                     <option key={p.id} value={p.id}>{p.brand} {p.model}{p.wattage_or_spec ? ` — ${p.wattage_or_spec}` : ""}</option>
