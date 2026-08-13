@@ -190,6 +190,36 @@ export const GIGI_TOOLS: GigiTool[] = [
   {
     type: "function",
     function: {
+      name: "get_status",
+      description:
+        "Look up the current status/stage of a specific lead, AI Calling client, or project. Use this when the user asks 'what's the status of X', 'where is X in the pipeline', or similar status questions about ONE named person — distinct from get_pipeline_summary, which is aggregate counts/totals, not a specific person's info.",
+      parameters: {
+        type: "object",
+        properties: {
+          identifier: { type: "string", description: "The person's name or phone number." },
+        },
+        required: ["identifier"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_details",
+      description:
+        "Get full details about a specific lead, AI Calling client, or project — contact info, notes, value, etc. Use this when the user asks for more information about someone, not just their status — distinct from get_status (just the stage/status) and get_pipeline_summary (aggregate counts/totals, not a specific person's info).",
+      parameters: {
+        type: "object",
+        properties: {
+          identifier: { type: "string", description: "The person's name or phone number." },
+        },
+        required: ["identifier"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "get_pipeline_summary",
       description:
         "Get a read-only summary of the sales pipeline: lead counts by stage, total pipeline value, and active project count. Use this when the user asks something like 'how's the pipeline looking' or 'give me a summary of this month'.",
@@ -275,6 +305,8 @@ export const REQUIRED_FIELDS: Record<string, string[]> = {
   send_whatsapp_followup: ["identifier"],
   get_pipeline_summary: [],
   update_subsidy_stage: ["identifier", "new_stage"],
+  get_status: ["identifier"],
+  get_details: ["identifier"],
 };
 
 export interface ToolResult {
@@ -327,11 +359,15 @@ function formatMatchLabel(m: { name: string; phone: string | null }, extra?: str
   return `${m.name}${m.phone ? ` (${m.phone})` : ""}${extra ? ` — ${extra}` : ""}`;
 }
 
-function notFoundResult(what: string, identifier: string): ToolResult {
+// Return type is deliberately narrower than ToolResult (ok: false, not
+// ok: boolean) — resolveAcrossTables below unions this with an
+// { ok: true; hits } shape and relies on `if (!resolved.ok)` to narrow
+// correctly, which needs `ok` to be a true literal on both sides.
+function notFoundResult(what: string, identifier: string): { ok: false; summary: string } {
   return { ok: false, summary: `I couldn't find a ${what} matching "${identifier}".` };
 }
 
-function ambiguousResult(what: string, identifier: string, labels: string[]): ToolResult {
+function ambiguousResult(what: string, identifier: string, labels: string[]): { ok: false; summary: string } {
   return {
     ok: false,
     summary: `I found ${labels.length} ${what} matching "${identifier}": ${labels.join(", ")}. Which one did you mean?`,
@@ -597,6 +633,172 @@ async function execSendWhatsappFollowup(
   return { ok: true, summary: `Sent a WhatsApp follow-up to ${contact.name}.` };
 }
 
+type LookupTable = "leads" | "clients" | "projects";
+
+function formatDate(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  return new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+}
+
+// Shared by get_status/get_details: the user won't necessarily know which
+// table someone is in, so search all three. A within-table duplicate name
+// (e.g. two leads both named "Ravi") is genuine ambiguity — ask which one,
+// reusing the exact same ambiguousResult() pattern every other tool uses.
+// Someone existing in MULTIPLE tables (e.g. a lead who's also an AI
+// Calling client) is NOT ambiguous — that's just multiple real facts, so
+// every table with exactly one match is returned together.
+async function resolveAcrossTables(
+  supabase: SupabaseClient,
+  identifier: string,
+): Promise<{ ok: true; hits: { table: LookupTable; id: string }[] } | { ok: false; summary: string }> {
+  const tables: LookupTable[] = ["leads", "clients", "projects"];
+  const perTable = await Promise.all(tables.map((t) => findMatches(supabase, t, identifier)));
+
+  for (let i = 0; i < tables.length; i++) {
+    if (perTable[i].length > 1) {
+      const label = tables[i] === "clients" ? "AI Calling clients" : tables[i];
+      return ambiguousResult(label, identifier, perTable[i].map((m) => formatMatchLabel(m)));
+    }
+  }
+
+  const hits: { table: LookupTable; id: string }[] = [];
+  tables.forEach((t, i) => {
+    if (perTable[i][0]) hits.push({ table: t, id: perTable[i][0].id });
+  });
+
+  if (hits.length === 0) return notFoundResult("lead, AI Calling client, or project", identifier);
+  return { ok: true, hits };
+}
+
+async function execGetStatus(
+  supabase: SupabaseClient,
+  args: { identifier?: string },
+): Promise<ToolResult> {
+  const identifier = args.identifier?.trim();
+  if (!identifier) return { ok: false, summary: "Missing identifier — who do you want the status for?" };
+
+  const resolved = await resolveAcrossTables(supabase, identifier);
+  if (!resolved.ok) return resolved;
+
+  const lines: string[] = [];
+  for (const hit of resolved.hits) {
+    if (hit.table === "leads") {
+      const { data } = await supabase.from("leads").select("name, stage, created_at").eq("id", hit.id).single();
+      if (data) {
+        const when = formatDate(data.created_at);
+        lines.push(`${data.name} is a lead in the "${data.stage}" stage${when ? ` (added ${when})` : ""}.`);
+      }
+    } else if (hit.table === "clients") {
+      const { data } = await supabase.from("clients").select("name, status, called_at").eq("id", hit.id).single();
+      if (data) {
+        const when = formatDate(data.called_at);
+        lines.push(`${data.name} is an AI Calling client — status: ${data.status}${when ? `, last called ${when}` : ", not called yet"}.`);
+      }
+    } else {
+      const { data } = await supabase.from("projects").select("client_name, status, current_stage_id").eq("id", hit.id).single();
+      if (data) {
+        let stageName: string | null = null;
+        if (data.current_stage_id) {
+          const { data: stage } = await supabase
+            .from("tenant_pipeline_stages")
+            .select("name")
+            .eq("id", data.current_stage_id)
+            .maybeSingle();
+          stageName = stage?.name ?? null;
+        }
+        lines.push(`${data.client_name} is a project — status: ${data.status}${stageName ? `, subsidy/DISCOM stage: ${stageName}` : ""}.`);
+      }
+    }
+  }
+
+  if (lines.length === 0) return { ok: false, summary: "Couldn't fetch status for that match." };
+  return { ok: true, summary: lines.join(" ") };
+}
+
+async function execGetDetails(
+  supabase: SupabaseClient,
+  args: { identifier?: string },
+): Promise<ToolResult> {
+  const identifier = args.identifier?.trim();
+  if (!identifier) return { ok: false, summary: "Missing identifier — who do you want details for?" };
+
+  const resolved = await resolveAcrossTables(supabase, identifier);
+  if (!resolved.ok) return resolved;
+
+  const lines: string[] = [];
+  for (const hit of resolved.hits) {
+    if (hit.table === "leads") {
+      const { data } = await supabase
+        .from("leads")
+        .select("name, phone, email, address, system_size, budget, source, stage, notes, follow_up_date, created_at")
+        .eq("id", hit.id)
+        .single();
+      if (data) {
+        const parts = [`${data.name} — lead, stage: ${data.stage}`];
+        if (data.phone) parts.push(`phone ${data.phone}`);
+        if (data.email) parts.push(`email ${data.email}`);
+        if (data.address) parts.push(`address ${data.address}`);
+        if (data.system_size) parts.push(`system size ${data.system_size} kW`);
+        if (data.budget) parts.push(`budget ₹${Number(data.budget).toLocaleString("en-IN")}`);
+        if (data.source) parts.push(`source ${data.source}`);
+        const followUp = formatDate(data.follow_up_date);
+        if (followUp) parts.push(`follow-up ${followUp}`);
+        if (data.notes) parts.push(`notes: ${data.notes}`);
+        lines.push(parts.join(", ") + ".");
+      }
+    } else if (hit.table === "clients") {
+      const { data } = await supabase
+        .from("clients")
+        .select("name, phone, city, electricity_bill, property_type, lead_source, status, response, called_at, lead_score, notes, created_at")
+        .eq("id", hit.id)
+        .single();
+      if (data) {
+        const parts = [`${data.name} — AI Calling client, status: ${data.status}`];
+        if (data.phone) parts.push(`phone ${data.phone}`);
+        if (data.city) parts.push(`city ${data.city}`);
+        if (data.property_type) parts.push(`property type ${data.property_type}`);
+        if (data.electricity_bill) parts.push(`electricity bill ${data.electricity_bill}`);
+        if (data.lead_source) parts.push(`source ${data.lead_source}`);
+        if (data.lead_score) parts.push(`lead score ${data.lead_score}`);
+        if (data.response) parts.push(`last response: ${data.response}`);
+        const when = formatDate(data.called_at);
+        if (when) parts.push(`last called ${when}`);
+        if (data.notes) parts.push(`notes: ${data.notes}`);
+        lines.push(parts.join(", ") + ".");
+      }
+    } else {
+      const { data } = await supabase
+        .from("projects")
+        .select("client_name, phone, address, system_size, project_type, status, total_value, notes, t1_paid, t2_paid, t3_paid, t4_paid, current_stage_id, created_at")
+        .eq("id", hit.id)
+        .single();
+      if (data) {
+        const parts = [`${data.client_name} — project, status: ${data.status}`];
+        if (data.phone) parts.push(`phone ${data.phone}`);
+        if (data.address) parts.push(`address ${data.address}`);
+        if (data.system_size) parts.push(`system size ${data.system_size} kW`);
+        if (data.project_type) parts.push(`type ${data.project_type}`);
+        if (data.total_value) parts.push(`value ₹${Number(data.total_value).toLocaleString("en-IN")}`);
+        const paidTranches = [1, 2, 3, 4].filter((n) => (data as Record<string, unknown>)[`t${n}_paid`]);
+        parts.push(paidTranches.length > 0 ? `tranches paid: ${paidTranches.join(", ")} of 4` : "no tranches paid yet");
+        if (data.current_stage_id) {
+          const { data: stage } = await supabase
+            .from("tenant_pipeline_stages")
+            .select("name")
+            .eq("id", data.current_stage_id)
+            .maybeSingle();
+          if (stage?.name) parts.push(`subsidy/DISCOM stage: ${stage.name}`);
+        }
+        if (data.notes) parts.push(`notes: ${data.notes}`);
+        lines.push(parts.join(", ") + ".");
+      }
+    }
+  }
+
+  if (lines.length === 0) return { ok: false, summary: "Couldn't fetch details for that match." };
+  return { ok: true, summary: lines.join(" ") };
+}
+
 function parseTimeRange(raw?: string): string | null {
   const text = raw?.toLowerCase() ?? "";
   const now = new Date();
@@ -818,6 +1020,10 @@ export async function executeTool(
         return await execUpdateProjectPayment(ctx.supabase, args);
       case "send_whatsapp_followup":
         return await execSendWhatsappFollowup(ctx.supabase, args);
+      case "get_status":
+        return await execGetStatus(ctx.supabase, args);
+      case "get_details":
+        return await execGetDetails(ctx.supabase, args);
       case "get_pipeline_summary":
         return await execGetPipelineSummary(ctx.supabase, args);
       case "update_subsidy_stage":
