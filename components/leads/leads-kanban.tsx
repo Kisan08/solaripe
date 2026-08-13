@@ -68,9 +68,12 @@ function LeadCardContent({
       <button className="w-full text-left" onClick={() => onEdit?.(lead)}>
         <LeadCardInfo lead={lead} />
       </button>
+      {/* Always visible (not hover-gated) — a hover-only reveal is
+          permanently inaccessible on touch devices, since there's no
+          :hover state to trigger it. */}
       <button
         onClick={(e) => onGenerateQuote(e, lead)}
-        className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-lg border border-primary/20 bg-primary/5 py-1.5 text-xs font-medium text-primary opacity-0 transition-all group-hover:opacity-100 hover:bg-primary hover:text-white"
+        className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-lg border border-primary/20 bg-primary/5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary hover:text-white"
       >
         <FileText className="size-3.5" />
         Generate Quote
