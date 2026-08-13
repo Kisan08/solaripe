@@ -5,13 +5,19 @@
 // Positioned above BottomNav's z-40 fixed bar, and lifted clear of it on
 // mobile (bottom-20) since BottomNav is only hidden at md: and up.
 //
-// Voice is purely front-end here: browser SpeechRecognition transcribes
-// into the SAME send() the text input uses, and SpeechSynthesis reads
-// Gigi's reply back. Nothing about /api/gigi or lib/gigi/tools.ts changes —
-// this is placeholder-quality browser TTS/STT, not the ElevenLabs/Deepgram
-// pipeline used by the real calling flow.
+// Voice is purely front-end here: click-to-talk only — the mic button
+// starts a browser SpeechRecognition capture that feeds into the SAME
+// send() the text input uses, and SpeechSynthesis reads Gigi's reply back.
+// (An earlier "Hey Gigi" always-listening wake-word mode was tried and
+// removed — it required an always-on background recognition session with
+// no reliable way to satisfy browsers' user-gesture requirement for audio
+// playback, which caused persistent silent-TTS failures. Click-to-talk has
+// no such problem: the click itself is the gesture.) Nothing about
+// /api/gigi or lib/gigi/tools.ts changes — this is placeholder-quality
+// browser TTS/STT, not the ElevenLabs/Deepgram pipeline used by the real
+// calling flow.
 import { useEffect, useRef, useState } from "react";
-import { MessageCircle, X, Send, Mic, Volume2, VolumeX, Ear, EarOff, AlertTriangle } from "lucide-react";
+import { MessageCircle, X, Send, Mic, Volume2, VolumeX, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface ChatMessage {
@@ -40,54 +46,18 @@ function getSpeechRecognitionCtor(): (new () => SpeechRecognitionLike) | null {
   return (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition ?? null;
 }
 
-const WAKE_STORAGE_KEY = "gigi-wake-enabled";
-
-// Loose, case-insensitive match — Chrome's STT has been observed mishearing
-// "Gigi" as "Jiji" in real testing, so this covers known variants rather
-// than requiring an exact "hey gigi". Longest-first so a more specific
-// phrase (e.g. "hey giggy") is preferred over a shorter one that happens
-// to be its prefix (e.g. "hey g") when both could match.
-const WAKE_PATTERNS = ["hey gigi", "hey jiji", "hey giggy", "okay gigi", "ok gigi", "hey g g", "a gigi", "hey g"]
-  .sort((a, b) => b.length - a.length);
-
-// Built once: each pattern's words joined by a separator that tolerates
-// whatever punctuation/whitespace Chrome inserts between them (it commonly
-// revises "hey gigi" into "Hey, Gigi." between interim and final results —
-// a plain indexOf() for the literal phrase misses that entirely, which is
-// the confirmed cause of "hey gigi" sometimes never being detected at
-// all), plus trailing punctuation right after the phrase so it doesn't
-// leak into the extracted command remainder.
-const WAKE_REGEXES = WAKE_PATTERNS.map((pattern) => {
-  const words = pattern.split(" ").map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  return new RegExp(words.join("[,\\s]+") + "[,.!?]*", "i");
-});
-
-// Matches against the ORIGINAL (not lowercased) transcript — the "i" flag
-// handles case-insensitivity — so the returned endIndex stays valid for
-// slicing the real, original-casing remainder straight out of transcriptRaw.
-function matchWakeWord(transcriptRaw: string): { matched: boolean; endIndex: number } {
-  for (const regex of WAKE_REGEXES) {
-    const m = transcriptRaw.match(regex);
-    if (m && m.index !== undefined) {
-      return { matched: true, endIndex: m.index + m[0].length };
-    }
-  }
-  return { matched: false, endIndex: -1 };
-}
-
-// Guards against a real, reproduced bug: right at the "hey gigi" boundary,
-// Chrome sometimes finalizes a short trailing breath/filler sound (e.g.
-// "i.") as part of/right after the wake phrase's own segment, which would
-// otherwise get auto-sent to /api/gigi as if it were the actual command.
+// Guards against a real, reproduced bug: right at the start of a capture,
+// Chrome sometimes finalizes a short trailing breath/filler sound as its
+// own result, which would otherwise get auto-sent to /api/gigi as if it
+// were the actual command.
 const MIN_COMMAND_CHARS = 4;
 const FILLER_WORDS = new Set([
   "i", "um", "uh", "uhh", "umm", "hmm", "huh", "the", "a", "and", "so", "yeah", "ok", "okay",
 ]);
-// A grace window right after entering active-listening mode (whether via
-// wake-word detection or the manual mic button) during which even a
-// final result has to look like a real, substantive phrase before it's
-// accepted — filters the spurious short tail fragment without waiting on
-// an artificial delay before recognition can start capturing at all.
+// A grace window right after entering active-listening mode during which
+// even a final result has to look like a real, substantive phrase before
+// it's accepted — filters the spurious short tail fragment without waiting
+// on an artificial delay before recognition can start capturing at all.
 const ACTIVE_MODE_SETTLE_MS = 300;
 
 function isViableCommand(text: string, msSinceActiveModeStarted: number): boolean {
@@ -99,8 +69,8 @@ function isViableCommand(text: string, msSinceActiveModeStarted: number): boolea
   return true;
 }
 
-type MicMode = "active" | "wake";
-type VoiceState = "off" | "wake" | "active" | "thinking" | "speaking";
+type MicMode = "active";
+type VoiceState = "off" | "active" | "thinking" | "speaking";
 
 export function GigiWidget() {
   const [open, setOpen] = useState(false);
@@ -113,11 +83,10 @@ export function GigiWidget() {
   const [speakEnabled, setSpeakEnabled] = useState(true);
   const [voiceSupported, setVoiceSupported] = useState(false);
   const [synthesisSupported, setSynthesisSupported] = useState(false);
-  const [wakeEnabled, setWakeEnabled] = useState(false);
   const [voiceOutputFailed, setVoiceOutputFailed] = useState(false);
   // React-visible mirror of speechPrimedRef — the ref alone can't drive a
-  // re-render, and the "tap to enable voice replies" nudge needs to
-  // disappear the instant priming happens.
+  // re-render, and the AlertTriangle tooltip needs to know whether we're
+  // still in the pre-gesture window to phrase itself correctly.
   const [speechPrimed, setSpeechPrimed] = useState(false);
 
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
@@ -127,39 +96,19 @@ export function GigiWidget() {
   const keepListeningRef = useRef(false);
   const modeRef = useRef<MicMode>("active");
   const commandBufferRef = useRef("");
-  // Which result index (within the current continuous session) first
-  // matched the wake word, and the character offset right after it — used
-  // to re-derive the command text each time Chrome re-fires that SAME
-  // result as it finalizes, instead of naively concatenating and ending up
-  // with "hey gigi" duplicated into the command sent to /api/gigi.
-  const wakeResultIndexRef = useRef(-1);
-  const wakeEndOffsetRef = useRef(0);
   // SpeechRecognition result indices RESET to 0 every time .start() is
   // called on an instance, even when we're internally restarting the SAME
-  // JS object after Chrome's onend auto-stop (e.g. from the pause right
-  // after saying "hey gigi"). Without this generation guard, a stale
-  // wakeResultIndexRef (say, 0, from the pre-restart session) could
-  // coincidentally match the RESTARTED session's own index-0 result — the
-  // user's actual real command — causing it to be mis-treated as "the
-  // wake phrase's own result re-finalizing" and sliced/mangled using the
-  // old wake-word offset. Bumped every real .start() call; a wake-word
-  // match is only honored as "the same result" if the generation also
-  // matches.
+  // JS object after Chrome's onend auto-stop — bumped every real .start()
+  // call so stale per-session state can never be mistaken for the current
+  // session's.
   const sessionGenerationRef = useRef(0);
-  const wakeResultGenerationRef = useRef(-1);
-  // Timestamp active-listening mode was entered (manual mic click, or the
-  // moment "hey gigi" was detected) — used by isViableCommand()'s settle
-  // window, see its comment above.
+  // Timestamp active-listening mode was entered (on a mic click) — used by
+  // isViableCommand()'s settle window, see its comment above.
   const activeModeEnteredAtRef = useRef(0);
-  const wakeEnabledRef = useRef(false);
-  // The wake-word recognition session is armed once from the mount effect
-  // (and re-arms itself imperatively from within send()'s own closure
-  // chain afterward) — a plain `messages` read in send() would stay frozen
-  // at whatever it was when that closure chain was first created (empty,
-  // at mount), silently sending truncated history on every wake-triggered
-  // turn even though the UI itself renders the full, correct history from
-  // live state. Mirroring messages into a ref keeps send() reading the
-  // ACTUAL latest conversation regardless of which stale closure calls it.
+  // A plain `messages` read in send() would stay frozen at whatever it was
+  // when the enclosing closure was first created — mirroring messages into
+  // a ref keeps send() reading the ACTUAL latest conversation regardless of
+  // which closure calls it.
   const messagesRef = useRef<ChatMessage[]>([]);
   // iOS Safari can return an empty getVoices() list until 'voiceschanged'
   // fires (sometimes not until well after mount) — cache the list from
@@ -171,13 +120,10 @@ export function GigiWidget() {
   // it — later async speak() calls (e.g. after a fetch resolves) work fine
   // once one real utterance has gone through inside a gesture handler.
   // This one-time "priming" utterance (empty text, silent) unlocks that.
+  // toggleMic() and the launcher button both call this synchronously on
+  // click, before any recognition/network work starts, so by the time a
+  // reply comes back and speak() runs, priming has already happened.
   const speechPrimedRef = useRef(false);
-  // Guards a speak() call made before any user gesture this session (e.g.
-  // a reply triggered purely by "hey gigi" on a page that auto-started
-  // wake-listening from localStorage on mount) — browsers can silently
-  // swallow such an utterance with no error event at all. If onstart
-  // hasn't fired within this window, treat it as a likely silent failure.
-  const unprimedSpeakTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -195,13 +141,6 @@ export function GigiWidget() {
       window.speechSynthesis.addEventListener("voiceschanged", updateVoices);
     }
 
-    const stored = typeof window !== "undefined" ? window.localStorage.getItem(WAKE_STORAGE_KEY) : null;
-    if (stored === "1" && getSpeechRecognitionCtor()) {
-      setWakeEnabled(true);
-      wakeEnabledRef.current = true;
-      startRecognitionSession("wake", "wake");
-    }
-
     return () => {
       keepListeningRef.current = false;
       recognitionRef.current?.abort();
@@ -210,12 +149,11 @@ export function GigiWidget() {
         if (updateVoices) window.speechSynthesis.removeEventListener("voiceschanged", updateVoices);
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Call once from inside a real click handler (mic button, wake toggle,
-  // launcher button) before any await/async gap — see speechPrimedRef's
-  // comment above for why this specifically matters on iOS Safari.
+  // Call once from inside a real click handler (mic button, launcher
+  // button) before any await/async gap — see speechPrimedRef's comment
+  // above for why this specifically matters on iOS Safari.
   function primeSpeechSynthesis() {
     if (speechPrimedRef.current || !synthesisSupported) return;
     speechPrimedRef.current = true;
@@ -250,28 +188,18 @@ export function GigiWidget() {
     const preferred = voices.find((v) => /en-IN|hi-IN/i.test(v.lang));
     if (preferred) utterance.voice = preferred;
 
-    const clearUnprimedWatch = () => {
-      if (unprimedSpeakTimeoutRef.current !== null) {
-        window.clearTimeout(unprimedSpeakTimeoutRef.current);
-        unprimedSpeakTimeoutRef.current = null;
-      }
-    };
-
     utterance.onstart = () => {
       console.log("[gigi] speech started");
-      clearUnprimedWatch();
       setSpeaking(true);
       setVoiceOutputFailed(false);
     };
     utterance.onend = () => {
       console.log("[gigi] speech ended");
-      clearUnprimedWatch();
       setSpeaking(false);
       onDone?.();
     };
     utterance.onerror = (e: SpeechSynthesisErrorEvent) => {
       console.error("[gigi] speech error", e.error);
-      clearUnprimedWatch();
       setSpeaking(false);
       setVoiceOutputFailed(true);
       onDone?.();
@@ -279,18 +207,6 @@ export function GigiWidget() {
 
     try {
       window.speechSynthesis.speak(utterance);
-      // No user gesture has happened yet this session (e.g. this reply was
-      // triggered purely by "hey gigi" on an auto-started wake session) —
-      // browsers can drop such an utterance with NO error event at all, so
-      // onerror alone can't catch it. If onstart hasn't fired shortly
-      // after, treat it as a silent failure caused by that missing gesture.
-      if (!speechPrimedRef.current) {
-        unprimedSpeakTimeoutRef.current = window.setTimeout(() => {
-          unprimedSpeakTimeoutRef.current = null;
-          console.error("[gigi] speech never started — likely blocked by missing user gesture");
-          setVoiceOutputFailed(true);
-        }, 1500);
-      }
     } catch (err) {
       console.error("[gigi] speechSynthesis.speak threw", err);
       setVoiceOutputFailed(true);
@@ -298,11 +214,10 @@ export function GigiWidget() {
     }
   }
 
-  // resumeMode: what to automatically start listening for again once the
-  // reply has been spoken — "active" keeps a hands-free back-and-forth
-  // going (manual mic-button flow), "wake" drops back to quiet
-  // background wake-word listening (wake-word-triggered flow), null means
-  // don't auto-resume (typed messages).
+  // resumeMode: whether to automatically resume listening once the reply
+  // has been spoken — "active" keeps a hands-free back-and-forth going
+  // after a voice-originated command (so a follow-up question doesn't
+  // need another mic click), null means don't auto-resume (typed messages).
   async function send(overrideText?: string, resumeMode: MicMode | null = null) {
     const text = (overrideText ?? input).trim();
     if (!text || busy) return;
@@ -315,7 +230,6 @@ export function GigiWidget() {
 
     const resumeIfNeeded = () => {
       if (resumeMode === "active") startRecognitionSession("active", "active");
-      else if (resumeMode === "wake" && wakeEnabledRef.current) startRecognitionSession("wake", "wake");
     };
 
     try {
@@ -346,11 +260,9 @@ export function GigiWidget() {
   }
 
   // Starts (or, from onend, silently restarts) a continuous speech
-  // recognition session. `initialMode` is "active" for the plain mic
-  // button (capture a command right away) or "wake" for background
-  // wake-word listening (watch for "hey gigi" before capturing anything).
-  // `resumeMode` is what to restart into after a captured command's reply
-  // has been handled — see send()'s resumeIfNeeded.
+  // recognition session capturing a command right away. `resumeMode` is
+  // what to restart into after a captured command's reply has been
+  // handled — see send()'s resumeIfNeeded.
   function startRecognitionSession(initialMode: MicMode, resumeMode: MicMode | null) {
     const Ctor = getSpeechRecognitionCtor();
     if (!Ctor) return;
@@ -372,24 +284,13 @@ export function GigiWidget() {
     modeRef.current = initialMode;
     setMicMode(initialMode);
     commandBufferRef.current = "";
-    wakeResultIndexRef.current = -1;
-    wakeEndOffsetRef.current = 0;
-    if (initialMode === "active") activeModeEnteredAtRef.current = Date.now();
+    activeModeEnteredAtRef.current = Date.now();
 
-    // clearOnReject: whether a rejected (too-short/filler) attempt should
-    // wipe commandBufferRef. Safe (and necessary) for the wake-boundary
-    // branches below, since they always OVERWRITE commandBufferRef fresh
-    // from the raw transcript slice next time regardless — clearing loses
-    // nothing there. NOT safe for genuine multi-chunk accumulation (a
-    // later, separate result index that APPENDS onto commandBufferRef):
-    // clearing there would have silently glued a stale rejected fragment
-    // (e.g. "i.") onto the front of the real command that arrives next,
-    // producing "i. Can you add a lead?" instead of the clean command.
-    function finishCommand(clearOnReject: boolean) {
+    function finishCommand() {
       const text = commandBufferRef.current.trim();
       const elapsed = Date.now() - activeModeEnteredAtRef.current;
       if (!isViableCommand(text, elapsed)) {
-        if (clearOnReject) commandBufferRef.current = "";
+        commandBufferRef.current = "";
         return;
       }
       commandBufferRef.current = "";
@@ -405,42 +306,11 @@ export function GigiWidget() {
         const result = e.results[i];
         const transcriptRaw: string = result[0].transcript ?? "";
 
-        if (modeRef.current === "wake") {
-          const { matched, endIndex } = matchWakeWord(transcriptRaw);
-          if (!matched) continue;
-
-          modeRef.current = "active";
-          setMicMode("active");
-          activeModeEnteredAtRef.current = Date.now();
-          wakeResultIndexRef.current = i;
-          wakeResultGenerationRef.current = sessionGenerationRef.current;
-          wakeEndOffsetRef.current = endIndex;
-          const remainder = transcriptRaw.slice(endIndex).trim();
-          commandBufferRef.current = remainder;
-          if (result.isFinal && remainder) {
-            finishCommand(true);
-            return;
-          }
-          continue;
-        }
-
-        // modeRef.current === "active" from here on.
-        if (i === wakeResultIndexRef.current && sessionGenerationRef.current === wakeResultGenerationRef.current) {
-          // Same result Chrome keeps re-firing as it finalizes — re-derive
-          // the command from the wake-word offset each time instead of
-          // appending, or "hey gigi" would end up duplicated into the text
-          // sent to /api/gigi.
-          const remainder = transcriptRaw.slice(wakeEndOffsetRef.current).trim();
-          commandBufferRef.current = remainder;
-          if (result.isFinal && remainder) finishCommand(true);
-          continue;
-        }
-
         if (result.isFinal) {
           const chunk = transcriptRaw.trim();
           if (chunk) {
             commandBufferRef.current = (commandBufferRef.current ? commandBufferRef.current + " " : "") + chunk;
-            finishCommand(false);
+            finishCommand();
             return;
           }
         }
@@ -453,16 +323,13 @@ export function GigiWidget() {
       // fires these routinely on pauses or brief connectivity blips) —
       // let onend's restart logic silently retry. Only a genuinely fatal
       // error (mic permission denied, no mic, etc.) should stop listening
-      // and surface a message. Background wake-listening stays silent even
-      // then, since it's not a user-initiated command attempt.
+      // and surface a message.
       if (e.error === "no-speech" || e.error === "aborted" || e.error === "network") return;
-      console.error("[gigi:voice] fatal recognition error —", e.error, "mode:", modeRef.current);
+      console.error("[gigi:voice] fatal recognition error —", e.error);
       keepListeningRef.current = false;
       setListening(false);
       setMicMode(null);
-      if (initialMode === "active") {
-        setMessages((prev) => [...prev, { role: "assistant", content: "Didn't catch that — try again." }]);
-      }
+      setMessages((prev) => [...prev, { role: "assistant", content: "Didn't catch that — try again." }]);
     };
 
     recognition.onend = () => {
@@ -517,25 +384,7 @@ export function GigiWidget() {
       return;
     }
 
-    // Also supersedes an idle background wake-listening session, if one is
-    // running — the isCurrent() guard means its now-stale events are
-    // simply ignored.
     startRecognitionSession("active", "active");
-  }
-
-  function toggleWake() {
-    primeSpeechSynthesis();
-    const next = !wakeEnabled;
-    setWakeEnabled(next);
-    wakeEnabledRef.current = next;
-    if (typeof window !== "undefined") window.localStorage.setItem(WAKE_STORAGE_KEY, next ? "1" : "0");
-
-    if (next) {
-      if (!listening) startRecognitionSession("wake", "wake");
-    } else if (listening && micMode === "wake") {
-      keepListeningRef.current = false;
-      recognitionRef.current?.stop();
-    }
   }
 
   const voiceState: VoiceState = busy
@@ -544,20 +393,16 @@ export function GigiWidget() {
     ? "speaking"
     : listening && micMode === "active"
     ? "active"
-    : listening && micMode === "wake"
-    ? "wake"
     : "off";
 
   const VOICE_STATE_LABEL: Record<VoiceState, string> = {
     off: "Voice off",
-    wake: 'Listening for "Hey Gigi"',
     active: "Listening…",
     thinking: "Thinking…",
     speaking: "Speaking…",
   };
   const VOICE_STATE_DOT: Record<VoiceState, string> = {
     off: "bg-muted-foreground/40",
-    wake: "bg-blue-500 animate-pulse",
     active: "bg-red-500 animate-pulse",
     thinking: "bg-amber-500 animate-pulse",
     speaking: "bg-emerald-500 animate-pulse",
@@ -573,18 +418,6 @@ export function GigiWidget() {
               <span className="text-sm font-semibold text-foreground">Gigi</span>
             </div>
             <div className="flex items-center gap-1">
-              {voiceSupported && (
-                <button
-                  onClick={toggleWake}
-                  title={wakeEnabled ? 'Wake word on — say "Hey Gigi" anytime. Click to disable.' : 'Enable "Hey Gigi" wake word'}
-                  className={cn(
-                    "text-muted-foreground hover:text-foreground",
-                    wakeEnabled && "text-primary",
-                  )}
-                >
-                  {wakeEnabled ? <Ear className="size-4" /> : <EarOff className="size-4" />}
-                </button>
-              )}
               {synthesisSupported && (
                 // setSpeakEnabled is called ONLY from this click handler —
                 // nowhere else in this file, including speak()'s onerror/
@@ -620,10 +453,6 @@ export function GigiWidget() {
               )}
               <button
                 onClick={() => {
-                  // Closing the panel does NOT turn off wake-listening —
-                  // that's a background feature independent of the panel
-                  // being open. Only an active (post-wake-word) capture or
-                  // a manual mic session gets cut off here.
                   if (micMode === "active") {
                     keepListeningRef.current = false;
                     recognitionRef.current?.stop();
@@ -648,7 +477,7 @@ export function GigiWidget() {
             {messages.length === 0 && (
               <p className="text-xs text-muted-foreground">
                 Try: &ldquo;add a lead named Ravi, phone 9876543210&rdquo;
-                {voiceSupported && <> — or enable the ear icon above and just say &ldquo;Hey Gigi&rdquo;.</>}
+                {voiceSupported && <> — or tap the mic button below and just speak.</>}
               </p>
             )}
             {messages.map((m, i) => (
@@ -701,25 +530,6 @@ export function GigiWidget() {
         </div>
       )}
 
-      {/* One-time nudge: wake-listening auto-started from localStorage on
-          mount has no user gesture behind it, so a reply triggered purely
-          by "hey gigi" before any click this session can fail to play with
-          no error at all (a genuine browser autoplay-policy constraint,
-          not something to silently work around). Shown only in that exact
-          window — disappears the moment this, or any other button in the
-          widget, gets clicked (all of them call primeSpeechSynthesis) —
-          and never reappears afterward until a full page reload. */}
-      {synthesisSupported && !speechPrimed && voiceState === "wake" && (
-        <button
-          onClick={primeSpeechSynthesis}
-          className="fixed bottom-36 right-4 z-50 flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-2 text-xs font-medium text-foreground shadow-lg animate-pulse md:bottom-24 md:right-6"
-          title="Voice replies need one tap to enable this session"
-        >
-          <span className="size-1.5 rounded-full bg-blue-500" />
-          Tap to enable voice replies
-        </button>
-      )}
-
       <button
         onClick={() => {
           primeSpeechSynthesis();
@@ -729,8 +539,6 @@ export function GigiWidget() {
         title="Ask Gigi"
       >
         {open ? <X className="size-6" /> : <MessageCircle className="size-6" />}
-        {/* Visible even when the panel is closed — the wake-word session
-            (and any in-flight command) keeps running in the background. */}
         {voiceState !== "off" && (
           <span
             className={cn(
