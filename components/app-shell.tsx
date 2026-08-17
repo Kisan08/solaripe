@@ -14,11 +14,19 @@ import { GigiWidget } from "@/components/gigi/GigiWidget"
 // confusing and a preview of internal nav to someone who isn't authed.
 const AUTH_ROUTES = ["/login", "/signup"]
 
+// The public marketing landing page brings its own header/footer (see
+// components/landing/LandingPage.tsx) — it's never shown to an authed
+// tenant (proxy.ts bounces them to /dashboard first), so it never needs
+// the app chrome either. Exact match only — every other real route lives
+// under its own path segment.
+const STANDALONE_ROUTES = ["/"]
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const isAuthRoute = AUTH_ROUTES.some((route) => pathname.startsWith(route))
+  const isStandalone = isAuthRoute || STANDALONE_ROUTES.includes(pathname)
 
-  if (isAuthRoute) {
+  if (isStandalone) {
     return (
       <div className="min-h-screen bg-background">
         <motion.div

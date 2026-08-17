@@ -22,7 +22,7 @@ export interface NavItem {
 // already has its own "+ New Project" button that creates exactly one
 // project and links into the designer with a real projectId.
 export const NAV_ITEMS: NavItem[] = [
-  { label: "Dashboard",  href: "/",        icon: LayoutDashboard },
+  { label: "Dashboard",  href: "/dashboard", icon: LayoutDashboard },
   { label: "Leads",      href: "/leads",    icon: Users },
   { label: "Projects",   href: "/projects", icon: FolderKanban },
   { label: "Quotes",     href: "/quotes",   icon: FileText },
@@ -32,7 +32,7 @@ export const NAV_ITEMS: NavItem[] = [
 ]
 
 export const MOBILE_NAV: NavItem[] = [
-  { label: "Home",     href: "/",        icon: LayoutDashboard },
+  { label: "Home",     href: "/dashboard", icon: LayoutDashboard },
   { label: "Leads",    href: "/leads",   icon: Users },
   { label: "Projects", href: "/projects",icon: FolderKanban },
   { label: "Quotes",   href: "/quotes",  icon: FileText },

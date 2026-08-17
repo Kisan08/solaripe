@@ -50,7 +50,7 @@ export async function signInAction(formData: FormData): Promise<AuthActionResult
 
   if (error) return { error: error.message };
 
-  redirect("/");
+  redirect("/dashboard");
 }
 
 export async function signOutAction(): Promise<void> {

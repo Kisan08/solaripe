@@ -13,8 +13,8 @@ export function BottomNav() {
       <div className="mx-auto flex max-w-md items-stretch justify-between px-2 pb-[env(safe-area-inset-bottom)]">
         {MOBILE_NAV.map((item) => {
           const active =
-            item.href === "/"
-              ? pathname === "/"
+            item.href === "/dashboard"
+              ? pathname === "/dashboard"
               : pathname.startsWith(item.href)
           const Icon = item.icon
           return (

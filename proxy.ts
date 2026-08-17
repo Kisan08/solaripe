@@ -9,6 +9,9 @@ import { isPlatformAdmin } from "@/lib/admin";
 // place that can gate access before any of them mount.
 //
 // PUBLIC routes (no session required):
+// - / — the marketing landing page (logged-in users are bounced to
+//   /dashboard below, after the session check, so this stays public without
+//   ever actually being shown to an authenticated tenant)
 // - /login, /signup
 // - /design when ?client=1 is present (shared read-only 3D view links sent
 //   to customers, who are never Amsu users)
@@ -18,6 +21,7 @@ import { isPlatformAdmin } from "@/lib/admin";
 //   (CRON_SECRET). Applying session auth here would break calling outright.
 function isPublicPath(pathname: string, searchParams: URLSearchParams): boolean {
   if (pathname.startsWith("/api/")) return true;
+  if (pathname === "/") return true;
   if (pathname === "/login" || pathname === "/signup") return true;
   if (pathname === "/design" && searchParams.get("client") === "1") return true;
   return false;
@@ -48,6 +52,12 @@ export async function proxy(request: NextRequest) {
   // the difference between an actual auth check and a spoofable one.
   const { data: { user } } = await supabase.auth.getUser();
 
+  // A logged-in tenant landing on the marketing page has no reason to see
+  // it — send them straight to their workspace instead.
+  if (request.nextUrl.pathname === "/" && user) {
+    return NextResponse.redirect(new URL("/dashboard", request.url));
+  }
+
   if (isPublicPath(request.nextUrl.pathname, request.nextUrl.searchParams)) {
     return response;
   }
@@ -66,7 +76,7 @@ export async function proxy(request: NextRequest) {
   // proxy bug here should never be the only thing standing between a
   // tenant and write access to the shared catalog.
   if (request.nextUrl.pathname.startsWith("/admin") && !isPlatformAdmin(user.id)) {
-    return NextResponse.redirect(new URL("/", request.url));
+    return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 
   return response;

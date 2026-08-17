@@ -70,8 +70,8 @@ export function Sidebar() {
           const active =
             item.label === "Design"
               ? false
-              : item.href === "/"
-              ? pathname === "/"
+              : item.href === "/dashboard"
+              ? pathname === "/dashboard"
               : pathname.startsWith(item.href)
           const Icon = item.icon
           return (
