@@ -37,7 +37,7 @@ export default function SignupPage() {
                   name="companyName"
                   required
                   placeholder="Omkar Power Solutions"
-                  className="w-full px-3 py-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 transition-all"
+                  className="w-full px-3 py-2.5 text-base rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 transition-all"
                 />
               </div>
               <div>
@@ -47,7 +47,7 @@ export default function SignupPage() {
                   name="email"
                   required
                   placeholder="you@company.com"
-                  className="w-full px-3 py-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 transition-all"
+                  className="w-full px-3 py-2.5 text-base rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 transition-all"
                 />
               </div>
               <div>
@@ -58,7 +58,7 @@ export default function SignupPage() {
                   required
                   minLength={6}
                   placeholder="At least 6 characters"
-                  className="w-full px-3 py-2.5 text-sm rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 transition-all"
+                  className="w-full px-3 py-2.5 text-base rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 transition-all"
                 />
               </div>
 
