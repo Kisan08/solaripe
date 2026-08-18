@@ -2,6 +2,7 @@
 
 import { useState } from "react"
 import Link from "next/link"
+import { motion } from "framer-motion"
 import {
   ArrowRight,
   Box,
@@ -164,8 +165,14 @@ const PLANS = [
 
 function DashboardMockup() {
   return (
-    <div className="relative mx-auto max-w-3xl">
-      <div className="absolute -top-6 right-2 z-10 hidden items-center gap-2 rounded-xl border border-gray-100 bg-white px-3.5 py-2.5 shadow-lg sm:flex md:right-6">
+    <motion.div
+      className="relative mx-auto max-w-3xl"
+      initial={{ opacity: 0, y: 28 }}
+      whileInView={{ opacity: 1, y: 0 }}
+      viewport={{ once: true, amount: 0.3 }}
+      transition={{ duration: 0.7, ease: "easeOut" }}
+    >
+      <div className="animate-bob absolute -top-6 right-2 z-10 hidden items-center gap-2 rounded-xl border border-gray-100 bg-white px-3.5 py-2.5 shadow-lg sm:flex md:right-6">
         <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
           <Check className="size-4" />
         </span>
@@ -175,7 +182,7 @@ function DashboardMockup() {
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl">
+      <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl transition-transform duration-500 hover:-translate-y-1">
         <div className="flex items-center gap-2 border-b border-gray-100 bg-gray-50 px-4 py-2.5">
           <span className="size-2.5 rounded-full bg-gray-300" />
           <span className="size-2.5 rounded-full bg-gray-300" />
@@ -213,7 +220,11 @@ function DashboardMockup() {
                   Good morning, SuryaKiran Renewables
                 </div>
               </div>
-              <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
+              <span className="flex items-center gap-1.5 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
+                <span className="relative flex size-1.5">
+                  <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary opacity-75" />
+                  <span className="relative inline-flex size-1.5 rounded-full bg-primary" />
+                </span>
                 LIVE
               </span>
             </div>
@@ -268,7 +279,7 @@ function DashboardMockup() {
         </div>
       </div>
 
-      <div className="absolute -bottom-5 left-2 z-10 hidden max-w-[220px] items-start gap-2 rounded-xl border border-gray-100 bg-white px-3 py-2.5 shadow-lg sm:flex md:left-6">
+      <div className="animate-bob-delayed absolute -bottom-5 left-2 z-10 hidden max-w-[220px] items-start gap-2 rounded-xl border border-gray-100 bg-white px-3 py-2.5 shadow-lg sm:flex md:left-6">
         <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
           <Mic className="size-3.5" />
         </span>
@@ -280,7 +291,7 @@ function DashboardMockup() {
           </div>
         </div>
       </div>
-    </div>
+    </motion.div>
   )
 }
 
@@ -292,7 +303,7 @@ export function LandingPage() {
       {/* Nav */}
       <header className="sticky top-0 z-40 border-b border-gray-100 bg-white/90 backdrop-blur-md">
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-5 md:px-8">
-          <img src="/brand/amsu-logo.svg" alt="Amsu" className="h-8 w-auto" />
+          <img src="/brand/amsu-logo.svg" alt="Amsu" className="h-11 w-auto sm:h-12" />
           <nav className="hidden items-center gap-8 text-sm font-medium text-gray-600 md:flex">
             <a href="#problem" className="hover:text-[#0F172A]">Problem</a>
             <a href="#features" className="hover:text-[#0F172A]">Features</a>
