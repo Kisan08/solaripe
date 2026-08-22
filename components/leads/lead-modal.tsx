@@ -35,6 +35,7 @@ type FormState = {
   stage: LeadStage
   notes: string
   follow_up_date: string
+  follow_up_time: string
 }
 
 const empty: FormState = {
@@ -48,6 +49,7 @@ const empty: FormState = {
   stage: "New Lead",
   notes: "",
   follow_up_date: "",
+  follow_up_time: "",
 }
 
 export function LeadModal({
@@ -81,6 +83,7 @@ export function LeadModal({
         stage: lead.stage,
         notes: lead.notes ?? "",
         follow_up_date: lead.follow_up_date ?? "",
+        follow_up_time: lead.follow_up_time ? lead.follow_up_time.slice(0, 5) : "",
       })
     } else {
       setForm(empty)
@@ -127,6 +130,9 @@ export function LeadModal({
         stage: form.stage,
         notes: form.notes || null,
         follow_up_date: form.follow_up_date || null,
+        // A time without a date has nothing to be scheduled against, so
+        // only send it when a date is also set.
+        follow_up_time: form.follow_up_date && form.follow_up_time ? form.follow_up_time : null,
       })
       onClose()
     } finally {
@@ -257,11 +263,19 @@ export function LeadModal({
             ))}
           </Select>
         </Field>
-        <Field label="Follow-up date" className="sm:col-span-2">
+        <Field label="Follow-up date">
           <Input
             type="date"
             value={form.follow_up_date}
             onChange={(e) => set("follow_up_date", e.target.value)}
+          />
+        </Field>
+        <Field label="Follow-up time">
+          <Input
+            type="time"
+            value={form.follow_up_time}
+            onChange={(e) => set("follow_up_time", e.target.value)}
+            disabled={!form.follow_up_date}
           />
         </Field>
         <Field label="Notes" className="sm:col-span-2">

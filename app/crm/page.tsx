@@ -99,6 +99,50 @@ function ResponseInput({ client, onSave, disabled, boxed }: { client: Client; on
   );
 }
 
+// datetime-local inputs work in the browser's local wall-clock time, no
+// timezone suffix — round-trips through Date so callback_at (a real
+// timestamptz) displays/edits as local time without a manual offset dance.
+function toDatetimeLocalValue(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function fromDatetimeLocalValue(v: string): string | null {
+  if (!v) return null;
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+// Same "uncontrolled, save on blur/change" pattern as ResponseInput below
+// — no modal, quick inline edit right in the row.
+function CallbackInput({ client, onSave, disabled, boxed }: { client: Client; onSave: (value: string | null) => void; disabled?: boolean; boxed?: boolean }) {
+  return (
+    <input
+      key={client.id + (client.callback_at ?? "")}
+      type="datetime-local"
+      defaultValue={toDatetimeLocalValue(client.callback_at)}
+      disabled={disabled}
+      title="Schedule a WhatsApp callback reminder"
+      onBlur={(e) => {
+        const next = fromDatetimeLocalValue(e.target.value);
+        if (next !== client.callback_at) onSave(next);
+      }}
+      style={boxed ? {
+        width: "100%", border: "1px solid #E5E7EB", borderRadius: 6,
+        padding: "6px 10px", fontSize: 12, color: "#374151", background: "#F9FAFB",
+        outline: "none", cursor: disabled ? "not-allowed" : "text", boxSizing: "border-box",
+      } : {
+        border: "1px solid #E5E7EB", borderRadius: 6,
+        padding: "4px 6px", fontSize: 12, color: "#374151", background: "#fff",
+        outline: "none", cursor: disabled ? "not-allowed" : "text",
+      }}
+    />
+  );
+}
+
 function LeadScoreBadge({ score }: { score: LeadScore | null }) {
   if (!score) return <span style={{ color: "#D1D5DB", fontSize: 12 }}>—</span>;
   const cfg = LEAD_SCORE_CONFIG[score];
@@ -302,7 +346,7 @@ export default function CRMPage() {
   // pipeline does — status and/or a free-text response, with called_at
   // stamped to now() server-side so manually-called leads show accurate
   // "Called At" info too.
-  async function updateManual(client: Client, updates: { status?: CallStatus; response?: string }) {
+  async function updateManual(client: Client, updates: { status?: CallStatus; response?: string; callback_at?: string | null }) {
     setUpdatingId(client.id);
     try {
       const res = await fetch("/api/crm/manual-status", {
@@ -310,9 +354,17 @@ export default function CRMPage() {
         body: JSON.stringify({ clientId: client.id, ...updates }),
       });
       if (!res.ok) throw new Error();
-      const calledAt = new Date().toISOString();
+      // Scheduling a callback isn't a call outcome, so only stamp called_at
+      // locally when this update actually touched status/response — matches
+      // what the API route does server-side.
+      const touchedCallOutcome = updates.status !== undefined || updates.response !== undefined;
       setClients((prev) => prev.map((c) => c.id === client.id
-        ? { ...c, ...updates, response: updates.response !== undefined ? (updates.response || null) : c.response, called_at: calledAt }
+        ? {
+            ...c,
+            ...updates,
+            response: updates.response !== undefined ? (updates.response || null) : c.response,
+            called_at: touchedCallOutcome ? new Date().toISOString() : c.called_at,
+          }
         : c));
       showToast(`${client.name} updated`, "ok");
     } catch {
@@ -776,7 +828,7 @@ export default function CRMPage() {
                         style={{ width: 16, height: 16, cursor: "pointer" }}
                       />
                     </th>
-                    {["#", "Name", "Phone", "Status", "Score", "Response", "Called At", "Action"].map((h) => (
+                    {["#", "Name", "Phone", "Status", "Score", "Response", "Callback", "Called At", "Action"].map((h) => (
                       <th key={h} style={{ padding: "12px 16px", textAlign: "left", fontWeight: 700, color: "#374151", whiteSpace: "nowrap" }}>{h}</th>
                     ))}
                   </tr>
@@ -815,6 +867,13 @@ export default function CRMPage() {
                           client={client}
                           disabled={updatingId === client.id}
                           onSave={(value) => updateManual(client, { response: value })}
+                        />
+                      </td>
+                      <td style={{ padding: "11px 16px" }}>
+                        <CallbackInput
+                          client={client}
+                          disabled={updatingId === client.id}
+                          onSave={(value) => updateManual(client, { callback_at: value })}
                         />
                       </td>
                       <td style={{ padding: "11px 16px", color: "#9CA3AF", whiteSpace: "nowrap" }}>
@@ -946,6 +1005,15 @@ export default function CRMPage() {
                     disabled={updatingId === client.id}
                     onSave={(value) => updateManual(client, { response: value })}
                   />
+                  <div>
+                    <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "#6B7280", marginBottom: 3 }}>Callback</label>
+                    <CallbackInput
+                      client={client}
+                      boxed
+                      disabled={updatingId === client.id}
+                      onSave={(value) => updateManual(client, { callback_at: value })}
+                    />
+                  </div>
                   {client.called_at && (
                     <div style={{ fontSize: 11, color: "#9CA3AF" }}>
                       Called: {new Date(client.called_at).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
