@@ -58,18 +58,35 @@ export async function POST(req: NextRequest) {
 // call_logs.client_id is ON DELETE SET NULL (supabase/migrations/
 // 0001_ai_calling.sql:19,40) — Postgres handles both automatically. RLS
 // scopes the delete to the current tenant's own row.
+//
+// Two shapes: ?id=X (single, unchanged — the original per-row delete
+// button) or a JSON body { ids: string[] } for bulk selection deletes,
+// both go through the same tenant-scoped client and RLS policy. The bulk
+// path is one .in("id", ids) call, not N single-row requests.
 export async function DELETE(req: NextRequest) {
   const id = req.nextUrl.searchParams.get("id");
-  if (!id) {
-    return NextResponse.json({ error: "id is required" }, { status: 400 });
+  const supabase = await createServerSupabaseClient();
+
+  if (id) {
+    const { error } = await supabase.from("clients").delete().eq("id", id);
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+    return NextResponse.json({ ok: true });
   }
 
-  const supabase = await createServerSupabaseClient();
-  const { error } = await supabase.from("clients").delete().eq("id", id);
+  const body = await req.json().catch(() => null) as { ids?: string[] } | null;
+  const ids = body?.ids?.filter((v): v is string => typeof v === "string" && v.length > 0);
+
+  if (!ids || ids.length === 0) {
+    return NextResponse.json({ error: "id or ids is required" }, { status: 400 });
+  }
+
+  const { error } = await supabase.from("clients").delete().in("id", ids);
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, count: ids.length });
 }

@@ -109,6 +109,8 @@ export default function CRMPage() {
   const [addName, setAddName] = useState("");
   const [addPhone, setAddPhone] = useState("");
   const [adding, setAdding] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const notifiedRef = useRef<Set<string>>(new Set());
@@ -256,8 +258,64 @@ export default function CRMPage() {
       const res = await fetch(`/api/crm/clients?id=${encodeURIComponent(client.id)}`, { method: "DELETE" });
       if (!res.ok) throw new Error();
       setClients((prev) => prev.filter((c) => c.id !== client.id));
+      setSelectedIds((prev) => {
+        if (!prev.has(client.id)) return prev;
+        const next = new Set(prev);
+        next.delete(client.id);
+        return next;
+      });
       showToast(`${client.name} deleted`, "ok");
     } catch { showToast("Delete failed", "err"); }
+  }
+
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  // "Select all" scopes to the currently filtered/searched rows, not the
+  // whole client list — matching what's actually visible on screen.
+  function toggleSelectAllFiltered() {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      const allSelected = filtered.length > 0 && filtered.every((c) => next.has(c.id));
+      if (allSelected) {
+        filtered.forEach((c) => next.delete(c.id));
+      } else {
+        filtered.forEach((c) => next.add(c.id));
+      }
+      return next;
+    });
+  }
+
+  async function deleteSelected() {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    const confirmed = window.confirm(
+      `Delete ${ids.length} client${ids.length > 1 ? "s" : ""}? This cannot be undone.`
+    );
+    if (!confirmed) return;
+
+    setBulkDeleting(true);
+    try {
+      const res = await fetch("/api/crm/clients", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+      if (!res.ok) throw new Error();
+      const idSet = new Set(ids);
+      setClients((prev) => prev.filter((c) => !idSet.has(c.id)));
+      showToast(`${ids.length} client${ids.length > 1 ? "s" : ""} deleted`, "ok");
+      setSelectedIds(new Set());
+    } catch {
+      showToast("Bulk delete failed", "err");
+    } finally {
+      setBulkDeleting(false);
+    }
   }
 
   async function callAllPending() {
@@ -296,6 +354,9 @@ export default function CRMPage() {
     return matchStatus && matchSearch;
   });
 
+  const allFilteredSelected = filtered.length > 0 && filtered.every((c) => selectedIds.has(c.id));
+  const someFilteredSelected = filtered.some((c) => selectedIds.has(c.id));
+
   const stats = {
     total:         clients.length,
     pending:       clients.filter((c) => c.status === "pending").length,
@@ -322,7 +383,9 @@ export default function CRMPage() {
         .crm-card.call_back { border-left: 4px solid #F5A623; }
         .interested-row { background: #F0FDF4 !important; }
         .callback-row { background: #FFFBEB !important; }
+        .crm-bulkbar { bottom: 16px; }
         @media (max-width: 640px) {
+          .crm-bulkbar { bottom: calc(74px + env(safe-area-inset-bottom)); }
           .crm-stats { grid-template-columns: repeat(3, 1fr) !important; }
           .crm-stats .stat-hide { display: none; }
           .crm-actions { flex-direction: column; align-items: stretch; }
@@ -350,6 +413,40 @@ export default function CRMPage() {
           maxWidth: 360, margin: "0 auto",
         }}>
           {toast.msg}
+        </div>
+      )}
+
+      {/* Bulk action bar — floats above the bottom nav (mobile) / at the
+          bottom of the viewport (desktop) whenever any rows are selected. */}
+      {selectedIds.size > 0 && (
+        <div className="crm-bulkbar" style={{
+          position: "fixed", left: 16, right: 16, zIndex: 9997,
+          backgroundColor: "#0F172A", color: "#fff", borderRadius: 12,
+          padding: "12px 16px", boxShadow: "0 8px 24px rgba(0,0,0,0.3)",
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          gap: 12, maxWidth: 640, margin: "0 auto", flexWrap: "wrap",
+        }}>
+          <span style={{ fontSize: 14, fontWeight: 600 }}>
+            {selectedIds.size} selected
+          </span>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => setSelectedIds(new Set())} disabled={bulkDeleting}
+              style={{
+                backgroundColor: "transparent", color: "#CBD5E1", border: "1px solid #334155",
+                borderRadius: 7, padding: "8px 14px", fontSize: 13, fontWeight: 600,
+                cursor: bulkDeleting ? "not-allowed" : "pointer",
+              }}>
+              Clear selection
+            </button>
+            <button onClick={deleteSelected} disabled={bulkDeleting}
+              style={{
+                backgroundColor: "#991B1B", color: "#fff", border: "none",
+                borderRadius: 7, padding: "8px 14px", fontSize: 13, fontWeight: 700,
+                cursor: bulkDeleting ? "not-allowed" : "pointer", opacity: bulkDeleting ? 0.7 : 1,
+              }}>
+              {bulkDeleting ? "Deleting…" : `🗑️ Delete Selected`}
+            </button>
+          </div>
         </div>
       )}
 
@@ -595,6 +692,16 @@ export default function CRMPage() {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                 <thead>
                   <tr style={{ backgroundColor: "#F8FAFC", borderBottom: "2px solid #E2E8F0" }}>
+                    <th style={{ padding: "12px 16px", width: 1 }}>
+                      <input
+                        type="checkbox"
+                        checked={allFilteredSelected}
+                        ref={(el) => { if (el) el.indeterminate = someFilteredSelected && !allFilteredSelected; }}
+                        onChange={toggleSelectAllFiltered}
+                        aria-label="Select all"
+                        style={{ width: 16, height: 16, cursor: "pointer" }}
+                      />
+                    </th>
                     {["#", "Name", "Phone", "Status", "Score", "Response", "Called At", "Action"].map((h) => (
                       <th key={h} style={{ padding: "12px 16px", textAlign: "left", fontWeight: 700, color: "#374151", whiteSpace: "nowrap" }}>{h}</th>
                     ))}
@@ -605,6 +712,15 @@ export default function CRMPage() {
                     <tr key={client.id}
                       className={client.status === "interested" ? "interested-row" : client.status === "call_back" ? "callback-row" : ""}
                       style={{ borderBottom: "1px solid #F1F5F9" }}>
+                      <td style={{ padding: "11px 16px" }}>
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(client.id)}
+                          onChange={() => toggleSelect(client.id)}
+                          aria-label={`Select ${client.name}`}
+                          style={{ width: 16, height: 16, cursor: "pointer" }}
+                        />
+                      </td>
                       <td style={{ padding: "11px 16px", color: "#9CA3AF" }}>{idx + 1}</td>
                       <td style={{ padding: "11px 16px", fontWeight: 600, color: "#111827" }}>
                         {client.status === "interested" && <span style={{ marginRight: 6 }}>🔥</span>}
@@ -698,11 +814,29 @@ export default function CRMPage() {
             </div>
           ) : (
             <>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 4px 8px" }}>
+                <input
+                  type="checkbox"
+                  checked={allFilteredSelected}
+                  ref={(el) => { if (el) el.indeterminate = someFilteredSelected && !allFilteredSelected; }}
+                  onChange={toggleSelectAllFiltered}
+                  aria-label="Select all"
+                  style={{ width: 16, height: 16, cursor: "pointer" }}
+                />
+                <span style={{ fontSize: 12, color: "#6B7280", fontWeight: 600 }}>Select all</span>
+              </div>
               {filtered.map((client, idx) => (
                 <div key={client.id}
                   className={`crm-card ${client.status === "interested" ? "interested" : client.status === "call_back" ? "call_back" : ""}`}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(client.id)}
+                        onChange={() => toggleSelect(client.id)}
+                        aria-label={`Select ${client.name}`}
+                        style={{ width: 16, height: 16, cursor: "pointer", flexShrink: 0 }}
+                      />
                       <span style={{ fontSize: 11, color: "#9CA3AF", minWidth: 20 }}>{idx + 1}.</span>
                       <span style={{ fontWeight: 700, fontSize: 14, color: "#111827" }}>
                         {client.status === "interested" && "🔥 "}
