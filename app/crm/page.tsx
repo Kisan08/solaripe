@@ -37,16 +37,63 @@ const LEAD_SCORE_CONFIG: Record<LeadScore, { label: string; color: string; bg: s
 };
 const LEAD_SCORE_NONE_PRIORITY = 4; // unscored (call not yet ended) sinks to the bottom when sorting by score
 
-function StatusBadge({ status }: { status: CallStatus }) {
+// A live <select> styled to read the same as the old read-only status
+// badge, so a manual caller can update a client's status inline — right
+// in the table row, no modal — while the AI pipeline and Gigi keep
+// setting it exactly as before through their own existing paths.
+function StatusSelect({ status, onChange, disabled }: { status: CallStatus; onChange: (s: CallStatus) => void; disabled?: boolean }) {
   const cfg = STATUS_CONFIG[status];
   return (
-    <span style={{
-      backgroundColor: cfg.bg, color: cfg.color,
-      padding: "2px 8px", borderRadius: 999,
-      fontSize: 11, fontWeight: 600, whiteSpace: "nowrap",
-    }}>
-      {cfg.label}
-    </span>
+    <select
+      value={status}
+      disabled={disabled}
+      onChange={(e) => onChange(e.target.value as CallStatus)}
+      title="Update call status"
+      style={{
+        backgroundColor: cfg.bg, color: cfg.color,
+        padding: "3px 6px", borderRadius: 999, border: "1px solid transparent",
+        fontSize: 11, fontWeight: 600, whiteSpace: "nowrap",
+        cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.6 : 1,
+      }}
+    >
+      {ALL_STATUSES.map((s) => (
+        <option key={s} value={s} style={{ color: "#111827", backgroundColor: "#fff" }}>
+          {STATUS_CONFIG[s].label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+// Uncontrolled by design: the key ties each mount to the row's current
+// server value, so a manual caller's in-progress typing survives the 5s
+// auto-refresh poll (which only ever produces a new key once THIS save
+// itself lands) without needing a separate draft-state layer. Saves on
+// blur, same "commit when you're done" feel as filling in a normal form.
+function ResponseInput({ client, onSave, disabled, boxed }: { client: Client; onSave: (value: string) => void; disabled?: boolean; boxed?: boolean }) {
+  return (
+    <input
+      key={client.id + (client.response ?? "")}
+      type="text"
+      defaultValue={client.response ?? ""}
+      placeholder="Log what was said…"
+      disabled={disabled}
+      onBlur={(e) => {
+        const value = e.target.value.trim();
+        if (value !== (client.response ?? "")) onSave(value);
+      }}
+      style={boxed ? {
+        width: "100%", border: "1px solid #E5E7EB", borderRadius: 6,
+        padding: "6px 10px", fontSize: 12, color: "#374151", background: "#F9FAFB",
+        outline: "none", cursor: disabled ? "not-allowed" : "text", boxSizing: "border-box",
+      } : {
+        width: "100%", border: "1px solid transparent", borderRadius: 6,
+        padding: "4px 6px", fontSize: 12, color: "#374151", background: "transparent",
+        outline: "none", cursor: disabled ? "not-allowed" : "text",
+      }}
+      onFocus={(e) => { if (!boxed) { e.target.style.border = "1px solid #D1D5DB"; e.target.style.background = "#fff"; } }}
+      onBlurCapture={(e) => { if (!boxed) { e.currentTarget.style.border = "1px solid transparent"; e.currentTarget.style.background = "transparent"; } }}
+    />
   );
 }
 
@@ -111,6 +158,7 @@ export default function CRMPage() {
   const [adding, setAdding] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const notifiedRef = useRef<Set<string>>(new Set());
@@ -246,6 +294,30 @@ export default function CRMPage() {
       setClients((prev) => prev.map((c) => c.id === client.id ? { ...c, status: "pending", response: null, called_at: null } : c));
       showToast(`${client.name} reset to pending`, "ok");
     } catch { showToast("Reset failed", "err"); }
+  }
+
+  // Lets a person doing manual calling log an outcome the same way the AI
+  // pipeline does — status and/or a free-text response, with called_at
+  // stamped to now() server-side so manually-called leads show accurate
+  // "Called At" info too.
+  async function updateManual(client: Client, updates: { status?: CallStatus; response?: string }) {
+    setUpdatingId(client.id);
+    try {
+      const res = await fetch("/api/crm/manual-status", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientId: client.id, ...updates }),
+      });
+      if (!res.ok) throw new Error();
+      const calledAt = new Date().toISOString();
+      setClients((prev) => prev.map((c) => c.id === client.id
+        ? { ...c, ...updates, response: updates.response !== undefined ? (updates.response || null) : c.response, called_at: calledAt }
+        : c));
+      showToast(`${client.name} updated`, "ok");
+    } catch {
+      showToast("Update failed", "err");
+    } finally {
+      setUpdatingId(null);
+    }
   }
 
   async function deleteOne(client: Client) {
@@ -728,9 +800,21 @@ export default function CRMPage() {
                         {client.name}
                       </td>
                       <td style={{ padding: "11px 16px", color: "#374151", whiteSpace: "nowrap" }}>{formatPhone(client.phone)}</td>
-                      <td style={{ padding: "11px 16px" }}><StatusBadge status={client.status} /></td>
+                      <td style={{ padding: "11px 16px" }}>
+                        <StatusSelect
+                          status={client.status}
+                          disabled={updatingId === client.id}
+                          onChange={(s) => updateManual(client, { status: s })}
+                        />
+                      </td>
                       <td style={{ padding: "11px 16px" }}><LeadScoreBadge score={client.lead_score} /></td>
-                      <td style={{ padding: "11px 16px", color: "#6B7280", maxWidth: 200 }}>{client.response ?? "—"}</td>
+                      <td style={{ padding: "11px 16px", color: "#6B7280", maxWidth: 200 }}>
+                        <ResponseInput
+                          client={client}
+                          disabled={updatingId === client.id}
+                          onSave={(value) => updateManual(client, { response: value })}
+                        />
+                      </td>
                       <td style={{ padding: "11px 16px", color: "#9CA3AF", whiteSpace: "nowrap" }}>
                         {client.called_at ? new Date(client.called_at).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—"}
                       </td>
@@ -846,15 +930,20 @@ export default function CRMPage() {
                     </div>
                     <div style={{ display: "flex", gap: 6 }}>
                       <LeadScoreBadge score={client.lead_score} />
-                      <StatusBadge status={client.status} />
+                      <StatusSelect
+                        status={client.status}
+                        disabled={updatingId === client.id}
+                        onChange={(s) => updateManual(client, { status: s })}
+                      />
                     </div>
                   </div>
                   <div style={{ fontSize: 13, color: "#374151" }}>📱 {formatPhone(client.phone)}</div>
-                  {client.response && (
-                    <div style={{ fontSize: 12, color: "#6B7280", backgroundColor: "#F9FAFB", padding: "6px 10px", borderRadius: 6 }}>
-                      {client.response}
-                    </div>
-                  )}
+                  <ResponseInput
+                    client={client}
+                    boxed
+                    disabled={updatingId === client.id}
+                    onSave={(value) => updateManual(client, { response: value })}
+                  />
                   {client.called_at && (
                     <div style={{ fontSize: 11, color: "#9CA3AF" }}>
                       Called: {new Date(client.called_at).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
