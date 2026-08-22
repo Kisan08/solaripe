@@ -374,26 +374,6 @@ export default function CRMPage() {
     }
   }
 
-  async function deleteOne(client: Client) {
-    const confirmed = window.confirm(
-      `Delete ${client.name}? This removes them from the AI Calling list along with their call history. This can't be undone.`
-    );
-    if (!confirmed) return;
-
-    try {
-      const res = await fetch(`/api/crm/clients?id=${encodeURIComponent(client.id)}`, { method: "DELETE" });
-      if (!res.ok) throw new Error();
-      setClients((prev) => prev.filter((c) => c.id !== client.id));
-      setSelectedIds((prev) => {
-        if (!prev.has(client.id)) return prev;
-        const next = new Set(prev);
-        next.delete(client.id);
-        return next;
-      });
-      showToast(`${client.name} deleted`, "ok");
-    } catch { showToast("Delete failed", "err"); }
-  }
-
   function toggleSelect(id: string) {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -926,10 +906,6 @@ export default function CRMPage() {
                               ↺
                             </button>
                           )}
-                          <button onClick={() => deleteOne(client)} title="Delete client"
-                            style={{ backgroundColor: "#FEF2F2", color: "#991B1B", border: "1px solid #FEE2E2", borderRadius: 6, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-                            🗑️
-                          </button>
                         </div>
                       </td>
                     </tr>
@@ -1061,10 +1037,6 @@ export default function CRMPage() {
                         ↺
                       </button>
                     )}
-                    <button onClick={() => deleteOne(client)} title="Delete client"
-                      style={{ backgroundColor: "#FEF2F2", color: "#991B1B", border: "1px solid #FEE2E2", borderRadius: 7, padding: "9px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                      🗑️
-                    </button>
                   </div>
                 </div>
               ))}
