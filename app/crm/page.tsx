@@ -14,6 +14,8 @@ interface Client {
   called_at: string | null;
   created_at: string;
   lead_score: LeadScore | null;
+  callback_at: string | null;
+  reminder_sent_at: string | null;
 }
 
 const STATUS_CONFIG: Record<CallStatus, { label: string; color: string; bg: string; priority: number }> = {

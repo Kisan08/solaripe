@@ -48,6 +48,8 @@ export interface Lead {
   stage: LeadStage
   notes: string | null
   follow_up_date: string | null
+  follow_up_time: string | null
+  reminder_sent_at: string | null
   created_at: string
 }
 

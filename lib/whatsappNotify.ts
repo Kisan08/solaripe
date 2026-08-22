@@ -177,6 +177,21 @@ ${notesLine}
 This lead is waiting on you.`;
 }
 
+// Used by app/api/cron/send-reminders/route.ts — a precise, time-of-day
+// reminder for one lead or client, distinct from formatFollowUpReminderMessage
+// above (which is a "due sometime today" digest with no specific time).
+export function formatScheduledReminderMessage(params: {
+  name: string;
+  phone: string | null;
+  scheduledFor: Date;
+}): string {
+  const time = new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: true,
+  }).format(params.scheduledFor);
+  return `⏰ Reminder: follow up with ${params.name} — ${params.phone ?? "(no number)"} — scheduled for ${time}`;
+}
+
 // One grouped message per tenant, not one per stuck project — this is a
 // digest, not a spam blast. Purely a nudge to go check the actual
 // government portal; nothing here reflects live subsidy/DISCOM status.
