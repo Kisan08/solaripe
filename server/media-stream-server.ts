@@ -61,11 +61,43 @@ if (!process.env.ELEVENLABS_API_KEY) {
 
 // Single hardcoded system prompt for this POC — real prompt engineering
 // (persona, company context, CRM data) is a later phase, not this one.
-const SYSTEM_PROMPT =
-  "You are a helpful assistant. Respond briefly (1-2 sentences) in Hindi/Hinglish, matching whatever mix of Hindi and English the caller used.";
+// const SYSTEM_PROMPT =
+//   "You are a helpful assistant. Respond briefly (1-2 sentences) in Hindi/Hinglish, matching whatever mix of Hindi and English the caller used.";
+
+const SYSTEM_PROMPT = `You are Kajal, a friendly telecalling executive at Omkar Power Solutions, a solar EPC company. You are calling a potential customer who enquired about solar panels.
+
+YOUR GOAL: Get exactly two pieces of information — (1) their city/area, and (2) their average monthly electricity bill (or units consumed) — then close the call by telling them our team will reach out with a personalized quote.
+
+RULES — follow strictly:
+- You have already greeted the caller once at the start of this call — do NOT reintroduce yourself or greet again on later turns. Stay consistent: your name is always Kajal, never anything else.
+- Speak in Hindi/Hinglish, matching the caller's own mix of Hindi and English.
+- Keep every response to 1 short sentence. This is a phone call, not a chat — be brief and natural, like a real telecaller, not an assistant explaining things.
+- Start with a warm, brief greeting and introduce yourself and the company in your very first line.
+- Ask for city/area FIRST. Once given, ask for their average monthly electricity bill (or units consumed) NEXT.
+- Do NOT ask about roof type, roof size, household size, appliance load, shading, or any other technical detail — those are covered later during an in-person site visit, not this call.
+- If the caller asks a pricing or technical question you don't have specifics for, don't guess — just say our team will explain everything in detail when they call back.
+- Once you have BOTH city and electricity bill, immediately close the call: thank them, confirm our team will call them back shortly with a quote, and end warmly. Do not keep the conversation going after this.
+- If the caller is not interested, or asks to not be called, acknowledge politely and end the call — don't push.
+- Target: close this call in 4-6 exchanges total, not more.`;
 
 function ts(): string {
   return new Date().toISOString().slice(11, 23); // HH:MM:SS.mmm
+}
+
+// Keep system message + last N exchanges (user+assistant pairs) so token
+// usage doesn't grow unbounded on a long call — same discipline as Gigi's
+// fullHistory.slice(-8) trimming (lib/gigi/groq.ts's caller), just a higher
+// cap since a call has no widget-side history to also fall back on.
+const MAX_HISTORY_EXCHANGES = 12;
+
+// Mutates `history` in place: appends `message`, then trims down to the
+// system message (index 0) plus the most recent MAX_HISTORY_EXCHANGES*2
+// messages, dropping the oldest exchanges first.
+function appendToHistory(history: ChatMessage[], message: ChatMessage): void {
+  history.push(message);
+  const maxRest = MAX_HISTORY_EXCHANGES * 2;
+  const excess = history.length - 1 - maxRest;
+  if (excess > 0) history.splice(1, excess);
 }
 
 const httpServer = createServer();
@@ -78,6 +110,12 @@ wss.on("connection", (twilioWs) => {
   let callSid: string | null = null;
   let firstAudioReceived = false;
   let firstAudioSentBack = false;
+
+  // Per-connection conversation history — one array per call, scoped to
+  // this closure, never shared across calls. Seeded with just the system
+  // message; each turn appends the user utterance and the assistant's
+  // reply so later turns have full context instead of starting fresh.
+  const conversationHistory: ChatMessage[] = [{ role: "system", content: SYSTEM_PROMPT }];
 
   // ── Deepgram real-time STT connection, one per call ──────────────────
   // language=multi enables Nova-2's multilingual code-switching (needed
@@ -126,10 +164,7 @@ wss.on("connection", (twilioWs) => {
     const llmStart = Date.now();
     console.log(`[${ts()}] [llm] request start`);
 
-    const messages: ChatMessage[] = [
-      { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: userText },
-    ];
+    appendToHistory(conversationHistory, { role: "user", content: userText });
 
     let sentenceBuffer = "";
     let firstTtsChunkKicked = false;
@@ -153,7 +188,7 @@ wss.on("connection", (twilioWs) => {
     };
 
     try {
-      await streamGroqChat(messages, async (delta) => {
+      const fullReply = await streamGroqChat(conversationHistory, async (delta) => {
         sentenceBuffer += delta;
         // Flush on a sentence-ish boundary (Hindi/Devanagari full stop
         // included) so TTS can start speaking before the whole reply has
@@ -166,6 +201,7 @@ wss.on("connection", (twilioWs) => {
         }
       });
       await flushSentence(sentenceBuffer); // whatever's left after the stream ends
+      appendToHistory(conversationHistory, { role: "assistant", content: fullReply });
       console.log(`[${ts()}] [llm] response end (+${Date.now() - llmStart}ms total)`);
     } catch (err) {
       console.error(`[${ts()}] [llm] error`, err);
