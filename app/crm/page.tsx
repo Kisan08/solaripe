@@ -1,11 +1,14 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
+import { motion } from "framer-motion";
+import { Upload, Plus, Search, Phone, Download } from "lucide-react";
 import { CALL_STATUSES, type CallStatus } from "@/lib/types";
-import { cleanPhone } from "@/lib/phone";
+import { CrmDashboardHeader } from "@/components/crm/CrmDashboardHeader";
+import { CrmTable, formatPhone } from "@/components/crm/CrmTable";
 
-type LeadScore = "hot" | "warm" | "cold";
+export type LeadScore = "hot" | "warm" | "cold";
 
-interface Client {
+export interface Client {
   id: string;
   name: string;
   phone: string;
@@ -18,175 +21,17 @@ interface Client {
   reminder_sent_at: string | null;
 }
 
-const STATUS_CONFIG: Record<CallStatus, { label: string; color: string; bg: string; priority: number }> = {
-  interested:     { label: "Interested ✅",  color: "#065F46", bg: "#D1FAE5", priority: 1 },
-  call_back:      { label: "Call Back 🔁",   color: "#92400E", bg: "#FEF3C7", priority: 2 },
-  calling:        { label: "Calling…",       color: "#1A4F8A", bg: "#EFF6FF", priority: 3 },
-  pending:        { label: "Pending",        color: "#6B7280", bg: "#F3F4F6", priority: 4 },
-  no_answer:      { label: "No Answer",      color: "#6B7280", bg: "#F3F4F6", priority: 5 },
-  failed:         { label: "Failed",         color: "#7C3AED", bg: "#EDE9FE", priority: 6 },
-  not_interested: { label: "Not Interested", color: "#991B1B", bg: "#FEE2E2", priority: 7 },
+const STATUS_PRIORITY: Record<CallStatus, number> = {
+  interested: 1, call_back: 2, calling: 3, pending: 4, no_answer: 5, failed: 6, not_interested: 7,
 };
 
-const ALL_STATUSES: CallStatus[] = CALL_STATUSES;
-
-// Set once, server-side, when a call ends (lib/calling/leadScore.ts) —
-// this table is display-only, no editing here.
-const LEAD_SCORE_CONFIG: Record<LeadScore, { label: string; color: string; bg: string; priority: number }> = {
-  hot:  { label: "🔥 Hot",  color: "#991B1B", bg: "#FEE2E2", priority: 1 },
-  warm: { label: "🟡 Warm", color: "#92400E", bg: "#FEF3C7", priority: 2 },
-  cold: { label: "🔵 Cold", color: "#1E40AF", bg: "#DBEAFE", priority: 3 },
-};
+const LEAD_SCORE_PRIORITY: Record<LeadScore, number> = { hot: 1, warm: 2, cold: 3 };
 const LEAD_SCORE_NONE_PRIORITY = 4; // unscored (call not yet ended) sinks to the bottom when sorting by score
 
-// A live <select> styled to read the same as the old read-only status
-// badge, so a manual caller can update a client's status inline — right
-// in the table row, no modal — while the AI pipeline and Gigi keep
-// setting it exactly as before through their own existing paths.
-function StatusSelect({ status, onChange, disabled }: { status: CallStatus; onChange: (s: CallStatus) => void; disabled?: boolean }) {
-  const cfg = STATUS_CONFIG[status];
-  return (
-    <select
-      value={status}
-      disabled={disabled}
-      onChange={(e) => onChange(e.target.value as CallStatus)}
-      title="Update call status"
-      style={{
-        backgroundColor: cfg.bg, color: cfg.color,
-        padding: "3px 6px", borderRadius: 999, border: "1px solid transparent",
-        fontSize: 11, fontWeight: 600, whiteSpace: "nowrap",
-        cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.6 : 1,
-      }}
-    >
-      {ALL_STATUSES.map((s) => (
-        <option key={s} value={s} style={{ color: "#111827", backgroundColor: "#fff" }}>
-          {STATUS_CONFIG[s].label}
-        </option>
-      ))}
-    </select>
-  );
-}
-
-// Uncontrolled by design: the key ties each mount to the row's current
-// server value, so a manual caller's in-progress typing survives the 5s
-// auto-refresh poll (which only ever produces a new key once THIS save
-// itself lands) without needing a separate draft-state layer. Saves on
-// blur, same "commit when you're done" feel as filling in a normal form.
-function ResponseInput({ client, onSave, disabled, boxed }: { client: Client; onSave: (value: string) => void; disabled?: boolean; boxed?: boolean }) {
-  return (
-    <input
-      key={client.id + (client.response ?? "")}
-      type="text"
-      defaultValue={client.response ?? ""}
-      placeholder="Log what was said…"
-      disabled={disabled}
-      onBlur={(e) => {
-        const value = e.target.value.trim();
-        if (value !== (client.response ?? "")) onSave(value);
-      }}
-      style={boxed ? {
-        width: "100%", border: "1px solid #E5E7EB", borderRadius: 6,
-        padding: "6px 10px", fontSize: 12, color: "#374151", background: "#F9FAFB",
-        outline: "none", cursor: disabled ? "not-allowed" : "text", boxSizing: "border-box",
-      } : {
-        width: "100%", border: "1px solid transparent", borderRadius: 6,
-        padding: "4px 6px", fontSize: 12, color: "#374151", background: "transparent",
-        outline: "none", cursor: disabled ? "not-allowed" : "text",
-      }}
-      onFocus={(e) => { if (!boxed) { e.target.style.border = "1px solid #D1D5DB"; e.target.style.background = "#fff"; } }}
-      onBlurCapture={(e) => { if (!boxed) { e.currentTarget.style.border = "1px solid transparent"; e.currentTarget.style.background = "transparent"; } }}
-    />
-  );
-}
-
-// Both directions are hard-pinned to IST (Asia/Kolkata), NOT the device's
-// own configured timezone — this app is India-only, and the picker's raw
-// value always MEANS India wall-clock time. The previous version used
-// `new Date(v)`/`d.getHours()` etc., which parse and read back in
-// whatever timezone the browser's OS happens to be set to — on any device
-// not itself set to IST, "7:43 PM" typed by the user got silently saved
-// as 7:43 PM UTC (5.5 hours off from what was actually meant), the same
-// bug cron/send-reminders' `${date}T${time}+05:30` construction already
-// avoids for leads.follow_up_date/follow_up_time. Same fix here: always
-// go through an explicit +05:30 offset (save) / Asia/Kolkata formatter
-// (display) instead of ever touching a device-local Date getter.
-function toDatetimeLocalValue(iso: string | null): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Kolkata",
-    year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
-  }).formatToParts(d);
-  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "00";
-  return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`;
-}
-
-function fromDatetimeLocalValue(v: string): string | null {
-  if (!v) return null;
-  const ms = Date.parse(`${v}:00+05:30`);
-  return Number.isNaN(ms) ? null : new Date(ms).toISOString();
-}
-
-// Same "uncontrolled, save on blur/change" pattern as ResponseInput below
-// — no modal, quick inline edit right in the row.
-function CallbackInput({ client, onSave, disabled, boxed }: { client: Client; onSave: (value: string | null) => void; disabled?: boolean; boxed?: boolean }) {
-  return (
-    <input
-      key={client.id + (client.callback_at ?? "")}
-      type="datetime-local"
-      defaultValue={toDatetimeLocalValue(client.callback_at)}
-      disabled={disabled}
-      title="Schedule a WhatsApp callback reminder"
-      onBlur={(e) => {
-        const next = fromDatetimeLocalValue(e.target.value);
-        if (next !== client.callback_at) onSave(next);
-      }}
-      style={boxed ? {
-        width: "100%", border: "1px solid #E5E7EB", borderRadius: 6,
-        padding: "6px 10px", fontSize: 12, color: "#374151", background: "#F9FAFB",
-        outline: "none", cursor: disabled ? "not-allowed" : "text", boxSizing: "border-box",
-      } : {
-        border: "1px solid #E5E7EB", borderRadius: 6,
-        padding: "4px 6px", fontSize: 12, color: "#374151", background: "#fff",
-        outline: "none", cursor: disabled ? "not-allowed" : "text",
-      }}
-    />
-  );
-}
-
-function LeadScoreBadge({ score }: { score: LeadScore | null }) {
-  if (!score) return <span style={{ color: "#D1D5DB", fontSize: 12 }}>—</span>;
-  const cfg = LEAD_SCORE_CONFIG[score];
-  return (
-    <span style={{
-      backgroundColor: cfg.bg, color: cfg.color,
-      padding: "2px 8px", borderRadius: 999,
-      fontSize: 11, fontWeight: 600, whiteSpace: "nowrap",
-    }}>
-      {cfg.label}
-    </span>
-  );
-}
-
-function formatPhone(p: string) {
-  const d = p.replace(/\D/g, "");
-  if (d.length === 10) return `+91 ${d.slice(0, 5)} ${d.slice(5)}`;
-  if (d.length === 12 && d.startsWith("91")) return `+91 ${d.slice(2, 7)} ${d.slice(7)}`;
-  return p;
-}
-
-// Same normalization make-call/route.ts uses server-side for the Twilio
-// `to` field (via the shared cleanPhone) — kept identical here so a manual
-// dial and an AI call always resolve to the same number. Returns null
-// for anything that isn't a genuine 10-digit Indian mobile number (too
-// short, missing, garbled) instead of producing a malformed tel: link —
-// callers must handle the null case rather than rendering a broken link.
-function telHref(p: string): string | null {
-  const cleaned = cleanPhone(p);
-  return cleaned ? `tel:+91${cleaned}` : null;
-}
+const STATUS_LABELS: Record<CallStatus, string> = {
+  interested: "Interested ✅", call_back: "Call Back 🔁", calling: "Calling…",
+  pending: "Pending", no_answer: "No Answer", failed: "Failed", not_interested: "Not Interested",
+};
 
 function exportToCSV(clients: Client[]) {
   const header = ["Name", "Phone", "Status", "Response", "Called At", "Created At"];
@@ -460,11 +305,11 @@ export default function CRMPage() {
   // status, for scanning the whole list for buying signals at a glance.
   const sorted = [...clients].sort((a, b) => {
     if (sortBy === "score") {
-      const pa = a.lead_score ? LEAD_SCORE_CONFIG[a.lead_score].priority : LEAD_SCORE_NONE_PRIORITY;
-      const pb = b.lead_score ? LEAD_SCORE_CONFIG[b.lead_score].priority : LEAD_SCORE_NONE_PRIORITY;
+      const pa = a.lead_score ? LEAD_SCORE_PRIORITY[a.lead_score] : LEAD_SCORE_NONE_PRIORITY;
+      const pb = b.lead_score ? LEAD_SCORE_PRIORITY[b.lead_score] : LEAD_SCORE_NONE_PRIORITY;
       return pa - pb;
     }
-    return STATUS_CONFIG[a.status].priority - STATUS_CONFIG[b.status].priority;
+    return STATUS_PRIORITY[a.status] - STATUS_PRIORITY[b.status];
   });
 
   const filtered = sorted.filter((c) => {
@@ -489,39 +334,10 @@ export default function CRMPage() {
   const showReminder = !reminderDismissed && (interestedLeads.length > 0 || callBackLeads.length > 0);
 
   return (
-    <div style={{ minHeight: "100vh", backgroundColor: "#F1F5F9" }}>
-
-      <style>{`
-        .crm-stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 16px; }
-        .crm-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; background: #fff; border-radius: 10px; padding: 14px 16px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); margin-bottom: 16px; position: relative; z-index: 2; }
-        .crm-search { border: 1px solid #D1D5DB; border-radius: 7px; padding: 8px 12px; font-size: 16px; width: 200px; outline: none; position: relative; z-index: 1; }
-        .crm-select { border: 1px solid #D1D5DB; border-radius: 7px; padding: 8px 10px; font-size: 16px; cursor: pointer; background: #fff; color: #374151; -webkit-appearance: menulist; position: relative; z-index: 1; }
-        .crm-select option { color: #374151; background: #fff; }
-        .crm-card { background: #fff; border-radius: 10px; padding: 14px 16px; margin-bottom: 10px; box-shadow: 0 1px 4px rgba(0,0,0,0.06); display: grid; gap: 8px; }
-        .crm-card.interested { border-left: 4px solid #065F46; background: #F0FDF4; }
-        .crm-card.call_back { border-left: 4px solid #F5A623; }
-        .interested-row { background: #F0FDF4 !important; }
-        .callback-row { background: #FFFBEB !important; }
-        .crm-bulkbar { bottom: 16px; }
-        @media (max-width: 640px) {
-          .crm-bulkbar { bottom: calc(74px + env(safe-area-inset-bottom)); }
-          .crm-stats { grid-template-columns: repeat(3, 1fr) !important; }
-          .crm-stats .stat-hide { display: none; }
-          .crm-actions { flex-direction: column; align-items: stretch; }
-          .crm-search { width: 100% !important; }
-          .crm-select { width: 100%; }
-          .crm-btn { width: 100%; text-align: center; justify-content: center; }
-          .crm-spacer { display: none; }
-          .crm-desktop-table { display: none !important; }
-          .crm-mobile-list { display: block !important; }
-        }
-        @media (min-width: 641px) {
-          .crm-mobile-list { display: none !important; }
-          .crm-desktop-table { display: block !important; }
-          .crm-mobile-logo { display: none !important; }
-        }
-      `}</style>
-
+    <div
+      className="min-h-screen px-3 py-4 sm:px-6 sm:py-6"
+      style={{ background: "linear-gradient(180deg, #F4F7FB 0%, #EEF3F9 100%)" }}
+    >
       {/* Toast */}
       {toast && (
         <div style={{
@@ -538,32 +354,19 @@ export default function CRMPage() {
       {/* Bulk action bar — floats above the bottom nav (mobile) / at the
           bottom of the viewport (desktop) whenever any rows are selected. */}
       {selectedIds.size > 0 && (
-        <div className="crm-bulkbar" style={{
-          position: "fixed", left: 16, right: 16, zIndex: 9997,
-          backgroundColor: "#0F172A", color: "#fff", borderRadius: 12,
-          padding: "12px 16px", boxShadow: "0 8px 24px rgba(0,0,0,0.3)",
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-          gap: 12, maxWidth: 640, margin: "0 auto", flexWrap: "wrap",
-        }}>
-          <span style={{ fontSize: 14, fontWeight: 600 }}>
-            {selectedIds.size} selected
-          </span>
-          <div style={{ display: "flex", gap: 8 }}>
+        <div
+          className="fixed inset-x-4 z-[9997] mx-auto flex max-w-xl flex-wrap items-center justify-between gap-3 rounded-2xl px-4 py-3 text-white shadow-2xl sm:bottom-4"
+          style={{ background: "linear-gradient(135deg, #0C447C, #071C33)", bottom: "calc(74px + env(safe-area-inset-bottom))" }}
+        >
+          <span className="text-sm font-semibold">{selectedIds.size} selected</span>
+          <div className="flex gap-2">
             <button onClick={() => setSelectedIds(new Set())} disabled={bulkDeleting}
-              style={{
-                backgroundColor: "transparent", color: "#CBD5E1", border: "1px solid #334155",
-                borderRadius: 7, padding: "8px 14px", fontSize: 13, fontWeight: 600,
-                cursor: bulkDeleting ? "not-allowed" : "pointer",
-              }}>
+              className="rounded-lg border border-white/25 px-3.5 py-2 text-[13px] font-semibold text-white/80 disabled:cursor-not-allowed">
               Clear selection
             </button>
             <button onClick={deleteSelected} disabled={bulkDeleting}
-              style={{
-                backgroundColor: "#991B1B", color: "#fff", border: "none",
-                borderRadius: 7, padding: "8px 14px", fontSize: 13, fontWeight: 700,
-                cursor: bulkDeleting ? "not-allowed" : "pointer", opacity: bulkDeleting ? 0.7 : 1,
-              }}>
-              {bulkDeleting ? "Deleting…" : `🗑️ Delete Selected`}
+              className="rounded-lg bg-[#991B1B] px-3.5 py-2 text-[13px] font-bold text-white disabled:cursor-not-allowed disabled:opacity-70">
+              {bulkDeleting ? "Deleting…" : "🗑️ Delete Selected"}
             </button>
           </div>
         </div>
@@ -571,49 +374,29 @@ export default function CRMPage() {
 
       {/* Add Client modal */}
       {showAddModal && (
-        <div style={{
-          position: "fixed", inset: 0, zIndex: 10000,
-          backgroundColor: "rgba(15,23,42,0.4)",
-          display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
-        }} onClick={() => !adding && setShowAddModal(false)}>
-          <div onClick={(e) => e.stopPropagation()} style={{
-            backgroundColor: "#fff", borderRadius: 14, padding: 20,
-            width: "100%", maxWidth: 360, boxShadow: "0 12px 32px rgba(0,0,0,0.25)",
-          }}>
-            <h2 style={{ fontSize: 16, fontWeight: 700, color: "#0F172A", margin: "0 0 14px" }}>Add Client</h2>
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-[#0F172A]/40 p-5"
+          onClick={() => !adding && setShowAddModal(false)}>
+          <div onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-[360px] rounded-2xl bg-white p-5 shadow-2xl">
+            <h2 className="mb-3.5 text-base font-bold text-[#0F172A]">Add Client</h2>
 
-            <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#6B7280", marginBottom: 4 }}>Name</label>
+            <label className="mb-1 block text-xs font-semibold text-[#6B7280]">Name</label>
             <input type="text" value={addName} onChange={(e) => setAddName(e.target.value)}
               placeholder="Client name" autoFocus
-              style={{
-                width: "100%", padding: "9px 12px", fontSize: 16, borderRadius: 8,
-                border: "1px solid #E2E8F0", marginBottom: 12, boxSizing: "border-box",
-              }} />
+              className="mb-3 w-full rounded-lg border border-[#E2E8F0] px-3 py-2.5 text-base" />
 
-            <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#6B7280", marginBottom: 4 }}>Phone</label>
+            <label className="mb-1 block text-xs font-semibold text-[#6B7280]">Phone</label>
             <input type="tel" value={addPhone} onChange={(e) => setAddPhone(e.target.value)}
               placeholder="10-digit mobile number"
-              style={{
-                width: "100%", padding: "9px 12px", fontSize: 16, borderRadius: 8,
-                border: "1px solid #E2E8F0", marginBottom: 18, boxSizing: "border-box",
-              }} />
+              className="mb-4.5 w-full rounded-lg border border-[#E2E8F0] px-3 py-2.5 text-base" />
 
-            <div style={{ display: "flex", gap: 8 }}>
+            <div className="flex gap-2">
               <button onClick={() => setShowAddModal(false)} disabled={adding}
-                style={{
-                  flex: 1, backgroundColor: "#F3F4F6", color: "#374151", border: "none",
-                  borderRadius: 8, padding: "10px", fontSize: 13, fontWeight: 700,
-                  cursor: adding ? "not-allowed" : "pointer",
-                }}>
+                className="flex-1 rounded-lg bg-[#F3F4F6] py-2.5 text-[13px] font-bold text-[#374151] disabled:cursor-not-allowed">
                 Cancel
               </button>
               <button onClick={handleAddClient} disabled={adding || !addName.trim() || !addPhone.trim()}
-                style={{
-                  flex: 1, backgroundColor: "#1A4F8A", color: "#fff", border: "none",
-                  borderRadius: 8, padding: "10px", fontSize: 13, fontWeight: 700,
-                  cursor: adding || !addName.trim() || !addPhone.trim() ? "not-allowed" : "pointer",
-                  opacity: adding || !addName.trim() || !addPhone.trim() ? 0.6 : 1,
-                }}>
+                className="flex-1 rounded-lg bg-[#0C447C] py-2.5 text-[13px] font-bold text-white disabled:cursor-not-allowed disabled:opacity-60">
                 {adding ? "Adding…" : "Add"}
               </button>
             </div>
@@ -621,445 +404,106 @@ export default function CRMPage() {
         </div>
       )}
 
-      {/* Page header — matches the plain title + subtitle pattern used on
-          other pages (Dashboard, Leads, Projects) instead of the old
-          hardcoded blue branding bar with its own "Home" link. Navigation
-          now lives entirely in the shared sidebar. */}
-      <div style={{ padding: "24px 20px 16px", borderBottom: "1px solid #E2E8F0", background: "#fff" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <img src="/brand/amsu-mark.png" alt="Amsu" className="crm-mobile-logo" style={{ width: 28, height: 28, objectFit: "contain", flexShrink: 0 }} />
-          <h1 style={{ fontSize: 22, fontWeight: 700, color: "#0F172A", margin: 0 }}>AI Calling</h1>
-        </div>
-        <p style={{ fontSize: 13, color: "#64748B", margin: "4px 0 0" }}>Import leads and let the AI caller work through your pending list.</p>
-      </div>
+      {/* Large rounded outer frame — the "premium shell" feel, contained
+          entirely within this page's own content (the global sidebar/app
+          chrome outside this file is untouched). */}
+      <div className="mx-auto max-w-[1280px] rounded-[24px] bg-transparent">
+        <CrmDashboardHeader
+          clients={clients}
+          stats={stats}
+          callingAll={callingAll}
+          callingId={callingId}
+          callAllPending={callAllPending}
+          interestedLeads={interestedLeads}
+          callBackLeads={callBackLeads}
+          showReminder={showReminder}
+          setReminderDismissed={setReminderDismissed}
+          setFilterStatus={setFilterStatus}
+        />
 
-      <div style={{ maxWidth: 1200, margin: "0 auto", padding: "16px 12px" }}>
-
-        {/* ── Reminder Banner ── */}
-        {showReminder && (
-          <div style={{
-            backgroundColor: "#FFF7ED", border: "1px solid #F5A623",
-            borderRadius: 10, padding: "14px 16px", marginBottom: 16,
-            boxShadow: "0 2px 8px rgba(245,166,35,0.15)",
-          }}>
-            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 700, fontSize: 14, color: "#92400E", marginBottom: 8 }}>
-                  🔔 Action Required — Follow Up Now
-                </div>
-                {interestedLeads.length > 0 && (
-                  <div style={{ marginBottom: 8 }}>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: "#065F46", marginBottom: 4 }}>
-                      🔥 {interestedLeads.length} Interested Lead{interestedLeads.length > 1 ? "s" : ""} — Send Proposal Today
-                    </div>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                      {interestedLeads.map((c) => (
-                        <div key={c.id} style={{
-                          backgroundColor: "#D1FAE5", color: "#065F46",
-                          padding: "4px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600,
-                        }}>
-                          {c.name} · {formatPhone(c.phone)}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {callBackLeads.length > 0 && (
-                  <div>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: "#92400E", marginBottom: 4 }}>
-                      🔁 {callBackLeads.length} Call Back{callBackLeads.length > 1 ? "s" : ""} Pending
-                    </div>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                      {callBackLeads.map((c) => (
-                        <div key={c.id} style={{
-                          backgroundColor: "#FEF3C7", color: "#92400E",
-                          padding: "4px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600,
-                        }}>
-                          {c.name} · {formatPhone(c.phone)}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-              <button onClick={() => setReminderDismissed(true)}
-                style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: "#92400E", padding: 0, lineHeight: 1 }}>
-                ✕
-              </button>
-            </div>
-            <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button onClick={() => setFilterStatus("interested")}
-                style={{ backgroundColor: "#065F46", color: "#fff", border: "none", borderRadius: 6, padding: "6px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-                View Interested
-              </button>
-              <button onClick={() => setFilterStatus("call_back")}
-                style={{ backgroundColor: "#F5A623", color: "#fff", border: "none", borderRadius: 6, padding: "6px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-                View Call Backs
-              </button>
-              <button onClick={() => { setFilterStatus("all"); setReminderDismissed(true); }}
-                style={{ backgroundColor: "#F3F4F6", color: "#6B7280", border: "none", borderRadius: 6, padding: "6px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-                Dismiss
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Stat cards */}
-        <div className="crm-stats">
-          {[
-            { label: "Total",       value: stats.total,         color: "#1A4F8A", hide: false },
-            { label: "Pending",     value: stats.pending,       color: "#6B7280", hide: false },
-            { label: "Interested",  value: stats.interested,    color: "#065F46", hide: false },
-            { label: "Call Back",   value: stats.callBack,      color: "#92400E", hide: true  },
-            { label: "Not Int.",    value: stats.notInterested, color: "#991B1B", hide: true  },
-          ].map((s) => (
-            <div key={s.label} className={s.hide ? "stat-hide" : ""}
-              onClick={() => setFilterStatus(s.label === "Total" ? "all" : s.label === "Pending" ? "pending" : s.label === "Interested" ? "interested" : s.label === "Call Back" ? "call_back" : "not_interested")}
-              style={{
-                backgroundColor: "#fff", borderRadius: 10, padding: "12px 14px",
-                boxShadow: "0 1px 4px rgba(0,0,0,0.08)", borderTop: `4px solid ${s.color}`,
-                cursor: "pointer",
-              }}>
-              <div style={{ fontSize: 24, fontWeight: 800, color: s.color }}>{s.value}</div>
-              <div style={{ fontSize: 11, color: "#6B7280", marginTop: 2 }}>{s.label}</div>
-            </div>
-          ))}
-        </div>
-
-        {/* Actions */}
-        <div className="crm-actions">
-          <label className="crm-btn" style={{
-            backgroundColor: "#1A4F8A", color: "#fff", padding: "9px 16px",
-            borderRadius: 7, fontSize: 13, fontWeight: 700,
-            cursor: uploading ? "wait" : "pointer", opacity: uploading ? 0.7 : 1,
-            display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-          }}>
-            {uploading ? "⏳ Importing…" : "📄 Import File"}
+        {/* Toolbar */}
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.35, delay: 0.4 }}
+          className="my-4 flex flex-wrap items-center gap-2.5 rounded-2xl border border-white/60 bg-white p-3.5 shadow-[0_2px_12px_rgba(12,68,124,0.06)]"
+        >
+          <label className="flex cursor-pointer items-center justify-center gap-1.5 rounded-lg bg-[#0C447C] px-4 py-2.5 text-[13px] font-bold text-white transition-opacity hover:opacity-90"
+            style={{ cursor: uploading ? "wait" : "pointer", opacity: uploading ? 0.7 : 1 }}>
+            <Upload className="size-3.5" />
+            {uploading ? "Importing…" : "Import File"}
             <input ref={fileRef} type="file" accept=".pdf,.xlsx,.xls,.xlsm,.csv"
-              style={{ display: "none" }} onChange={handleUpload} disabled={uploading} />
+              className="hidden" onChange={handleUpload} disabled={uploading} />
           </label>
 
-          <button className="crm-btn" onClick={() => setShowAddModal(true)}
-            style={{
-              backgroundColor: "#fff", color: "#1A4F8A", border: "1px solid #1A4F8A",
-              borderRadius: 7, padding: "9px 16px", fontSize: 13, fontWeight: 700,
-              cursor: "pointer",
-            }}>
-            + Add Client
+          <button onClick={() => setShowAddModal(true)}
+            className="flex items-center justify-center gap-1.5 rounded-lg border border-[#0C447C] bg-white px-4 py-2.5 text-[13px] font-bold text-[#0C447C]">
+            <Plus className="size-3.5" />
+            Add Client
           </button>
 
           {uploadedCount !== null && (
-            <span style={{ fontSize: 13, color: "#065F46", fontWeight: 600 }}>✅ {uploadedCount} imported</span>
+            <span className="text-[13px] font-semibold text-[#065F46]">✅ {uploadedCount} imported</span>
           )}
 
-          <div className="crm-spacer" style={{ flex: 1 }} />
+          <div className="hidden flex-1 sm:block" />
 
-          <input type="text" className="crm-search" placeholder="🔍 Search name or phone…"
-            value={search} onChange={(e) => setSearch(e.target.value)} />
+          <div className="relative w-full sm:w-[200px]">
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-[#9CA3AF]" />
+            <input type="text" placeholder="Search name or phone…"
+              value={search} onChange={(e) => setSearch(e.target.value)}
+              className="w-full rounded-lg border border-[#D1D5DB] py-2 pl-8 pr-3 text-base outline-none" />
+          </div>
 
-          <select className="crm-select" value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value as CallStatus | "all")}>
+          <select value={filterStatus}
+            onChange={(e) => setFilterStatus(e.target.value as CallStatus | "all")}
+            className="w-full cursor-pointer rounded-lg border border-[#D1D5DB] bg-white px-2.5 py-2 text-base text-[#374151] sm:w-auto">
             <option value="all">All Statuses</option>
-            {ALL_STATUSES.map((s) => (
-              <option key={s} value={s}>{STATUS_CONFIG[s].label}</option>
+            {CALL_STATUSES.map((s) => (
+              <option key={s} value={s}>{STATUS_LABELS[s]}</option>
             ))}
           </select>
 
-          <select className="crm-select" value={sortBy}
+          <select value={sortBy}
             onChange={(e) => setSortBy(e.target.value as "priority" | "score")}
-            title="Sort order">
+            title="Sort order"
+            className="w-full cursor-pointer rounded-lg border border-[#D1D5DB] bg-white px-2.5 py-2 text-base text-[#374151] sm:w-auto">
             <option value="priority">Sort: Priority</option>
             <option value="score">Sort: Lead Score</option>
           </select>
 
-          <button className="crm-btn" onClick={callAllPending}
+          <button onClick={callAllPending}
             disabled={callingAll || stats.pending === 0}
-            style={{
-              backgroundColor: callingAll ? "#6B7280" : "#F5A623", color: "#fff",
-              border: "none", borderRadius: 7, padding: "9px 16px", fontSize: 13,
-              fontWeight: 700, cursor: callingAll || stats.pending === 0 ? "not-allowed" : "pointer",
-              opacity: stats.pending === 0 ? 0.5 : 1,
-            }}>
-            {callingAll ? "📞 Calling…" : `📞 Call All (${stats.pending})`}
+            className="flex w-full items-center justify-center gap-1.5 rounded-lg px-4 py-2.5 text-[13px] font-bold text-white disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+            style={{ backgroundColor: callingAll ? "#6B7280" : "#F5A623" }}>
+            <Phone className="size-3.5" />
+            {callingAll ? "Calling…" : `Call All (${stats.pending})`}
           </button>
 
-          <button className="crm-btn" onClick={() => exportToCSV(filtered)}
+          <button onClick={() => exportToCSV(filtered)}
             disabled={filtered.length === 0}
-            style={{
-              backgroundColor: "#0D3260", color: "#fff", border: "none",
-              borderRadius: 7, padding: "9px 16px", fontSize: 13, fontWeight: 700,
-              cursor: filtered.length === 0 ? "not-allowed" : "pointer",
-              opacity: filtered.length === 0 ? 0.5 : 1,
-            }}>
-            ⬇ Export CSV
+            className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-[#0D3260] px-4 py-2.5 text-[13px] font-bold text-white disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto">
+            <Download className="size-3.5" />
+            Export CSV
           </button>
-        </div>
+        </motion.div>
 
-        {/* Desktop Table */}
-        <div className="crm-desktop-table" style={{ backgroundColor: "#fff", borderRadius: 10, boxShadow: "0 1px 4px rgba(0,0,0,0.08)", overflow: "hidden" }}>
-          {loading ? (
-            <div style={{ padding: 48, textAlign: "center", color: "#6B7280" }}>Loading clients…</div>
-          ) : filtered.length === 0 ? (
-            <div style={{ padding: 48, textAlign: "center" }}>
-              <div style={{ fontSize: 36, marginBottom: 10 }}>📂</div>
-              <div style={{ fontSize: 15, color: "#6B7280" }}>
-                {clients.length === 0 ? "No clients yet — import a file to get started" : "No clients match this filter"}
-              </div>
-            </div>
-          ) : (
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                <thead>
-                  <tr style={{ backgroundColor: "#F8FAFC", borderBottom: "2px solid #E2E8F0" }}>
-                    <th style={{ padding: "12px 16px", width: 1 }}>
-                      <input
-                        type="checkbox"
-                        checked={allFilteredSelected}
-                        ref={(el) => { if (el) el.indeterminate = someFilteredSelected && !allFilteredSelected; }}
-                        onChange={toggleSelectAllFiltered}
-                        aria-label="Select all"
-                        style={{ width: 16, height: 16, cursor: "pointer" }}
-                      />
-                    </th>
-                    {["#", "Name", "Phone", "Status", "Score", "Response", "Callback", "Called At", "Action"].map((h) => (
-                      <th key={h} style={{ padding: "12px 16px", textAlign: "left", fontWeight: 700, color: "#374151", whiteSpace: "nowrap" }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((client, idx) => (
-                    <tr key={client.id}
-                      className={client.status === "interested" ? "interested-row" : client.status === "call_back" ? "callback-row" : ""}
-                      style={{ borderBottom: "1px solid #F1F5F9" }}>
-                      <td style={{ padding: "11px 16px" }}>
-                        <input
-                          type="checkbox"
-                          checked={selectedIds.has(client.id)}
-                          onChange={() => toggleSelect(client.id)}
-                          aria-label={`Select ${client.name}`}
-                          style={{ width: 16, height: 16, cursor: "pointer" }}
-                        />
-                      </td>
-                      <td style={{ padding: "11px 16px", color: "#9CA3AF" }}>{idx + 1}</td>
-                      <td style={{ padding: "11px 16px", fontWeight: 600, color: "#111827" }}>
-                        {client.status === "interested" && <span style={{ marginRight: 6 }}>🔥</span>}
-                        {client.status === "call_back" && <span style={{ marginRight: 6 }}>🔁</span>}
-                        {client.name}
-                      </td>
-                      <td style={{ padding: "11px 16px", color: "#374151", whiteSpace: "nowrap" }}>{formatPhone(client.phone)}</td>
-                      <td style={{ padding: "11px 16px" }}>
-                        <StatusSelect
-                          status={client.status}
-                          disabled={updatingId === client.id}
-                          onChange={(s) => updateManual(client, { status: s })}
-                        />
-                      </td>
-                      <td style={{ padding: "11px 16px" }}><LeadScoreBadge score={client.lead_score} /></td>
-                      <td style={{ padding: "11px 16px", color: "#6B7280", maxWidth: 200 }}>
-                        <ResponseInput
-                          client={client}
-                          disabled={updatingId === client.id}
-                          onSave={(value) => updateManual(client, { response: value })}
-                        />
-                      </td>
-                      <td style={{ padding: "11px 16px" }}>
-                        <CallbackInput
-                          client={client}
-                          disabled={updatingId === client.id}
-                          onSave={(value) => updateManual(client, { callback_at: value })}
-                        />
-                      </td>
-                      <td style={{ padding: "11px 16px", color: "#9CA3AF", whiteSpace: "nowrap" }}>
-                        {client.called_at ? new Date(client.called_at).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—"}
-                      </td>
-                      <td style={{ padding: "11px 16px" }}>
-                        <div style={{ display: "flex", gap: 6 }}>
-                          <button onClick={() => callOne(client)}
-                            disabled={callingId === client.id || client.status === "calling" || client.status === "interested" || callingAll}
-                            style={{
-                              backgroundColor: client.status === "interested" ? "#D1FAE5" : client.status === "calling" || callingId === client.id ? "#EFF6FF" : "#1A4F8A",
-                              color: client.status === "interested" ? "#065F46" : client.status === "calling" || callingId === client.id ? "#1A4F8A" : "#fff",
-                              border: "none", borderRadius: 6, padding: "6px 12px", fontSize: 12, fontWeight: 700,
-                              cursor: callingId === client.id || client.status === "calling" || client.status === "interested" || callingAll ? "not-allowed" : "pointer",
-                              whiteSpace: "nowrap",
-                            }}>
-                            {client.status === "interested" ? "✅ Done" : callingId === client.id || client.status === "calling" ? "📞 Calling…" : "📞 Call"}
-                          </button>
-                          {/* Manual dial — plain tel: link, no /api/make-call, no
-                              Supabase/Twilio side effects. Purely hands off to
-                              the device's own dialer; status only changes if
-                              the user updates it afterward via the existing UI.
-                              telHref() returns null for anything shorter than a
-                              real 10-digit number — show a disabled indicator
-                              instead of a broken tel: link in that case. */}
-                          {telHref(client.phone) ? (
-                            <a href={telHref(client.phone)!} title="Call manually (opens your phone's dialer)"
-                              style={{
-                                display: "inline-flex", alignItems: "center", justifyContent: "center",
-                                backgroundColor: "#F3F4F6", color: "#374151", border: "1px solid #E5E7EB",
-                                borderRadius: 6, padding: "6px 10px", fontSize: 12, fontWeight: 700,
-                                textDecoration: "none", whiteSpace: "nowrap",
-                              }}>
-                              ☎️
-                            </a>
-                          ) : (
-                            <span title="No valid phone number"
-                              style={{
-                                display: "inline-flex", alignItems: "center", justifyContent: "center",
-                                backgroundColor: "#F9FAFB", color: "#D1D5DB", border: "1px solid #F3F4F6",
-                                borderRadius: 6, padding: "6px 10px", fontSize: 12, fontWeight: 700,
-                                cursor: "not-allowed", whiteSpace: "nowrap",
-                              }}>
-                              ☎️
-                            </span>
-                          )}
-                          {client.status !== "pending" && (
-                            <button onClick={() => resetOne(client)} title="Reset to Pending"
-                              style={{ backgroundColor: "#F3F4F6", color: "#6B7280", border: "none", borderRadius: 6, padding: "6px 10px", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
-                              ↺
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-          {filtered.length > 0 && (
-            <div style={{ padding: "10px 16px", borderTop: "1px solid #F1F5F9", fontSize: 12, color: "#9CA3AF", display: "flex", justifyContent: "space-between" }}>
-              <span>Showing {filtered.length} of {clients.length} clients · Sorted by priority</span>
-              <span>Auto-refreshes every 5s</span>
-            </div>
-          )}
-        </div>
-
-        {/* Mobile Cards */}
-        <div className="crm-mobile-list">
-          {loading ? (
-            <div style={{ padding: 40, textAlign: "center", color: "#6B7280" }}>Loading clients…</div>
-          ) : filtered.length === 0 ? (
-            <div style={{ padding: 40, textAlign: "center" }}>
-              <div style={{ fontSize: 36, marginBottom: 10 }}>📂</div>
-              <div style={{ fontSize: 14, color: "#6B7280" }}>
-                {clients.length === 0 ? "No clients yet — import a file to get started" : "No clients match this filter"}
-              </div>
-            </div>
-          ) : (
-            <>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 4px 8px" }}>
-                <input
-                  type="checkbox"
-                  checked={allFilteredSelected}
-                  ref={(el) => { if (el) el.indeterminate = someFilteredSelected && !allFilteredSelected; }}
-                  onChange={toggleSelectAllFiltered}
-                  aria-label="Select all"
-                  style={{ width: 16, height: 16, cursor: "pointer" }}
-                />
-                <span style={{ fontSize: 12, color: "#6B7280", fontWeight: 600 }}>Select all</span>
-              </div>
-              {filtered.map((client, idx) => (
-                <div key={client.id}
-                  className={`crm-card ${client.status === "interested" ? "interested" : client.status === "call_back" ? "call_back" : ""}`}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.has(client.id)}
-                        onChange={() => toggleSelect(client.id)}
-                        aria-label={`Select ${client.name}`}
-                        style={{ width: 16, height: 16, cursor: "pointer", flexShrink: 0 }}
-                      />
-                      <span style={{ fontSize: 11, color: "#9CA3AF", minWidth: 20 }}>{idx + 1}.</span>
-                      <span style={{ fontWeight: 700, fontSize: 14, color: "#111827" }}>
-                        {client.status === "interested" && "🔥 "}
-                        {client.status === "call_back" && "🔁 "}
-                        {client.name}
-                      </span>
-                    </div>
-                    <div style={{ display: "flex", gap: 6 }}>
-                      <LeadScoreBadge score={client.lead_score} />
-                      <StatusSelect
-                        status={client.status}
-                        disabled={updatingId === client.id}
-                        onChange={(s) => updateManual(client, { status: s })}
-                      />
-                    </div>
-                  </div>
-                  <div style={{ fontSize: 13, color: "#374151" }}>📱 {formatPhone(client.phone)}</div>
-                  <ResponseInput
-                    client={client}
-                    boxed
-                    disabled={updatingId === client.id}
-                    onSave={(value) => updateManual(client, { response: value })}
-                  />
-                  <div>
-                    <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "#6B7280", marginBottom: 3 }}>Callback</label>
-                    <CallbackInput
-                      client={client}
-                      boxed
-                      disabled={updatingId === client.id}
-                      onSave={(value) => updateManual(client, { callback_at: value })}
-                    />
-                  </div>
-                  {client.called_at && (
-                    <div style={{ fontSize: 11, color: "#9CA3AF" }}>
-                      Called: {new Date(client.called_at).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
-                    </div>
-                  )}
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button onClick={() => callOne(client)}
-                      disabled={callingId === client.id || client.status === "calling" || client.status === "interested" || callingAll}
-                      style={{
-                        flex: 1,
-                        backgroundColor: client.status === "interested" ? "#D1FAE5" : client.status === "calling" || callingId === client.id ? "#EFF6FF" : "#1A4F8A",
-                        color: client.status === "interested" ? "#065F46" : client.status === "calling" || callingId === client.id ? "#1A4F8A" : "#fff",
-                        border: "none", borderRadius: 7, padding: "9px", fontSize: 13, fontWeight: 700,
-                        cursor: callingId === client.id || client.status === "calling" || client.status === "interested" || callingAll ? "not-allowed" : "pointer",
-                      }}>
-                      {client.status === "interested" ? "✅ Done" : callingId === client.id || client.status === "calling" ? "📞 Calling…" : "📞 Call"}
-                    </button>
-                    {/* Manual dial — plain tel: link, no API call, no
-                        Supabase/Twilio side effects. telHref() returns null
-                        for anything shorter than a real 10-digit number. */}
-                    {telHref(client.phone) ? (
-                      <a href={telHref(client.phone)!} title="Call manually (opens your phone's dialer)"
-                        style={{
-                          display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4,
-                          backgroundColor: "#F3F4F6", color: "#374151", border: "1px solid #E5E7EB",
-                          borderRadius: 7, padding: "9px 14px", fontSize: 13, fontWeight: 700,
-                          textDecoration: "none", whiteSpace: "nowrap",
-                        }}>
-                        ☎️ Manual
-                      </a>
-                    ) : (
-                      <span title="No valid phone number"
-                        style={{
-                          display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4,
-                          backgroundColor: "#F9FAFB", color: "#D1D5DB", border: "1px solid #F3F4F6",
-                          borderRadius: 7, padding: "9px 14px", fontSize: 13, fontWeight: 700,
-                          cursor: "not-allowed", whiteSpace: "nowrap",
-                        }}>
-                        ☎️ No number
-                      </span>
-                    )}
-                    {client.status !== "pending" && (
-                      <button onClick={() => resetOne(client)}
-                        style={{ backgroundColor: "#F3F4F6", color: "#6B7280", border: "none", borderRadius: 7, padding: "9px 14px", fontSize: 16, fontWeight: 700, cursor: "pointer" }}>
-                        ↺
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
-              <div style={{ padding: "10px 4px", fontSize: 12, color: "#9CA3AF", textAlign: "center" }}>
-                Showing {filtered.length} of {clients.length} clients · Auto-refreshes every 5s
-              </div>
-            </>
-          )}
-        </div>
-
+        <CrmTable
+          filtered={filtered}
+          loading={loading}
+          totalCount={clients.length}
+          selectedIds={selectedIds}
+          allFilteredSelected={allFilteredSelected}
+          someFilteredSelected={someFilteredSelected}
+          toggleSelect={toggleSelect}
+          toggleSelectAllFiltered={toggleSelectAllFiltered}
+          updatingId={updatingId}
+          callingId={callingId}
+          callingAll={callingAll}
+          callOne={callOne}
+          resetOne={resetOne}
+          updateManual={updateManual}
+        />
       </div>
     </div>
   );

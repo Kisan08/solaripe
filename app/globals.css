@@ -118,3 +118,24 @@
   animation: bob 4.2s ease-in-out infinite;
   animation-delay: 0.6s;
 }
+
+/* AI Calling hero visualization (components/crm/CrmDashboardHeader.tsx) —
+   only applied while a real call is in progress (callingAll/callingId
+   truthy), never as pure decoration. */
+@keyframes pulse-ring {
+  0% { transform: scale(0.9); opacity: 0.55; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+
+@utility animate-pulse-ring {
+  animation: pulse-ring 2.2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes glow-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+@utility animate-glow-pulse {
+  animation: glow-pulse 2s ease-in-out infinite;
+}
