@@ -64,6 +64,7 @@ export default function CRMPage() {
   const [adding, setAdding] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkDeleteProgress, setBulkDeleteProgress] = useState<{ done: number; total: number } | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -263,6 +264,14 @@ export default function CRMPage() {
     });
   }
 
+  // Sending hundreds of ids in one .in("id", ids) call builds a request
+  // URL long enough to hit PostgREST/Vercel size limits well before a
+  // large selection (100s+) finishes — split into sequential batches
+  // instead. Sequential (not parallel) so "N of total" progress is
+  // meaningful and a mid-batch failure has a precise stopping point to
+  // report, rather than an all-or-nothing failure with no information.
+  const BULK_DELETE_BATCH_SIZE = 100;
+
   async function deleteSelected() {
     const ids = Array.from(selectedIds);
     if (ids.length === 0) return;
@@ -272,21 +281,49 @@ export default function CRMPage() {
     if (!confirmed) return;
 
     setBulkDeleting(true);
+    setBulkDeleteProgress({ done: 0, total: ids.length });
+    let deletedCount = 0;
+    let failed = false;
+
     try {
-      const res = await fetch("/api/crm/clients", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ids }),
-      });
-      if (!res.ok) throw new Error();
-      const idSet = new Set(ids);
-      setClients((prev) => prev.filter((c) => !idSet.has(c.id)));
-      showToast(`${ids.length} client${ids.length > 1 ? "s" : ""} deleted`, "ok");
-      setSelectedIds(new Set());
+      for (let i = 0; i < ids.length; i += BULK_DELETE_BATCH_SIZE) {
+        const batch = ids.slice(i, i + BULK_DELETE_BATCH_SIZE);
+        const res = await fetch("/api/crm/clients", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids: batch }),
+        });
+        if (!res.ok) { failed = true; break; }
+
+        deletedCount += batch.length;
+        const batchSet = new Set(batch);
+        setClients((prev) => prev.filter((c) => !batchSet.has(c.id)));
+        setBulkDeleteProgress({ done: deletedCount, total: ids.length });
+      }
+
+      if (failed) {
+        const remaining = ids.length - deletedCount;
+        showToast(
+          `Deleted ${deletedCount} of ${ids.length} — stopped due to an error. Try again for the remaining ${remaining}.`,
+          "err",
+        );
+      } else {
+        showToast(`${deletedCount} client${deletedCount > 1 ? "s" : ""} deleted`, "ok");
+      }
     } catch {
-      showToast("Bulk delete failed", "err");
+      const remaining = ids.length - deletedCount;
+      showToast(
+        `Deleted ${deletedCount} of ${ids.length} — stopped due to an error. Try again for the remaining ${remaining}.`,
+        "err",
+      );
     } finally {
       setBulkDeleting(false);
+      setBulkDeleteProgress(null);
+      setSelectedIds(new Set());
+      // Reconcile with actual server state whether this finished fully,
+      // partially, or not at all — the optimistic per-batch removal
+      // above is a UX nicety, not the source of truth.
+      await fetchClients();
     }
   }
 
@@ -374,7 +411,9 @@ export default function CRMPage() {
             </button>
             <button onClick={deleteSelected} disabled={bulkDeleting}
               className="rounded-lg bg-[#991B1B] px-3.5 py-2 text-[13px] font-bold text-white disabled:cursor-not-allowed disabled:opacity-70">
-              {bulkDeleting ? "Deleting…" : "🗑️ Delete Selected"}
+              {bulkDeleting
+                ? (bulkDeleteProgress ? `Deleting… ${bulkDeleteProgress.done} of ${bulkDeleteProgress.total}` : "Deleting…")
+                : "🗑️ Delete Selected"}
             </button>
           </div>
         </div>
