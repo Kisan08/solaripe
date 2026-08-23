@@ -56,6 +56,7 @@ export default function CRMPage() {
   const [search, setSearch] = useState("");
   const [toast, setToast] = useState<{ msg: string; type: "ok" | "err" } | null>(null);
   const [uploadedCount, setUploadedCount] = useState<number | null>(null);
+  const [uploadSummary, setUploadSummary] = useState<string[] | null>(null);
   const [reminderDismissed, setReminderDismissed] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [addName, setAddName] = useState("");
@@ -121,14 +122,20 @@ export default function CRMPage() {
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    setUploading(true); setUploadedCount(null);
+    setUploading(true); setUploadedCount(null); setUploadSummary(null);
     try {
       const fd = new FormData();
       fd.append("file", file);
       const res = await fetch("/api/extract-clients", { method: "POST", body: fd });
       if (!res.ok) throw new Error((await res.json()).error ?? "Upload failed");
-      const { inserted } = await res.json();
+      const { inserted, summary } = await res.json();
       setUploadedCount(inserted);
+      // Real-world sheets are messy — a single "N imported" toast hides
+      // which sheets actually contributed and which were skipped (no
+      // header match, no valid phone, an unrelated pricing table). The
+      // per-sheet breakdown below the toolbar is what actually answers
+      // "did my import work".
+      setUploadSummary(Array.isArray(summary) ? summary : null);
       showToast(`${inserted} clients imported`, "ok");
       await fetchClients();
     } catch (err: unknown) {
@@ -490,6 +497,26 @@ export default function CRMPage() {
             Export CSV
           </button>
         </motion.div>
+
+        {/* Per-sheet import breakdown — a single "N imported" number
+            hides which sheets actually contributed vs got skipped (no
+            header match, no valid phone, an unrelated pricing table).
+            Real-world workbooks are messy; this is what actually answers
+            "did my import work". */}
+        {uploadSummary && uploadSummary.length > 0 && (
+          <div className="mb-4 rounded-2xl border border-[#0C447C]/15 bg-white p-4 shadow-[0_2px_12px_rgba(12,68,124,0.06)]">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-[13px] font-bold text-[#0C1E33]">Import summary</span>
+              <button onClick={() => setUploadSummary(null)}
+                className="text-xs font-semibold text-[#64748B] hover:text-[#0C447C]">
+                Dismiss
+              </button>
+            </div>
+            <ul className="space-y-1 text-[13px] text-[#374151]">
+              {uploadSummary.map((line, i) => <li key={i}>{line}</li>)}
+            </ul>
+          </div>
+        )}
 
         <CrmTable
           filtered={filtered}
