@@ -27,6 +27,7 @@ interface QuoteForm {
   subsidyTotal: number;
   monthlyBill: number;
   gridRate: number;
+  gridEscalation: number; // annual grid-tariff escalation, as a whole-number percent (e.g. 5 = 5%/yr) — different DISCOMs/regions warrant different assumptions, so this is vendor-editable rather than a fixed constant
   roofType: string;
   floors: string;
   shadow: string;
@@ -42,7 +43,6 @@ const GST_RATE  = 0.089;
 const PANEL_WP  = 580;
 const YIELD_KWH = 1332;
 const DEGRADE   = 0.0045;
-const GRID_RISE = 0.05;
 // NAVY/BLUE2/ACCENT reference CSS custom properties instead of literal hex
 // so the quote can be re-themed per tenant without threading `s`/colors as
 // props through every component (P2/P3/P4 never received `s` before this
@@ -134,7 +134,7 @@ function compute(f: QuoteForm, schedule: PaymentMilestone[] = DEFAULT_SCHEDULE) 
 function totalSavings25(f: QuoteForm, gen: number) {
   let total = 0;
   for (let y = 1; y <= 25; y++) {
-    total += gen * Math.pow(1 - DEGRADE, y - 1) * f.gridRate * Math.pow(1 + GRID_RISE, y - 1);
+    total += gen * Math.pow(1 - DEGRADE, y - 1) * f.gridRate * Math.pow(1 + f.gridEscalation / 100, y - 1);
   }
   return Math.round(total);
 }
@@ -145,7 +145,7 @@ function savingsTable(f: QuoteForm, gen: number) {
   const netCost = Math.max(0, (f.systemCapacity * 1000 * f.ratePerWp * (1 + GST_RATE)) - f.subsidyTotal);
   for (let y = 1; y <= 25; y++) {
     const genY    = Math.round(gen * Math.pow(1 - DEGRADE, y - 1));
-    const gridY   = f.gridRate * Math.pow(1 + GRID_RISE, y - 1);
+    const gridY   = f.gridRate * Math.pow(1 + f.gridEscalation / 100, y - 1);
     const savings = Math.round(genY * gridY);
     cumSavings   += savings;
     rows.push({ y, genY, gridRate: +gridY.toFixed(2), savings, cumSavings, profit: cumSavings - netCost });
@@ -154,17 +154,17 @@ function savingsTable(f: QuoteForm, gen: number) {
 }
 
 // OPEX year-by-year savings — same degraded generation (DEGRADE) and
-// escalating grid rate (GRID_RISE) as the CAPEX savingsTable() above, so
-// the two never drift apart. The one real difference: what the customer
-// pays isn't an upfront investment being paid off, it's a fixed Rs./kWh
-// PPA rate for the whole term (deliberately NOT escalated, unlike the
-// grid comparison) — so there's no "profit" column, just savings.
+// escalating grid rate (f.gridEscalation) as the CAPEX savingsTable()
+// above, so the two never drift apart. The one real difference: what the
+// customer pays isn't an upfront investment being paid off, it's a fixed
+// Rs./kWh PPA rate for the whole term (deliberately NOT escalated, unlike
+// the grid comparison) — so there's no "profit" column, just savings.
 function opexSavingsTable(f: QuoteForm, gen: number, termYears: number) {
   const rows = [];
   let cumSavings = 0;
   for (let y = 1; y <= termYears; y++) {
     const genY = Math.round(gen * Math.pow(1 - DEGRADE, y - 1));
-    const gridY = f.gridRate * Math.pow(1 + GRID_RISE, y - 1);
+    const gridY = f.gridRate * Math.pow(1 + f.gridEscalation / 100, y - 1);
     const gridCost = genY * gridY;
     const ppaPaid = Math.round(genY * f.ppaRate);
     const savings = Math.round(gridCost - ppaPaid);
@@ -727,7 +727,7 @@ function P2({ f, c, s, panel, inverter }: { f: QuoteForm; c: Calc; s: AppSetting
               </tbody>
             </table>
             <div style={{ marginTop: 8, fontSize: FONT_S, color: "#555" }}>
-              Assumes {GRID_RISE * 100}% annual grid tariff escalation and {DEGRADE * 100}% panel degradation from Year 2, same as the CAPEX projection. The PPA rate (Rs.{f.ppaRate}/kWh) is fixed for the full contract term and does not escalate.
+              Assumes {f.gridEscalation}% annual grid tariff escalation and {DEGRADE * 100}% panel degradation from Year 2, same as the CAPEX projection. The PPA rate (Rs.{f.ppaRate}/kWh) is fixed for the full contract term and does not escalate.
             </div>
           </div>
 
@@ -821,7 +821,7 @@ function P3({ f, c }: { f: QuoteForm; c: Calc }) {
         </tbody>
       </table>
       <div style={{ marginTop: 8, fontSize: FONT_S, color: "#555" }}>
-        * Payback year highlighted. Assumes {GRID_RISE*100}% annual grid tariff escalation and {DEGRADE*100}% panel degradation from Year 2. Actual savings may vary based on usage and local tariff.
+        * Payback year highlighted. Assumes {f.gridEscalation}% annual grid tariff escalation and {DEGRADE*100}% panel degradation from Year 2. Actual savings may vary based on usage and local tariff.
       </div>
     </>
   );
@@ -1099,7 +1099,7 @@ function SelectField({ label, name, value, onChange, options }: {
 
 /* ─── Inner Component ─── */
 function QuotePageInner() {
-  const [showSiteDetails, setShowSiteDetails] = useState(true)
+  const [showSiteDetails, setShowSiteDetails] = useState(false)
   const [showPreview, setShowPreview] = useState(true)
   const today = new Date().toISOString().split("T")[0];
   const valid = new Date(); valid.setDate(valid.getDate() + 30);
@@ -1137,6 +1137,7 @@ function QuotePageInner() {
     subsidyTotal: 0,
     monthlyBill: 8000,
     gridRate: 19,
+    gridEscalation: 5,
     roofType: "RCC Flat",
     floors: "G+4",
     shadow: "Minimal",
@@ -1172,7 +1173,7 @@ function QuotePageInner() {
 
   const onChange = (e: ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
-    const numFields = ["systemCapacity","ratePerWp","subsidyTotal","monthlyBill","gridRate","ppaRate","batteryKwh"];
+    const numFields = ["systemCapacity","ratePerWp","subsidyTotal","monthlyBill","gridRate","gridEscalation","ppaRate","batteryKwh"];
     setF(p => ({ ...p, [name]: numFields.includes(name) ? parseFloat(value) || 0 : value }));
   };
 
@@ -1503,6 +1504,7 @@ function QuotePageInner() {
             <div className="grid grid-cols-2 gap-3">
               <Field label="Monthly Electricity Bill (Rs.)" name="monthlyBill" type="number" value={f.monthlyBill} onChange={onChange} />
               <Field label="Current Grid Rate (Rs./kWh)" name="gridRate" type="number" value={f.gridRate} onChange={onChange} />
+              <Field label="Grid Rate Escalation (%/yr)" name="gridEscalation" type="number" value={f.gridEscalation} onChange={onChange} placeholder="5" />
             </div>
           </div>
 
