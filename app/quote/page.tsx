@@ -474,12 +474,30 @@ function P1({ f, c, s, showSiteDetails }: { f: QuoteForm; c: Calc; s: AppSetting
       <div>
         <CoverHero f={f} s={s} />
 
-        {/* Client name BELOW image */}
-        <div style={{ background: NAVY, borderRadius: 8, padding: "12px 16px", marginTop: 6 }}>
-          <div style={{ fontSize: 17, fontWeight: 700, color: "white", lineHeight: 1.4, wordBreak: "break-word" }}>
+        {/* Client name BELOW image — eyebrow label sets up the name as
+            the clear focal point (bigger/bolder than before, no longer
+            equal-weight with its own label), location moves from plain
+            text to a pill so it reads as metadata, not a second line of
+            the same sentence. Same NAVY background throughout — polish,
+            not a re-theme. */}
+        <div style={{ background: NAVY, borderRadius: 8, padding: "18px 18px 16px", marginTop: 6 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#7a93c0", letterSpacing: 1.5, textTransform: "uppercase" }}>
+            Prepared For
+          </div>
+          <div style={{ fontSize: 24, fontWeight: 800, color: "white", lineHeight: 1.3, wordBreak: "break-word", marginTop: 4 }}>
             {f.clientName || "Client Name"}
           </div>
-          <div style={{ fontSize: FONT, color: "#aac9f0", marginTop: 3 }}>{f.siteAddress || "Site Address"}</div>
+          <div
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 6,
+              background: "rgba(170,201,240,0.15)", borderRadius: 999,
+              padding: "4px 12px 4px 10px", marginTop: 10,
+              fontSize: FONT_S, color: "#aac9f0",
+            }}
+          >
+            <MapPin size={12} />
+            {f.siteAddress || "Site Address"}
+          </div>
         </div>
       </div>
 
