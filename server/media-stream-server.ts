@@ -64,29 +64,38 @@ if (!process.env.ELEVENLABS_API_KEY) {
 // const SYSTEM_PROMPT =
 //   "You are a helpful assistant. Respond briefly (1-2 sentences) in Hindi/Hinglish, matching whatever mix of Hindi and English the caller used.";
 
-const SYSTEM_PROMPT = `You are Kajal, a friendly telecalling executive at Omkar Power Solutions, a solar EPC company. You are calling a potential customer who enquired about solar panels.
+// Kept deliberately tight (not just terse for its own sake): a longer,
+// more elaborate version of this prompt was directly implicated in the
+// empty-response bug during diagnosis — the exact same conversation shape
+// (this model's scripted-greeting-then-short-caller-reply pattern, e.g.
+// "Mumbai.") failed close to 100% of the time with the old, longer
+// prompt, and roughly half as often once trimmed to this length. See
+// runLlmTurn/handleFinalTranscript below for the retry + fallback filler
+// that still catches the remainder — trimming this prompt measurably
+// helps but does not fully eliminate what looks like a Groq-side
+// streaming defect for this model.
+const SYSTEM_PROMPT = `You are काजल, a friendly telecalling executive at Omkar Power Solutions, a solar EPC company, calling a potential customer who enquired about solar panels.
 
-YOUR GOAL: Get exactly two pieces of information — (1) their city/area, and (2) their average monthly electricity bill (or units consumed) — then close the call by telling them our team will reach out with a personalized quote.
+Goal: get their city/area, then their average monthly electricity bill (or units), then close the call saying the team will follow up with a personalized quote.
 
-RULES — follow strictly:
-- You have already greeted the caller once at the start of this call — do NOT reintroduce yourself or greet again on later turns. Stay consistent: your name is always Kajal, never anything else.
-- Speak casual, natural Hinglish the way a real telecaller in Mumbai actually talks — mix English words naturally into Hindi sentences (e.g. "Thank you sir, hum jaldi contact karenge" not formal Sanskritized Hindi like "aapka din shubh rahe"). Avoid overly formal or literary Hindi phrasing entirely — keep it conversational and warm, like a real phone call, not a script being read aloud.
-- Keep every response to 1 short sentence. This is a phone call, not a chat — be brief and natural, like a real telecaller, not an assistant explaining things.
-- Start with a warm, brief greeting and introduce yourself and the company in your very first line, casual style — e.g. "Hii, main Kajal bol rahi hoon Omkar Power Solutions se, aapne solar ke baare mein enquiry kiya tha na?"
-- Ask for city/area FIRST. Once given, ask for their average monthly electricity bill (or units consumed) NEXT.
-- Do NOT ask about roof type, roof size, household size, appliance load, shading, or any other technical detail — those are covered later during an in-person site visit, not this call.
-- If the caller asks a pricing or technical question you don't have specifics for, don't guess — just say our team will explain everything in detail when they call back.
-- Once you have BOTH city and electricity bill, immediately close the call: thank them, confirm our team will call them back shortly with a quote, and end warmly, casual style — e.g. "Thank you sir, hum jaldi aapko contact karenge quote ke saath!" Do not keep the conversation going after this.
-- If the caller is not interested, or asks to not be called, acknowledge politely and end the call — don't push.
-- Target: close this call in 4-6 exchanges total, not more.`;
+Rules: You already greeted the caller once (a scripted line, already spoken before this conversation) — don't re-greet. Your name is always काजल, never anything else. Speak casual, natural Hinglish like a real Mumbai telecaller — mix English words in naturally (e.g. "Thank you sir, hum jaldi contact karenge"), never formal/Sanskritized Hindi (e.g. not "aapka din shubh rahe"). One short sentence per reply. Don't ask about roof type, roof size, household size, appliance load, or shading — that's for the in-person site visit, not this call. Don't guess on pricing/technical questions you're unsure of — say the team will explain when they call back. Once you have both city and bill, close warmly right away, casual style — e.g. "Thank you sir, hum jaldi aapko contact karenge quote ke saath!" — and stop. If they're not interested or ask not to be called, acknowledge politely and end, don't push. Aim to close in 4-6 exchanges total.`;
+
+// Scripted opening line, spoken immediately on call connect instead of
+// waiting for the caller's first word (Part 2) — faster and more reliable
+// than asking the LLM to generate turn 1 live. काजल/नमस्ते spelled in
+// Devanagari rather than "Kajal"/"Hii": romanized Hindi words TTS-mispronounced
+// noticeably worse than their Devanagari spelling in testing (Part 3).
+const OPENING_GREETING =
+  "नमस्ते! Main काजल bol rahi hoon Omkar Power Solutions se, aapne solar ke baare mein enquiry kiya tha na? Aapka city ya area kya hai?";
 
 function ts(): string {
   return new Date().toISOString().slice(11, 23); // HH:MM:SS.mmm
 }
 
 // Natural-sounding filler lines for when Groq returns an empty response
-// (e.g. it burns its whole token budget on hidden reasoning) — spoken
-// instead of dead air, picked at random so it doesn't sound scripted.
+// even after a retry (see SYSTEM_PROMPT's comment and handleFinalTranscript
+// for the diagnosis) — spoken instead of dead air, picked at random so it
+// doesn't sound scripted.
 const FALLBACK_FILLERS = ["Sorry, ek second...", "Haan bataiye?", "Maaf kijiye, phir se boliye?"];
 
 function pickFallbackFiller(): string {
@@ -120,11 +129,68 @@ wss.on("connection", (twilioWs) => {
   let firstAudioReceived = false;
   let firstAudioSentBack = false;
 
+  // Guards against overlapping turns: Deepgram's endpointing can emit more
+  // than one is_final Results message in quick succession for what's
+  // really one utterance, which used to fire concurrent Groq requests for
+  // the same call and could interleave conversationHistory writes out of
+  // order (see handleFinalTranscript below). A final transcript that
+  // arrives while the previous turn is still in flight is dropped rather
+  // than starting a second overlapping request.
+  let turnInFlight = false;
+
   // Per-connection conversation history — one array per call, scoped to
   // this closure, never shared across calls. Seeded with just the system
-  // message; each turn appends the user utterance and the assistant's
-  // reply so later turns have full context instead of starting fresh.
+  // message; the scripted opening greeting is appended as soon as it's
+  // spoken (see speakOpeningGreeting), then each turn appends the user
+  // utterance and the assistant's reply so later turns have full context.
   const conversationHistory: ChatMessage[] = [{ role: "system", content: SYSTEM_PROMPT }];
+
+  // Shared TTS-speaking helper — used both for the scripted opening
+  // greeting and for each LLM turn's sentences, each call getting its own
+  // firstTtsChunkKicked so the "first byte" latency log is timed per
+  // utterance, not once for the whole call.
+  function makeSentenceSpeaker() {
+    let firstTtsChunkKicked = false;
+    return async function flushSentence(raw: string) {
+      const text = raw.trim();
+      if (!text) return;
+      const ttsStart = Date.now();
+      console.log(`[${ts()}] [tts] request start: "${text}"`);
+      try {
+        await streamElevenLabsTts(text, (audioChunk) => {
+          if (!firstTtsChunkKicked) {
+            firstTtsChunkKicked = true;
+            console.log(`[${ts()}] [tts] first byte (+${Date.now() - ttsStart}ms)`);
+          }
+          sendAudioToTwilio(audioChunk);
+        });
+      } catch (err) {
+        console.error(`[${ts()}] [tts] error`, err);
+      }
+    };
+  }
+
+  // Part 2: speak the opening line immediately on call connect instead of
+  // waiting for the caller's first word — a scripted line for speed/
+  // reliability rather than an LLM turn (see OPENING_GREETING). Recorded
+  // into history as this call's first assistant turn so later LLM turns
+  // know it already happened (SYSTEM_PROMPT's "already greeted" rule).
+  async function speakOpeningGreeting() {
+    // Also covered by turnInFlight: if the caller starts talking before
+    // this finishes, that first transcript gets dropped by
+    // handleFinalTranscript's guard rather than racing this greeting's
+    // own appendToHistory call. Barge-in handling is out of scope for
+    // this POC (see file header) — the caller just repeats themselves.
+    turnInFlight = true;
+    console.log(`[${ts()}] [llm] speaking scripted opening greeting`);
+    try {
+      const flushSentence = makeSentenceSpeaker();
+      await flushSentence(OPENING_GREETING);
+      appendToHistory(conversationHistory, { role: "assistant", content: OPENING_GREETING });
+    } finally {
+      turnInFlight = false;
+    }
+  }
 
   // ── Deepgram real-time STT connection, one per call ──────────────────
   // language=multi enables Nova-2's multilingual code-switching (needed
@@ -168,58 +234,73 @@ wss.on("connection", (twilioWs) => {
   dgWs.on("error", (err) => console.error(`[${ts()}] [deepgram] error`, err));
   dgWs.on("close", () => console.log(`[${ts()}] [deepgram] closed`));
 
+  // Runs one Groq turn against the given history and speaks it via TTS as
+  // it streams, returning the full accumulated text. Factored out of
+  // handleFinalTranscript so a genuinely empty response can be retried
+  // once with a fresh request before falling back to a filler line — see
+  // handleFinalTranscript for why that retry is worth doing.
+  async function runLlmTurn(): Promise<string> {
+    let sentenceBuffer = "";
+    const flushSentence = makeSentenceSpeaker();
+    const fullReply = await streamGroqChat(conversationHistory, async (delta) => {
+      sentenceBuffer += delta;
+      // Flush on a sentence-ish boundary (Hindi/Devanagari full stop
+      // included) so TTS can start speaking before the whole reply has
+      // finished generating, instead of waiting for the complete text.
+      const boundary = /[.!?।\n]/.exec(sentenceBuffer);
+      if (boundary && boundary.index > 2) {
+        const sentence = sentenceBuffer.slice(0, boundary.index + 1);
+        sentenceBuffer = sentenceBuffer.slice(boundary.index + 1);
+        await flushSentence(sentence);
+      }
+    });
+    await flushSentence(sentenceBuffer); // whatever's left after the stream ends
+    return fullReply;
+  }
+
   // ── LLM -> TTS -> Twilio for one finalized transcript ─────────────────
   async function handleFinalTranscript(userText: string) {
+    if (turnInFlight) {
+      // Deepgram fired another is_final while the previous turn was still
+      // running — almost certainly the same utterance split into two
+      // finalized segments, not a genuinely new one. Dropping it (rather
+      // than firing a second concurrent Groq request for the same call)
+      // avoids one contributor to the empty-response bug below; the
+      // dominant one turned out to be SYSTEM_PROMPT length (see its
+      // comment), not overlapping requests, but this guard is cheap
+      // correctness regardless and also prevents conversationHistory
+      // from being mutated out of order by two turns running at once.
+      console.warn(`[${ts()}] [pipeline] dropping transcript, turn already in flight: "${userText}"`);
+      return;
+    }
+    turnInFlight = true;
+
     const llmStart = Date.now();
     console.log(`[${ts()}] [llm] request start`);
 
     appendToHistory(conversationHistory, { role: "user", content: userText });
 
-    let sentenceBuffer = "";
-    let firstTtsChunkKicked = false;
-
-    const flushSentence = async (raw: string) => {
-      const text = raw.trim();
-      if (!text) return;
-      const ttsStart = Date.now();
-      console.log(`[${ts()}] [tts] request start: "${text}"`);
-      try {
-        await streamElevenLabsTts(text, (audioChunk) => {
-          if (!firstTtsChunkKicked) {
-            firstTtsChunkKicked = true;
-            console.log(`[${ts()}] [tts] first byte (+${Date.now() - ttsStart}ms)`);
-          }
-          sendAudioToTwilio(audioChunk);
-        });
-      } catch (err) {
-        console.error(`[${ts()}] [tts] error`, err);
-      }
-    };
-
     try {
-      const fullReply = await streamGroqChat(conversationHistory, async (delta) => {
-        sentenceBuffer += delta;
-        // Flush on a sentence-ish boundary (Hindi/Devanagari full stop
-        // included) so TTS can start speaking before the whole reply has
-        // finished generating, instead of waiting for the complete text.
-        const boundary = /[.!?।\n]/.exec(sentenceBuffer);
-        if (boundary && boundary.index > 2) {
-          const sentence = sentenceBuffer.slice(0, boundary.index + 1);
-          sentenceBuffer = sentenceBuffer.slice(boundary.index + 1);
-          await flushSentence(sentence);
-        }
-      });
-      await flushSentence(sentenceBuffer); // whatever's left after the stream ends
+      let fullReply = await runLlmTurn();
+
+      if (!fullReply.trim()) {
+        // A genuinely empty response (finish_reason never even arrived,
+        // not a token-budget "length" truncation — see diagnosis notes on
+        // streamGroqChat) reliably succeeded on a fresh retry during
+        // testing, so try once more before resorting to a filler.
+        console.warn(`[${ts()}] [llm] empty response, retrying once`);
+        fullReply = await runLlmTurn();
+      }
 
       let replyForHistory = fullReply;
       if (!fullReply.trim()) {
-        // Safety net: never let a turn produce total silence, even if Part
-        // 2's extra headroom makes this rare. Speak a natural filler
-        // instead of a robotic error or dead air, and record THAT (not the
-        // empty string) as this turn's assistant message so history stays
-        // coherent.
+        // Safety net: never let a turn produce total silence, even after
+        // the retry above. Speak a natural filler instead of a robotic
+        // error or dead air, and record THAT (not the empty string) as
+        // this turn's assistant message so history stays coherent.
         const filler = pickFallbackFiller();
-        console.warn(`[${ts()}] [llm] empty response — using fallback filler: "${filler}"`);
+        const flushSentence = makeSentenceSpeaker();
+        console.warn(`[${ts()}] [llm] still empty after retry — using fallback filler: "${filler}"`);
         await flushSentence(filler);
         replyForHistory = filler;
       }
@@ -228,6 +309,8 @@ wss.on("connection", (twilioWs) => {
       console.log(`[${ts()}] [llm] response end (+${Date.now() - llmStart}ms total)`);
     } catch (err) {
       console.error(`[${ts()}] [llm] error`, err);
+    } finally {
+      turnInFlight = false;
     }
   }
 
@@ -260,6 +343,11 @@ wss.on("connection", (twilioWs) => {
         streamSid = msg.start?.streamSid ?? null;
         callSid = msg.start?.callSid ?? null;
         console.log(`[${ts()}] [twilio] stream started callSid=${callSid} streamSid=${streamSid}`);
+        // Part 2: greet immediately, don't wait for the caller's first
+        // word — sendAudioToTwilio needs streamSid, which is set above.
+        speakOpeningGreeting().catch((err) => {
+          console.error(`[${ts()}] [pipeline] error speaking opening greeting`, err);
+        });
         break;
 
       case "media": {

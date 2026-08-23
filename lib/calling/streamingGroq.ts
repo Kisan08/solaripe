@@ -26,16 +26,25 @@ export async function streamGroqChat(
       model: "openai/gpt-oss-20b",
       messages,
       temperature: 0.6,
-      // 350 (up from 200): more headroom for hidden reasoning + actual
-      // visible content on inputs that need more reasoning tokens, on top
-      // of the reasoning_effort floor below.
+      // Headroom for hidden reasoning + visible content. NOTE on the
+      // empty-response bug this was originally raised to fix: live
+      // diagnosis (dumping raw SSE chunks, checking delta.reasoning and
+      // finish_reason) showed it is NOT a token-budget problem — failing
+      // turns finish_reason is always null (the stream just stops after a
+      // tiny, ~20-30 char reasoning chunk, never "length"), and it
+      // reproduces identically at max_tokens 350 or 500 and at every
+      // reasoning_effort level (low/medium/default all fail similarly).
+      // The dominant factor turned out to be SYSTEM_PROMPT length in the
+      // caller (server/media-stream-server.ts) — see that file's comment.
+      // Left at 350 since it's not the actual lever, and there's no
+      // reason to shrink it back down either.
       max_tokens: 350,
-      // gpt-oss models spend part of max_tokens on hidden reasoning before
-      // any visible content. Per Groq's docs, "low" is the lowest
-      // reasoning_effort this model supports — "minimal"/"none" aren't
-      // available for gpt-oss (only for Qwen 3 32B) — so this is already
-      // the most headroom-favoring setting available; nothing lower to
-      // switch to.
+      // Per Groq's docs, "low" is the lowest reasoning_effort this model
+      // supports ("minimal"/"none" exist only for Qwen 3 32B). Confirmed
+      // via testing this doesn't meaningfully change the empty-response
+      // rate either way (see max_tokens comment above) — kept at "low"
+      // since it's at least the fastest/cheapest option among ones that
+      // are equally exposed to the bug.
       reasoning_effort: "low",
       stream: true,
     }),
