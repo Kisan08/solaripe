@@ -13,16 +13,24 @@ import { sendWhatsAppTo, formatScheduledReminderMessage } from "@/lib/whatsappNo
 // goes out twice even though the window overlaps between runs.
 const WINDOW_MINUTES = 30;
 
-// Runs across every tenant with no logged-in session (a real cron
-// invocation), so it authenticates with the shared CRON_SECRET bearer
-// token like the other cron routes. It ALSO accepts a logged-in platform
-// admin's normal session — no separate test button needed; just hit this
-// URL directly in the browser while logged in as the admin account to
-// trigger it manually ahead of the schedule.
+// This route isn't in vercel.json's crons (Vercel Hobby only runs crons
+// once a day — see the commit that removed it — so a real 15-minute
+// schedule has to come from an external scheduler hitting this URL
+// instead). That means, unlike the other two cron routes, this one is
+// reachable by anyone who knows the path — CRON_SECRET is what stands in
+// for Vercel's own cron-invocation guarantee. Accepted two ways since not
+// every external scheduler can set a custom header: the standard
+// `Authorization: Bearer <secret>` header, or a `?secret=<secret>` query
+// param for schedulers that only support a plain URL. Also accepts a
+// logged-in platform admin's normal session — no separate test button
+// needed; just hit this URL directly in the browser while logged in as
+// the admin account to trigger it manually.
 async function isAuthorized(req: NextRequest): Promise<boolean> {
-  const auth = req.headers.get("authorization");
-  if (process.env.CRON_SECRET && auth === `Bearer ${process.env.CRON_SECRET}`) {
-    return true;
+  const secret = process.env.CRON_SECRET;
+  if (secret) {
+    const auth = req.headers.get("authorization");
+    if (auth === `Bearer ${secret}`) return true;
+    if (req.nextUrl.searchParams.get("secret") === secret) return true;
   }
   const supabase = await createServerSupabaseClient();
   const { data: { user } } = await supabase.auth.getUser();
