@@ -86,7 +86,7 @@ export async function callGroqWithTools(
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: "llama-3.3-70b-versatile",
+      model: "openai/gpt-oss-120b",
       messages,
       ...(tools && tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
       // Lower than the call flow's 0.6 — tool-calling benefits from more

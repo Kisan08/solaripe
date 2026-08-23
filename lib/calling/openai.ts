@@ -15,7 +15,7 @@ export interface ChatMessage {
   content: string;
 }
 
-function resolveProvider(): { apiKey: string; baseUrl: string; model: string } {
+function resolveProvider(): { apiKey: string; baseUrl: string; model: string; reasoningEffort?: "low" } {
   const forced = process.env.LLM_PROVIDER; // "groq" | "openai", optional override
   const hasOpenAi = !!process.env.OPENAI_API_KEY;
   const hasGroq = !!process.env.GROQ_API_KEY;
@@ -33,14 +33,20 @@ function resolveProvider(): { apiKey: string; baseUrl: string; model: string } {
     return {
       apiKey: process.env.GROQ_API_KEY!,
       baseUrl: "https://api.groq.com/openai/v1/chat/completions",
-      model: process.env.LLM_MODEL || "llama-3.3-70b-versatile",
+      model: process.env.LLM_MODEL || "openai/gpt-oss-20b",
+      // gpt-oss models spend part of max_tokens on hidden reasoning before
+      // any visible content — at default effort that reliably ate the
+      // whole 180-token budget below and left an empty reply. "low" keeps
+      // reasoning to a handful of tokens. Not sent to OpenAI, which
+      // doesn't recognize this param the same way.
+      reasoningEffort: "low",
     };
   }
   throw new Error("No LLM key found — set GROQ_API_KEY or OPENAI_API_KEY in .env.local");
 }
 
 export async function callOpenAiJson(messages: ChatMessage[]): Promise<Record<string, unknown>> {
-  const { apiKey, baseUrl, model } = resolveProvider();
+  const { apiKey, baseUrl, model, reasoningEffort } = resolveProvider();
 
   const res = await fetch(baseUrl, {
     method: "POST",
@@ -57,6 +63,7 @@ export async function callOpenAiJson(messages: ChatMessage[]): Promise<Record<st
       // slots/etc), and asking the model to generate fewer tokens is itself
       // part of what keeps the "thinking" pause short.
       max_tokens: 180,
+      ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
       // JSON mode: the model returns exactly one structured object (reply +
       // stage + intent + emotion + slots) in a single round-trip, instead of
       // a separate call per classification — that's what keeps latency and

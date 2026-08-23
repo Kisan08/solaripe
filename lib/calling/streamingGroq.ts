@@ -23,10 +23,16 @@ export async function streamGroqChat(
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: "llama-3.3-70b-versatile",
+      model: "openai/gpt-oss-20b",
       messages,
       temperature: 0.6,
       max_tokens: 200,
+      // gpt-oss models spend part of max_tokens on hidden reasoning before
+      // any visible content — at default effort that reliably ate the
+      // entire 200-token budget in testing and left an empty reply. "low"
+      // keeps reasoning to a handful of tokens so the budget goes to the
+      // actual spoken response.
+      reasoning_effort: "low",
       stream: true,
     }),
   });
