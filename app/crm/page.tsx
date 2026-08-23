@@ -99,21 +99,34 @@ function ResponseInput({ client, onSave, disabled, boxed }: { client: Client; on
   );
 }
 
-// datetime-local inputs work in the browser's local wall-clock time, no
-// timezone suffix — round-trips through Date so callback_at (a real
-// timestamptz) displays/edits as local time without a manual offset dance.
+// Both directions are hard-pinned to IST (Asia/Kolkata), NOT the device's
+// own configured timezone — this app is India-only, and the picker's raw
+// value always MEANS India wall-clock time. The previous version used
+// `new Date(v)`/`d.getHours()` etc., which parse and read back in
+// whatever timezone the browser's OS happens to be set to — on any device
+// not itself set to IST, "7:43 PM" typed by the user got silently saved
+// as 7:43 PM UTC (5.5 hours off from what was actually meant), the same
+// bug cron/send-reminders' `${date}T${time}+05:30` construction already
+// avoids for leads.follow_up_date/follow_up_time. Same fix here: always
+// go through an explicit +05:30 offset (save) / Asia/Kolkata formatter
+// (display) instead of ever touching a device-local Date getter.
 function toDatetimeLocalValue(iso: string | null): string {
   if (!iso) return "";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(d);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "00";
+  return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`;
 }
 
 function fromDatetimeLocalValue(v: string): string | null {
   if (!v) return null;
-  const d = new Date(v);
-  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  const ms = Date.parse(`${v}:00+05:30`);
+  return Number.isNaN(ms) ? null : new Date(ms).toISOString();
 }
 
 // Same "uncontrolled, save on blur/change" pattern as ResponseInput below
