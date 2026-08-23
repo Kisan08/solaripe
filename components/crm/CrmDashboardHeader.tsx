@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { Users, Clock, Star, PhoneCall, XCircle, Phone, Bell, X } from "lucide-react";
 import type { CallStatus } from "@/lib/types";
@@ -9,22 +9,33 @@ import { formatPhone } from "@/components/crm/CrmTable";
 // Plain useEffect+state count-up — no new dependency, mirrors the
 // lightweight animation idiom already used elsewhere in this app
 // (framer-motion for entrance, small local hooks for numeric ticks).
+//
+// Animates ONLY on first mount. The page polls /api/crm/clients every 5s
+// (app/crm/page.tsx), so `target` can change at any time from background
+// AI-calling activity — re-running the rAF loop on every one of those
+// changes was what caused the page to feel like it never stopped
+// "working" even while idle. Every update after the initial mount just
+// snaps straight to the new value with no animation.
 function useCountUp(target: number, durationMs = 800) {
   const [value, setValue] = useState(0);
+  const hasAnimatedRef = useRef(false);
   useEffect(() => {
+    if (hasAnimatedRef.current) {
+      setValue(target);
+      return;
+    }
+    hasAnimatedRef.current = true;
     let raf: number;
     const start = performance.now();
-    const from = 0;
     function tick(now: number) {
       const t = Math.min(1, (now - start) / durationMs);
       const eased = 1 - Math.pow(1 - t, 3);
-      setValue(Math.round(from + (target - from) * eased));
+      setValue(Math.round(target * eased));
       if (t < 1) raf = requestAnimationFrame(tick);
     }
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [target]);
+  }, [target, durationMs]);
   return value;
 }
 
@@ -80,7 +91,13 @@ export function CrmDashboardHeader({
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.45 }}
           className="relative overflow-hidden rounded-3xl border border-white/50 p-6 shadow-[0_8px_32px_rgba(12,68,124,0.12)] sm:p-8"
-          style={{ background: "linear-gradient(135deg, rgba(255,255,255,0.85), rgba(240,246,251,0.75))", backdropFilter: "blur(14px)" }}
+          // No backdrop-filter here — it's one of the most expensive CSS
+          // properties (constant compositing cost for as long as the
+          // element is on screen, not just during an animation) and this
+          // card is always visible. A plain, slightly higher-opacity
+          // background reads as the same soft "glass" card without paying
+          // for a live blur on every frame.
+          style={{ background: "linear-gradient(135deg, rgba(255,255,255,0.94), rgba(240,246,251,0.9))" }}
         >
           {/* Amber glow, brand-colored — soft even when idle, brighter while calling */}
           <div
@@ -220,12 +237,21 @@ export function CrmDashboardHeader({
 
 // Small standalone ring (distinct from the unused EfficiencyDonut sketch
 // above it) — kept simple: one animated circle, real numbers passed in.
+//
+// Animates in once, 50ms after mount. `pct` can change on every 5s poll
+// (background AI-calling activity moves calledCount/interestedCount) —
+// re-running the full 1s eased transition on every one of those changes
+// is what made the ring look like it was constantly working even while
+// the user was idle. After the initial animate-in, later value changes
+// snap instantly (duration 0) instead of re-transitioning.
 function EfficiencyDonutRing({ calledCount, interestedCount }: { calledCount: number; interestedCount: number }) {
   const pct = calledCount > 0 ? Math.round((interestedCount / calledCount) * 100) : 0;
   const radius = 34;
   const circumference = 2 * Math.PI * radius;
   const [ready, setReady] = useState(false);
+  const hasAnimatedRef = useRef(false);
   useEffect(() => { const t = setTimeout(() => setReady(true), 50); return () => clearTimeout(t); }, []);
+  useEffect(() => { if (ready) hasAnimatedRef.current = true; }, [ready]);
 
   return (
     <>
@@ -236,7 +262,7 @@ function EfficiencyDonutRing({ calledCount, interestedCount }: { calledCount: nu
           strokeDasharray={circumference}
           initial={{ strokeDashoffset: circumference }}
           animate={{ strokeDashoffset: ready ? circumference - (pct / 100) * circumference : circumference }}
-          transition={{ duration: 1, ease: "easeOut" }}
+          transition={{ duration: hasAnimatedRef.current ? 0 : 1, ease: "easeOut" }}
         />
       </svg>
       <span className="absolute text-base font-extrabold text-[#0C1E33]">{pct}%</span>
