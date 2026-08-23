@@ -3,6 +3,7 @@ import { useState, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import { Upload, Plus, Search, Phone, Download } from "lucide-react";
 import { CALL_STATUSES, type CallStatus } from "@/lib/types";
+import { PhoneInput } from "@/components/ui/phone-input";
 import { CrmDashboardHeader } from "@/components/crm/CrmDashboardHeader";
 import { CrmTable, formatPhone } from "@/components/crm/CrmTable";
 
@@ -386,9 +387,11 @@ export default function CRMPage() {
               className="mb-3 w-full rounded-lg border border-[#E2E8F0] px-3 py-2.5 text-base" />
 
             <label className="mb-1 block text-xs font-semibold text-[#6B7280]">Phone</label>
-            <input type="tel" value={addPhone} onChange={(e) => setAddPhone(e.target.value)}
-              placeholder="10-digit mobile number"
-              className="mb-4.5 w-full rounded-lg border border-[#E2E8F0] px-3 py-2.5 text-base" />
+            <PhoneInput value={addPhone} onChange={setAddPhone}
+              placeholder="98765 43210"
+              containerClassName="mb-4.5"
+              chipClassName="border-[#E2E8F0] bg-[#F3F4F6] text-[#6B7280]"
+              inputClassName="border-[#E2E8F0]" />
 
             <div className="flex gap-2">
               <button onClick={() => setShowAddModal(false)} disabled={adding}

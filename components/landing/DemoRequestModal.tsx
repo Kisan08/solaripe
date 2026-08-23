@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from "react"
 import { X } from "lucide-react"
+import { PhoneInput } from "@/components/ui/phone-input"
 
 export function DemoRequestModal({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState("")
@@ -89,13 +90,12 @@ export function DemoRequestModal({ onClose }: { onClose: () => void }) {
             </div>
             <div>
               <label className="mb-1 block text-xs font-medium text-gray-500">Phone</label>
-              <input
-                required
-                type="tel"
+              <PhoneInput
                 value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                placeholder="10-digit mobile number"
-                className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-base text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50"
+                onChange={setPhone}
+                placeholder="98765 43210"
+                chipClassName="border-gray-200 bg-gray-50 text-gray-500"
+                inputClassName="border-gray-200 focus:border-blue-400 focus:ring-2 focus:ring-blue-50"
               />
             </div>
             <div>

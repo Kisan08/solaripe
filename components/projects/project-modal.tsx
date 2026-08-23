@@ -4,6 +4,7 @@ import { useEffect, useState } from "react"
 import { Trash2, Loader2 } from "lucide-react"
 import { Modal } from "@/components/ui/modal"
 import { Field, Input, Select, Textarea } from "@/components/ui/field"
+import { PhoneInput, digitsForPhoneInput } from "@/components/ui/phone-input"
 import { cleanPhone } from "@/lib/phone"
 import {
   PROJECT_STATUSES,
@@ -84,7 +85,7 @@ export function ProjectModal({
     if (project) {
       setForm({
         client_name: project.client_name ?? "",
-        phone: project.phone ?? "",
+        phone: digitsForPhoneInput(project.phone),
         address: project.address ?? "",
         system_size:
           project.system_size != null ? String(project.system_size) : "",
@@ -216,10 +217,10 @@ export function ProjectModal({
           />
         </Field>
         <Field label="Phone">
-          <Input
+          <PhoneInput
             value={form.phone}
-            onChange={(e) => set("phone", e.target.value)}
-            placeholder="+91 98765 43210"
+            onChange={(digits) => set("phone", digits)}
+            placeholder="98765 43210"
           />
         </Field>
         <Field label="System size (kWp)">

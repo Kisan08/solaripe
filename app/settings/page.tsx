@@ -2,6 +2,7 @@
 import { useEffect, useState, type ChangeEvent } from 'react'
 import { Save, CheckCircle, Upload, Plus, Trash2 } from 'lucide-react'
 import { getSettings, saveSettings, uploadBrandingAsset, defaultSettings, type AppSettings } from '@/lib/settings'
+import { PhoneInput, digitsForPhoneInput } from '@/components/ui/phone-input'
 import { ClientLogosSection, TestimonialsSection, CertificationsSection, ProjectsSection, PipelineStagesSection } from './MediaSections'
 
 const COLOR_FIELDS: { key: keyof AppSettings; label: string }[] = [
@@ -22,7 +23,7 @@ const SECTIONS = [
     fields: [
       { key: 'name', label: 'Company Name', type: 'text', placeholder: 'Omkar Power Solutions' },
       { key: 'short_name', label: 'Short Name', type: 'text', placeholder: 'OPS' },
-      { key: 'phone', label: 'Phone', type: 'text', placeholder: '8452035102' },
+      { key: 'phone', label: 'Phone', type: 'text', placeholder: '8452035102', indianPhone: true },
       { key: 'email', label: 'Email', type: 'email', placeholder: 'email@company.com' },
       { key: 'gst', label: 'GST Number', type: 'text', placeholder: '27XXXXX' },
       { key: 'proprietor', label: 'Proprietor Name', type: 'text', placeholder: 'Omkar Deshmukh' },
@@ -45,8 +46,10 @@ const SECTIONS = [
     title: 'AI Calling',
     color: 'bg-purple-600',
     fields: [
+      // Twilio's own sending number, not a person's mobile — a US number
+      // by default, deliberately NOT put through the +91 lock below.
       { key: 'twilio_number', label: 'Twilio Number', type: 'text', placeholder: '+19154403891' },
-      { key: 'owner_phone', label: 'Your Phone (alerts)', type: 'text', placeholder: '+918452035102' },
+      { key: 'owner_phone', label: 'Your Phone (alerts)', type: 'text', placeholder: '8452035102', indianPhone: true },
     ],
   },
 ]
@@ -141,19 +144,29 @@ export default function SettingsPage() {
               <h2 className="text-sm font-semibold text-gray-700">{title}</h2>
             </div>
             <div className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {fields.map(({ key, label, type, placeholder }) => (
+              {fields.map(({ key, label, type, placeholder, indianPhone }) => (
                 <div key={key}>
                   <label className="block text-xs font-medium text-gray-500 mb-1">{label}</label>
-                  <input
-                    type={type}
-                    placeholder={placeholder}
-                    value={String(values[key as keyof AppSettings] ?? '')}
-                    onChange={e => setValues(v => ({
-                      ...v,
-                      [key]: type === 'number' ? parseFloat(e.target.value) || 0 : e.target.value
-                    }))}
-                    className="w-full px-3 py-2.5 text-base rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 transition-all"
-                  />
+                  {indianPhone ? (
+                    <PhoneInput
+                      value={digitsForPhoneInput(String(values[key as keyof AppSettings] ?? ''))}
+                      onChange={digits => setValues(v => ({ ...v, [key]: digits }))}
+                      placeholder={placeholder}
+                      chipClassName="border-gray-200 bg-gray-50 text-gray-500"
+                      inputClassName="border-gray-200 focus:border-blue-400 focus:ring-2 focus:ring-blue-50"
+                    />
+                  ) : (
+                    <input
+                      type={type}
+                      placeholder={placeholder}
+                      value={String(values[key as keyof AppSettings] ?? '')}
+                      onChange={e => setValues(v => ({
+                        ...v,
+                        [key]: type === 'number' ? parseFloat(e.target.value) || 0 : e.target.value
+                      }))}
+                      className="w-full px-3 py-2.5 text-base rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 transition-all"
+                    />
+                  )}
                 </div>
               ))}
             </div>

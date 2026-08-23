@@ -3,6 +3,7 @@ import { useState, useEffect, type ChangeEvent, type ReactNode, type CSSProperti
 import { useSearchParams } from "next/navigation";
 import { Phone, Mail, MapPin } from "lucide-react";
 import { company } from "@/lib/company.config";
+import { PhoneInput, digitsForPhoneInput } from "@/components/ui/phone-input";
 import { getSettings, defaultSettings, type AppSettings, type PaymentMilestone } from '@/lib/settings'
 import { fetchActiveProducts, type Product } from '@/lib/products'
 import {
@@ -1008,7 +1009,7 @@ function QuotePageInner() {
     validUntil: valid.toISOString().split("T")[0],
     clientName: searchParams.get("name") ?? "",
     siteAddress: searchParams.get("address") ?? "",
-    contactPhone: searchParams.get("phone") ?? "",
+    contactPhone: digitsForPhoneInput(searchParams.get("phone")),
     systemCapacity: Number(searchParams.get("system_size")) || 15,
     ratePerWp: 52,
     subsidyTotal: 0,
@@ -1281,7 +1282,16 @@ function QuotePageInner() {
               <Field label="Date" name="date" type="date" value={f.date} onChange={onChange} />
               <div className="col-span-2"><Field label="Client / Society Name" name="clientName" value={f.clientName} onChange={onChange} placeholder="e.g. Siddhi City CHS" /></div>
               <div className="col-span-2"><Field label="Site Address" name="siteAddress" value={f.siteAddress} onChange={onChange} placeholder="e.g. Badlapur, Maharashtra" /></div>
-              <Field label="Contact Phone" name="contactPhone" value={f.contactPhone} onChange={onChange} placeholder="9876543210" />
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Contact Phone</label>
+                <PhoneInput
+                  value={f.contactPhone}
+                  onChange={digits => setF(p => ({ ...p, contactPhone: digits }))}
+                  placeholder="98765 43210"
+                  chipClassName="border-gray-200 bg-gray-50 text-gray-500"
+                  inputClassName="border-gray-200 focus:border-blue-400 focus:ring-2 focus:ring-blue-50"
+                />
+              </div>
               <Field label="Valid Until" name="validUntil" type="date" value={f.validUntil} onChange={onChange} />
             </div>
           </div>
