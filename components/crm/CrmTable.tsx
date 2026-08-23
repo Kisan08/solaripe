@@ -263,20 +263,92 @@ function ResetButton({ client, onReset, full }: { client: Client; onReset: (c: C
   );
 }
 
+// Below the table, both desktop and mobile: page position + "Rows per
+// page" + Previous/Next, and the "select all N matching" link — shown
+// only once the whole current page is selected AND there's more than
+// one page of matches, since selecting page-by-page already covers
+// everything otherwise.
+function PaginationFooter({
+  page, pageSize, total, onPageChange, onPageSizeChange, allPageSelected, selectingAllMatching, onSelectAllMatching,
+}: {
+  page: number;
+  pageSize: number;
+  total: number;
+  onPageChange: (p: number) => void;
+  onPageSizeChange: (n: number) => void;
+  allPageSelected: boolean;
+  selectingAllMatching: boolean;
+  onSelectAllMatching: () => void;
+}) {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  return (
+    <div style={{
+      padding: "10px 16px", borderTop: "1px solid #F1F5F9",
+      display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 10,
+    }}>
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, fontSize: 12, color: "#6B7280" }}>
+        <span>Page {page} of {totalPages} · {total} client{total === 1 ? "" : "s"}</span>
+        {allPageSelected && total > pageSize && (
+          <button onClick={onSelectAllMatching} disabled={selectingAllMatching}
+            style={{
+              color: "#0C447C", fontWeight: 700, fontSize: 12, background: "none", border: "none",
+              cursor: selectingAllMatching ? "wait" : "pointer", textDecoration: "underline", padding: 0,
+            }}>
+            {selectingAllMatching ? "Selecting…" : `Select all ${total} matching clients`}
+          </button>
+        )}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#6B7280" }}>
+          Rows per page
+          <select value={pageSize} onChange={(e) => onPageSizeChange(Number(e.target.value))}
+            style={{ border: "1px solid #D1D5DB", borderRadius: 6, padding: "4px 6px", fontSize: 12, cursor: "pointer", background: "#fff" }}>
+            {[10, 25, 50, 100].map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </label>
+        <div style={{ display: "flex", gap: 4 }}>
+          <button onClick={() => onPageChange(page - 1)} disabled={page <= 1}
+            style={{
+              border: "1px solid #D1D5DB", borderRadius: 6, padding: "4px 10px", fontSize: 12, fontWeight: 600,
+              color: page <= 1 ? "#D1D5DB" : "#374151", cursor: page <= 1 ? "not-allowed" : "pointer", background: "#fff",
+            }}>
+            Previous
+          </button>
+          <button onClick={() => onPageChange(page + 1)} disabled={page >= totalPages}
+            style={{
+              border: "1px solid #D1D5DB", borderRadius: 6, padding: "4px 10px", fontSize: 12, fontWeight: 600,
+              color: page >= totalPages ? "#D1D5DB" : "#374151", cursor: page >= totalPages ? "not-allowed" : "pointer", background: "#fff",
+            }}>
+            Next
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function CrmTable({
-  filtered, loading, totalCount,
-  selectedIds, allFilteredSelected, someFilteredSelected, toggleSelect, toggleSelectAllFiltered,
+  clients, loading, totalCount, total, page, pageSize,
+  selectedIds, allPageSelected, somePageSelected, toggleSelect, toggleSelectAllOnPage,
+  selectingAllMatching, onSelectAllMatching, onPageChange, onPageSizeChange,
   updatingId, callingId, callingAll,
   callOne, resetOne, updateManual,
 }: {
-  filtered: Client[];
+  clients: Client[];
   loading: boolean;
-  totalCount: number;
+  totalCount: number; // unfiltered tenant total — only for empty-state copy
+  total: number;      // matching current search/status filter, across all pages
+  page: number;
+  pageSize: number;
   selectedIds: Set<string>;
-  allFilteredSelected: boolean;
-  someFilteredSelected: boolean;
+  allPageSelected: boolean;
+  somePageSelected: boolean;
   toggleSelect: (id: string) => void;
-  toggleSelectAllFiltered: () => void;
+  toggleSelectAllOnPage: () => void;
+  selectingAllMatching: boolean;
+  onSelectAllMatching: () => void;
+  onPageChange: (p: number) => void;
+  onPageSizeChange: (n: number) => void;
   updatingId: string | null;
   callingId: string | null;
   callingAll: boolean;
@@ -294,7 +366,7 @@ export function CrmTable({
       <div className="hidden overflow-hidden rounded-2xl border border-white/60 bg-white shadow-[0_4px_24px_rgba(12,68,124,0.08)] sm:block">
         {loading ? (
           <div style={{ padding: 48, textAlign: "center", color: "#6B7280" }}>Loading clients…</div>
-        ) : filtered.length === 0 ? (
+        ) : clients.length === 0 ? (
           <div style={{ padding: 48, textAlign: "center" }}>
             <div style={{ fontSize: 36, marginBottom: 10 }}>📂</div>
             <div style={{ fontSize: 15, color: "#6B7280" }}>
@@ -309,9 +381,9 @@ export function CrmTable({
                   <th style={{ padding: "12px 16px", width: 1 }}>
                     <input
                       type="checkbox"
-                      checked={allFilteredSelected}
-                      ref={(el) => { if (el) el.indeterminate = someFilteredSelected && !allFilteredSelected; }}
-                      onChange={toggleSelectAllFiltered}
+                      checked={allPageSelected}
+                      ref={(el) => { if (el) el.indeterminate = somePageSelected && !allPageSelected; }}
+                      onChange={toggleSelectAllOnPage}
                       aria-label="Select all"
                       style={{ width: 16, height: 16, cursor: "pointer" }}
                     />
@@ -322,7 +394,7 @@ export function CrmTable({
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((client, idx) => (
+                {clients.map((client, idx) => (
                   <tr key={client.id}
                     style={{
                       borderBottom: "1px solid #F1F5F9",
@@ -340,7 +412,7 @@ export function CrmTable({
                         style={{ width: 16, height: 16, cursor: "pointer" }}
                       />
                     </td>
-                    <td style={{ padding: "11px 16px", color: "#9CA3AF" }}>{idx + 1}</td>
+                    <td style={{ padding: "11px 16px", color: "#9CA3AF" }}>{(page - 1) * pageSize + idx + 1}</td>
                     <td style={{ padding: "11px 16px" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         <Avatar client={client} />
@@ -390,11 +462,12 @@ export function CrmTable({
             </table>
           </div>
         )}
-        {filtered.length > 0 && (
-          <div style={{ padding: "10px 16px", borderTop: "1px solid #F1F5F9", fontSize: 12, color: "#9CA3AF", display: "flex", justifyContent: "space-between" }}>
-            <span>Showing {filtered.length} of {totalCount} clients · Sorted by priority</span>
-            <span>Auto-refreshes every 5s</span>
-          </div>
+        {clients.length > 0 && (
+          <PaginationFooter
+            page={page} pageSize={pageSize} total={total}
+            onPageChange={onPageChange} onPageSizeChange={onPageSizeChange}
+            allPageSelected={allPageSelected} selectingAllMatching={selectingAllMatching} onSelectAllMatching={onSelectAllMatching}
+          />
         )}
       </div>
 
@@ -402,7 +475,7 @@ export function CrmTable({
       <div className="sm:hidden">
         {loading ? (
           <div style={{ padding: 40, textAlign: "center", color: "#6B7280" }}>Loading clients…</div>
-        ) : filtered.length === 0 ? (
+        ) : clients.length === 0 ? (
           <div style={{ padding: 40, textAlign: "center" }}>
             <div style={{ fontSize: 36, marginBottom: 10 }}>📂</div>
             <div style={{ fontSize: 14, color: "#6B7280" }}>
@@ -414,15 +487,15 @@ export function CrmTable({
             <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 4px 8px" }}>
               <input
                 type="checkbox"
-                checked={allFilteredSelected}
-                ref={(el) => { if (el) el.indeterminate = someFilteredSelected && !allFilteredSelected; }}
-                onChange={toggleSelectAllFiltered}
+                checked={allPageSelected}
+                ref={(el) => { if (el) el.indeterminate = somePageSelected && !allPageSelected; }}
+                onChange={toggleSelectAllOnPage}
                 aria-label="Select all"
                 style={{ width: 16, height: 16, cursor: "pointer" }}
               />
               <span style={{ fontSize: 12, color: "#6B7280", fontWeight: 600 }}>Select all</span>
             </div>
-            {filtered.map((client, idx) => (
+            {clients.map((client, idx) => (
               <div key={client.id}
                 style={{
                   background: "#fff", borderRadius: 14, padding: "14px 16px", marginBottom: 10,
@@ -439,7 +512,7 @@ export function CrmTable({
                       aria-label={`Select ${client.name}`}
                       style={{ width: 16, height: 16, cursor: "pointer", flexShrink: 0 }}
                     />
-                    <span style={{ fontSize: 11, color: "#9CA3AF", minWidth: 16 }}>{idx + 1}.</span>
+                    <span style={{ fontSize: 11, color: "#9CA3AF", minWidth: 16 }}>{(page - 1) * pageSize + idx + 1}.</span>
                     <Avatar client={client} />
                     <span style={{ fontWeight: 700, fontSize: 14, color: "#111827" }}>
                       {client.status === "interested" && "🔥 "}
@@ -484,9 +557,11 @@ export function CrmTable({
                 </div>
               </div>
             ))}
-            <div style={{ padding: "10px 4px", fontSize: 12, color: "#9CA3AF", textAlign: "center" }}>
-              Showing {filtered.length} of {totalCount} clients · Auto-refreshes every 5s
-            </div>
+            <PaginationFooter
+              page={page} pageSize={pageSize} total={total}
+              onPageChange={onPageChange} onPageSizeChange={onPageSizeChange}
+              allPageSelected={allPageSelected} selectingAllMatching={selectingAllMatching} onSelectAllMatching={onSelectAllMatching}
+            />
           </>
         )}
       </div>

@@ -71,11 +71,13 @@ function KpiCard({
 }
 
 export function CrmDashboardHeader({
-  clients, stats, callingAll, callingId, callAllPending,
+  stats, callingAll, callingId, callAllPending,
   interestedLeads, callBackLeads, showReminder, setReminderDismissed, setFilterStatus,
 }: {
-  clients: Client[];
-  stats: { total: number; pending: number; interested: number; callBack: number; notInterested: number };
+  // `called` is a global tenant-wide count (see app/api/crm/clients/
+  // route.ts's stats query) — this component never sees the full client
+  // list post-pagination, so calledCount can't be derived locally anymore.
+  stats: { total: number; pending: number; interested: number; callBack: number; notInterested: number; called: number };
   callingAll: boolean;
   callingId: string | null;
   callAllPending: () => void;
@@ -85,7 +87,7 @@ export function CrmDashboardHeader({
   setReminderDismissed: (v: boolean) => void;
   setFilterStatus: (s: CallStatus | "all") => void;
 }) {
-  const calledCount = clients.filter((c) => c.called_at).length;
+  const calledCount = stats.called;
   const isCallingNow = callingAll || callingId !== null;
 
   return (

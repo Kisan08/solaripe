@@ -22,13 +22,6 @@ export interface Client {
   reminder_sent_at: string | null;
 }
 
-const STATUS_PRIORITY: Record<CallStatus, number> = {
-  interested: 1, call_back: 2, calling: 3, pending: 4, no_answer: 5, failed: 6, not_interested: 7,
-};
-
-const LEAD_SCORE_PRIORITY: Record<LeadScore, number> = { hot: 1, warm: 2, cold: 3 };
-const LEAD_SCORE_NONE_PRIORITY = 4; // unscored (call not yet ended) sinks to the bottom when sorting by score
-
 const STATUS_LABELS: Record<CallStatus, string> = {
   interested: "Interested ✅", call_back: "Call Back 🔁", calling: "Calling…",
   pending: "Pending", no_answer: "No Answer", failed: "Failed", not_interested: "Not Interested",
@@ -46,7 +39,19 @@ function exportToCSV(clients: Client[]) {
 }
 
 export default function CRMPage() {
+  // `clients` now holds only the CURRENT PAGE's rows (server-side
+  // pagination — see app/api/crm/clients/route.ts). `total`/`stats`/
+  // `interestedLeads`/`callBackLeads` are separate, server-computed
+  // values that must NOT be derived from `clients` — stats in particular
+  // stay global (every client the tenant has) regardless of the current
+  // page/search/status filter, same as before pagination existed.
   const [clients, setClients] = useState<Client[]>([]);
+  const [total, setTotal] = useState(0);
+  const [stats, setStats] = useState({ total: 0, pending: 0, interested: 0, callBack: 0, notInterested: 0, called: 0 });
+  const [interestedLeads, setInterestedLeads] = useState<Client[]>([]);
+  const [callBackLeads, setCallBackLeads] = useState<Client[]>([]);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [callingId, setCallingId] = useState<string | null>(null);
@@ -54,6 +59,7 @@ export default function CRMPage() {
   const [filterStatus, setFilterStatus] = useState<CallStatus | "all">("all");
   const [sortBy, setSortBy] = useState<"priority" | "score">("priority");
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [toast, setToast] = useState<{ msg: string; type: "ok" | "err" } | null>(null);
   const [uploadedCount, setUploadedCount] = useState<number | null>(null);
   const [uploadSummary, setUploadSummary] = useState<string[] | null>(null);
@@ -63,6 +69,7 @@ export default function CRMPage() {
   const [addPhone, setAddPhone] = useState("");
   const [adding, setAdding] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [selectingAllMatching, setSelectingAllMatching] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [bulkDeleteProgress, setBulkDeleteProgress] = useState<{ done: number; total: number } | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
@@ -70,20 +77,48 @@ export default function CRMPage() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const notifiedRef = useRef<Set<string>>(new Set());
 
-  const fetchClientsRef = useRef(async () => {
+  // Debounce raw typing before it drives a re-query — one request per
+  // pause in typing, not one per keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  // Changing what's being asked for (not which page) always means "start
+  // over from page 1" — searching or re-filtering and landing on
+  // whatever page you happened to be on would show the wrong slice.
+  // setPage(1) is a no-op (no re-render) when already on page 1, which is
+  // the common case, so this doesn't cause an extra fetch there.
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch, filterStatus, sortBy, pageSize]);
+
+  async function fetchPage() {
     try {
-      const res = await fetch("/api/crm/clients");
-      if (!res.ok) { console.error("fetchClients error", res.status); return; }
-      const data: Client[] = await res.json();
-      setClients(data);
+      const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize), sortBy });
+      if (filterStatus !== "all") params.set("status", filterStatus);
+      if (debouncedSearch) params.set("search", debouncedSearch);
+      const res = await fetch(`/api/crm/clients?${params.toString()}`);
+      if (!res.ok) { console.error("fetchPage error", res.status); return; }
+      const json = await res.json();
+      setClients(json.data ?? []);
+      setTotal(json.total ?? 0);
+      setStats(json.stats ?? { total: 0, pending: 0, interested: 0, callBack: 0, notInterested: 0, called: 0 });
+      setInterestedLeads(json.interestedLeads ?? []);
+      setCallBackLeads(json.callBackLeads ?? []);
     } catch (err) {
-      console.error("fetchClients exception:", err);
+      console.error("fetchPage exception:", err);
     } finally {
       setLoading(false);
     }
-  });
+  }
 
-  const fetchClients = fetchClientsRef.current;
+  // Always call fetchPage through this ref (never fetchPage() directly
+  // from the 5s poll) — the ref is refreshed every render so the interval
+  // (set up once, on mount) always runs the version closing over the
+  // CURRENT page/filter/sort/search, not whatever they were on mount.
+  const fetchPageRef = useRef(fetchPage);
+  fetchPageRef.current = fetchPage;
 
   // Browser notification permission
   useEffect(() => {
@@ -93,16 +128,20 @@ export default function CRMPage() {
   }, []);
 
   useEffect(() => {
-    const run = () => { fetchClientsRef.current(); };
-    run();
-    pollRef.current = setInterval(run, 5000);
+    fetchPageRef.current();
+  }, [page, pageSize, filterStatus, sortBy, debouncedSearch]);
+
+  useEffect(() => {
+    pollRef.current = setInterval(() => { fetchPageRef.current(); }, 5000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, []);
 
-  // Fire browser notification for newly interested leads
+  // Fire browser notification for newly interested leads — driven by the
+  // server-sourced, global `interestedLeads` list, not the current page,
+  // so this still fires for a lead that becomes interested while the user
+  // is looking at an unrelated page/filter.
   useEffect(() => {
-    const interested = clients.filter((c) => c.status === "interested");
-    for (const c of interested) {
+    for (const c of interestedLeads) {
       if (!notifiedRef.current.has(c.id)) {
         notifiedRef.current.add(c.id);
         if ("Notification" in window && Notification.permission === "granted") {
@@ -113,7 +152,7 @@ export default function CRMPage() {
         }
       }
     }
-  }, [clients]);
+  }, [interestedLeads]);
 
   function showToast(msg: string, type: "ok" | "err") {
     setToast({ msg, type });
@@ -138,7 +177,7 @@ export default function CRMPage() {
       // "did my import work".
       setUploadSummary(Array.isArray(summary) ? summary : null);
       showToast(`${inserted} clients imported`, "ok");
-      await fetchClients();
+      await fetchPage();
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : "Upload failed", "err");
     } finally {
@@ -174,7 +213,7 @@ export default function CRMPage() {
       showToast(`${addName} added`, "ok");
       setShowAddModal(false);
       setAddName(""); setAddPhone("");
-      await fetchClients();
+      await fetchPage();
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : "Failed to add client", "err");
     } finally {
@@ -249,19 +288,44 @@ export default function CRMPage() {
     });
   }
 
-  // "Select all" scopes to the currently filtered/searched rows, not the
-  // whole client list — matching what's actually visible on screen.
-  function toggleSelectAllFiltered() {
+  // Header checkbox: selects/deselects the CURRENT PAGE's rows only —
+  // `clients` IS the current page now, so this is simpler than the old
+  // "select all filtered" logic (no separate filtered array to
+  // cross-reference). Selecting beyond the page is the separate
+  // "select all N matching" link below, shown once this is fully checked.
+  function toggleSelectAllOnPage() {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      const allSelected = filtered.length > 0 && filtered.every((c) => next.has(c.id));
+      const allSelected = clients.length > 0 && clients.every((c) => next.has(c.id));
       if (allSelected) {
-        filtered.forEach((c) => next.delete(c.id));
+        clients.forEach((c) => next.delete(c.id));
       } else {
-        filtered.forEach((c) => next.add(c.id));
+        clients.forEach((c) => next.add(c.id));
       }
       return next;
     });
+  }
+
+  // Fetches every id matching the CURRENT search/status filter (not just
+  // the visible page) so a large selection isn't capped at one page's
+  // worth of rows. Plain filtered .select(), not .in("id", [...ids]) —
+  // no risk of re-hitting the request-size bug the earlier bulk-delete
+  // fix addressed, since this builds the selection, it doesn't delete by it.
+  async function selectAllMatching() {
+    setSelectingAllMatching(true);
+    try {
+      const params = new URLSearchParams({ idsOnly: "true" });
+      if (filterStatus !== "all") params.set("status", filterStatus);
+      if (debouncedSearch) params.set("search", debouncedSearch);
+      const res = await fetch(`/api/crm/clients?${params.toString()}`);
+      if (!res.ok) throw new Error();
+      const { data } = await res.json();
+      setSelectedIds(new Set((data as { id: string }[]).map((c) => c.id)));
+    } catch {
+      showToast("Failed to select all matching clients", "err");
+    } finally {
+      setSelectingAllMatching(false);
+    }
   }
 
   // Sending hundreds of ids in one .in("id", ids) call builds a request
@@ -323,12 +387,25 @@ export default function CRMPage() {
       // Reconcile with actual server state whether this finished fully,
       // partially, or not at all — the optimistic per-batch removal
       // above is a UX nicety, not the source of truth.
-      await fetchClients();
+      await fetchPage();
     }
   }
 
+  // Fetches every pending client tenant-wide (ignoring whatever the user
+  // currently has typed in search/filter — matches this button's
+  // original behavior, from before pagination, of calling every pending
+  // client regardless of what was on screen) rather than looping over
+  // just the current page's rows.
   async function callAllPending() {
-    const pending = clients.filter((c) => c.status === "pending");
+    let pending: { id: string; name: string; phone: string }[] = [];
+    try {
+      const res = await fetch(`/api/crm/clients?idsOnly=true&status=pending`);
+      if (!res.ok) throw new Error();
+      pending = (await res.json()).data ?? [];
+    } catch {
+      showToast("Failed to load pending clients", "err");
+      return;
+    }
     if (pending.length === 0) { showToast("No pending clients to call", "err"); return; }
     setCallingAll(true);
     try {
@@ -342,40 +419,15 @@ export default function CRMPage() {
       }
       showToast(`Initiated calls for ${pending.length} clients`, "ok");
     } catch { showToast("Some calls failed", "err"); }
-    finally { setCallingAll(false); }
+    finally { setCallingAll(false); await fetchPage(); }
   }
 
-  // Sort: default is interested/call_back-first status priority (unchanged
-  // behavior); "score" mode instead surfaces hot leads first regardless of
-  // status, for scanning the whole list for buying signals at a glance.
-  const sorted = [...clients].sort((a, b) => {
-    if (sortBy === "score") {
-      const pa = a.lead_score ? LEAD_SCORE_PRIORITY[a.lead_score] : LEAD_SCORE_NONE_PRIORITY;
-      const pb = b.lead_score ? LEAD_SCORE_PRIORITY[b.lead_score] : LEAD_SCORE_NONE_PRIORITY;
-      return pa - pb;
-    }
-    return STATUS_PRIORITY[a.status] - STATUS_PRIORITY[b.status];
-  });
+  // `clients` IS the current page, so "select all" here just means every
+  // row currently in `clients` — no separate filtered array to
+  // cross-reference (see toggleSelectAllOnPage above).
+  const allPageSelected = clients.length > 0 && clients.every((c) => selectedIds.has(c.id));
+  const somePageSelected = clients.some((c) => selectedIds.has(c.id));
 
-  const filtered = sorted.filter((c) => {
-    const matchStatus = filterStatus === "all" || c.status === filterStatus;
-    const matchSearch = search === "" || c.name.toLowerCase().includes(search.toLowerCase()) || c.phone.includes(search);
-    return matchStatus && matchSearch;
-  });
-
-  const allFilteredSelected = filtered.length > 0 && filtered.every((c) => selectedIds.has(c.id));
-  const someFilteredSelected = filtered.some((c) => selectedIds.has(c.id));
-
-  const stats = {
-    total:         clients.length,
-    pending:       clients.filter((c) => c.status === "pending").length,
-    interested:    clients.filter((c) => c.status === "interested").length,
-    callBack:      clients.filter((c) => c.status === "call_back").length,
-    notInterested: clients.filter((c) => c.status === "not_interested").length,
-  };
-
-  const interestedLeads = clients.filter((c) => c.status === "interested");
-  const callBackLeads = clients.filter((c) => c.status === "call_back");
   const showReminder = !reminderDismissed && (interestedLeads.length > 0 || callBackLeads.length > 0);
 
   return (
@@ -458,7 +510,6 @@ export default function CRMPage() {
           chrome outside this file is untouched). */}
       <div className="mx-auto max-w-[1280px] rounded-[24px] bg-transparent">
         <CrmDashboardHeader
-          clients={clients}
           stats={stats}
           callingAll={callingAll}
           callingId={callingId}
@@ -529,8 +580,9 @@ export default function CRMPage() {
             {callingAll ? "Calling…" : `Call All (${stats.pending})`}
           </button>
 
-          <button onClick={() => exportToCSV(filtered)}
-            disabled={filtered.length === 0}
+          <button onClick={() => exportToCSV(clients)}
+            disabled={clients.length === 0}
+            title="Exports the current page only"
             className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-[#0D3260] px-4 py-2.5 text-[13px] font-bold text-white disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto">
             <Download className="size-3.5" />
             Export CSV
@@ -558,14 +610,21 @@ export default function CRMPage() {
         )}
 
         <CrmTable
-          filtered={filtered}
+          clients={clients}
           loading={loading}
-          totalCount={clients.length}
+          totalCount={stats.total}
+          total={total}
+          page={page}
+          pageSize={pageSize}
           selectedIds={selectedIds}
-          allFilteredSelected={allFilteredSelected}
-          someFilteredSelected={someFilteredSelected}
+          allPageSelected={allPageSelected}
+          somePageSelected={somePageSelected}
           toggleSelect={toggleSelect}
-          toggleSelectAllFiltered={toggleSelectAllFiltered}
+          toggleSelectAllOnPage={toggleSelectAllOnPage}
+          selectingAllMatching={selectingAllMatching}
+          onSelectAllMatching={selectAllMatching}
+          onPageChange={setPage}
+          onPageSizeChange={setPageSize}
           updatingId={updatingId}
           callingId={callingId}
           callingAll={callingAll}
