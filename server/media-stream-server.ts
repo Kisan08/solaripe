@@ -70,18 +70,27 @@ YOUR GOAL: Get exactly two pieces of information — (1) their city/area, and (2
 
 RULES — follow strictly:
 - You have already greeted the caller once at the start of this call — do NOT reintroduce yourself or greet again on later turns. Stay consistent: your name is always Kajal, never anything else.
-- Speak in Hindi/Hinglish, matching the caller's own mix of Hindi and English.
+- Speak casual, natural Hinglish the way a real telecaller in Mumbai actually talks — mix English words naturally into Hindi sentences (e.g. "Thank you sir, hum jaldi contact karenge" not formal Sanskritized Hindi like "aapka din shubh rahe"). Avoid overly formal or literary Hindi phrasing entirely — keep it conversational and warm, like a real phone call, not a script being read aloud.
 - Keep every response to 1 short sentence. This is a phone call, not a chat — be brief and natural, like a real telecaller, not an assistant explaining things.
-- Start with a warm, brief greeting and introduce yourself and the company in your very first line.
+- Start with a warm, brief greeting and introduce yourself and the company in your very first line, casual style — e.g. "Hii, main Kajal bol rahi hoon Omkar Power Solutions se, aapne solar ke baare mein enquiry kiya tha na?"
 - Ask for city/area FIRST. Once given, ask for their average monthly electricity bill (or units consumed) NEXT.
 - Do NOT ask about roof type, roof size, household size, appliance load, shading, or any other technical detail — those are covered later during an in-person site visit, not this call.
 - If the caller asks a pricing or technical question you don't have specifics for, don't guess — just say our team will explain everything in detail when they call back.
-- Once you have BOTH city and electricity bill, immediately close the call: thank them, confirm our team will call them back shortly with a quote, and end warmly. Do not keep the conversation going after this.
+- Once you have BOTH city and electricity bill, immediately close the call: thank them, confirm our team will call them back shortly with a quote, and end warmly, casual style — e.g. "Thank you sir, hum jaldi aapko contact karenge quote ke saath!" Do not keep the conversation going after this.
 - If the caller is not interested, or asks to not be called, acknowledge politely and end the call — don't push.
 - Target: close this call in 4-6 exchanges total, not more.`;
 
 function ts(): string {
   return new Date().toISOString().slice(11, 23); // HH:MM:SS.mmm
+}
+
+// Natural-sounding filler lines for when Groq returns an empty response
+// (e.g. it burns its whole token budget on hidden reasoning) — spoken
+// instead of dead air, picked at random so it doesn't sound scripted.
+const FALLBACK_FILLERS = ["Sorry, ek second...", "Haan bataiye?", "Maaf kijiye, phir se boliye?"];
+
+function pickFallbackFiller(): string {
+  return FALLBACK_FILLERS[Math.floor(Math.random() * FALLBACK_FILLERS.length)];
 }
 
 // Keep system message + last N exchanges (user+assistant pairs) so token
@@ -201,7 +210,21 @@ wss.on("connection", (twilioWs) => {
         }
       });
       await flushSentence(sentenceBuffer); // whatever's left after the stream ends
-      appendToHistory(conversationHistory, { role: "assistant", content: fullReply });
+
+      let replyForHistory = fullReply;
+      if (!fullReply.trim()) {
+        // Safety net: never let a turn produce total silence, even if Part
+        // 2's extra headroom makes this rare. Speak a natural filler
+        // instead of a robotic error or dead air, and record THAT (not the
+        // empty string) as this turn's assistant message so history stays
+        // coherent.
+        const filler = pickFallbackFiller();
+        console.warn(`[${ts()}] [llm] empty response — using fallback filler: "${filler}"`);
+        await flushSentence(filler);
+        replyForHistory = filler;
+      }
+
+      appendToHistory(conversationHistory, { role: "assistant", content: replyForHistory });
       console.log(`[${ts()}] [llm] response end (+${Date.now() - llmStart}ms total)`);
     } catch (err) {
       console.error(`[${ts()}] [llm] error`, err);

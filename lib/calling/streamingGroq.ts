@@ -26,12 +26,16 @@ export async function streamGroqChat(
       model: "openai/gpt-oss-20b",
       messages,
       temperature: 0.6,
-      max_tokens: 200,
+      // 350 (up from 200): more headroom for hidden reasoning + actual
+      // visible content on inputs that need more reasoning tokens, on top
+      // of the reasoning_effort floor below.
+      max_tokens: 350,
       // gpt-oss models spend part of max_tokens on hidden reasoning before
-      // any visible content — at default effort that reliably ate the
-      // entire 200-token budget in testing and left an empty reply. "low"
-      // keeps reasoning to a handful of tokens so the budget goes to the
-      // actual spoken response.
+      // any visible content. Per Groq's docs, "low" is the lowest
+      // reasoning_effort this model supports — "minimal"/"none" aren't
+      // available for gpt-oss (only for Qwen 3 32B) — so this is already
+      // the most headroom-favoring setting available; nothing lower to
+      // switch to.
       reasoning_effort: "low",
       stream: true,
     }),
