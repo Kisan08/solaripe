@@ -13,6 +13,19 @@ import { sendWhatsAppTo, formatScheduledReminderMessage } from "@/lib/whatsappNo
 // goes out twice even though the window overlaps between runs.
 const WINDOW_MINUTES = 30;
 
+// This route depends entirely on an external scheduler hitting it on
+// time (see the isAuthorized comment below for why). Without a grace
+// period, a due item whose scheduledFor ticks past `now` before that
+// external call happens to land (a missed run, a scheduler outage, a
+// slow request) would fail a plain `scheduledMs >= now` check forever
+// afterward — since `now` only moves forward, that reminder would
+// silently never fire, with no retry and no error surfaced anywhere.
+// Widening the window to also cover items up to GRACE_PERIOD_MS in the
+// past (still gated by reminder_sent_at IS NULL, so nothing already sent
+// is ever touched) means one missed external call doesn't permanently
+// orphan a reminder — the very next call still catches it.
+const GRACE_PERIOD_MS = 15 * 60_000;
+
 // This route isn't in vercel.json's crons (Vercel Hobby only runs crons
 // once a day — see the commit that removed it — so a real 15-minute
 // schedule has to come from an external scheduler hitting this URL
@@ -58,6 +71,7 @@ export async function GET(req: NextRequest) {
   }
 
   const now = Date.now();
+  const windowStart = now - GRACE_PERIOD_MS;
   const windowEnd = now + WINDOW_MINUTES * 60_000;
 
   const { data: leadRows, error: leadsError } = await supabaseAdmin
@@ -94,7 +108,7 @@ export async function GET(req: NextRequest) {
       `${lead.follow_up_date}T${normalizeTime(lead.follow_up_time as string)}+05:30`,
     );
     if (Number.isNaN(scheduledMs)) continue;
-    if (scheduledMs >= now && scheduledMs <= windowEnd) {
+    if (scheduledMs >= windowStart && scheduledMs <= windowEnd) {
       due.push({
         table: "leads", id: lead.id as string, tenantId: lead.tenant_id as string,
         name: lead.name as string, phone: lead.phone as string | null,
@@ -105,7 +119,7 @@ export async function GET(req: NextRequest) {
 
   for (const client of clientRows ?? []) {
     const scheduledMs = new Date(client.callback_at as string).getTime();
-    if (scheduledMs >= now && scheduledMs <= windowEnd) {
+    if (scheduledMs >= windowStart && scheduledMs <= windowEnd) {
       due.push({
         table: "clients", id: client.id as string, tenantId: client.tenant_id as string,
         name: client.name as string, phone: client.phone as string | null,
