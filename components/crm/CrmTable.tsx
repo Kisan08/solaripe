@@ -23,7 +23,11 @@ const LEAD_SCORE_CONFIG: Record<LeadScore, { label: string; color: string; bg: s
   cold: { label: "🔵 Cold", color: "#1E40AF", bg: "#DBEAFE" },
 };
 
-const AVATAR_COLORS = ["#1A4F8A", "#065F46", "#92400E", "#7C3AED", "#991B1B", "#0D3260"];
+// One consistent blue for every avatar — a per-row rainbow of colors was
+// exactly the kind of competing-color noise this table is meant to avoid
+// now; the calm reference uses a single brand tone here, not a hash-based
+// palette.
+const AVATAR_COLOR = "#0C447C";
 
 export function formatPhone(p: string) {
   const d = p.replace(/\D/g, "");
@@ -47,17 +51,11 @@ function initials(name: string) {
   return name.trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
 }
 
-function avatarColor(id: string) {
-  let hash = 0;
-  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
-  return AVATAR_COLORS[hash % AVATAR_COLORS.length];
-}
-
 function Avatar({ client }: { client: Client }) {
   return (
     <span
       className="flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white"
-      style={{ backgroundColor: avatarColor(client.id) }}
+      style={{ backgroundColor: AVATAR_COLOR }}
     >
       {initials(client.name)}
     </span>
@@ -199,9 +197,13 @@ function CallButton({
     <button onClick={() => onCall(client)} disabled={disabled}
       className={full ? "flex-1" : ""}
       style={{
-        backgroundColor: client.status === "interested" ? "#D1FAE5" : client.status === "calling" || callingId === client.id ? "#EFF6FF" : "#0C447C",
-        color: client.status === "interested" ? "#065F46" : client.status === "calling" || callingId === client.id ? "#0C447C" : "#fff",
-        border: "none", borderRadius: full ? 8 : 6, padding: full ? "9px" : "6px 12px",
+        // Consistent blue outline, not a solid navy block — the interested
+        // (green) and calling (light-blue) states are functional status
+        // colors, not decoration, so they're untouched.
+        backgroundColor: client.status === "interested" ? "#D1FAE5" : client.status === "calling" || callingId === client.id ? "#EFF6FF" : "#fff",
+        color: client.status === "interested" ? "#065F46" : "#0C447C",
+        border: client.status === "interested" || client.status === "calling" || callingId === client.id ? "none" : "1.5px solid #0C447C",
+        borderRadius: full ? 8 : 6, padding: full ? "9px" : "6px 12px",
         fontSize: full ? 13 : 12, fontWeight: 700,
         cursor: disabled ? "not-allowed" : "pointer", whiteSpace: "nowrap",
         display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5,
@@ -251,7 +253,7 @@ function ResetButton({ client, onReset, full }: { client: Client; onReset: (c: C
   return (
     <button onClick={() => onReset(client)} title="Reset to Pending"
       style={{
-        backgroundColor: "#F3F4F6", color: "#6B7280", border: "none",
+        backgroundColor: "#fff", color: "#0C447C", border: "1.5px solid #0C447C",
         borderRadius: full ? 8 : 6, padding: full ? "9px 14px" : "6px 10px",
         fontSize: full ? 14 : 13, fontWeight: 700, cursor: "pointer",
         display: "inline-flex", alignItems: "center", justifyContent: "center",
@@ -324,7 +326,10 @@ export function CrmTable({
                   <tr key={client.id}
                     style={{
                       borderBottom: "1px solid #F1F5F9",
-                      backgroundColor: client.status === "interested" ? "#F0FDF4" : client.status === "call_back" ? "#FFFBEB" : "transparent",
+                      // Amber stays on the status badge only, not washed
+                      // across the whole row — that's what was competing
+                      // with the rest of the calm blue/white palette.
+                      backgroundColor: client.status === "interested" ? "#F0FDF4" : "transparent",
                     }}>
                     <td style={{ padding: "11px 16px" }}>
                       <input
@@ -422,7 +427,7 @@ export function CrmTable({
                 style={{
                   background: "#fff", borderRadius: 14, padding: "14px 16px", marginBottom: 10,
                   boxShadow: "0 2px 10px rgba(12,68,124,0.06)", display: "grid", gap: 8,
-                  borderLeft: client.status === "interested" ? "4px solid #065F46" : client.status === "call_back" ? "4px solid #F5A623" : "4px solid transparent",
+                  borderLeft: client.status === "interested" ? "4px solid #065F46" : "4px solid transparent",
                   backgroundColor: client.status === "interested" ? "#F7FEFA" : undefined,
                 }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>

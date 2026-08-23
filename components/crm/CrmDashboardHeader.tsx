@@ -39,9 +39,15 @@ function useCountUp(target: number, durationMs = 800) {
   return value;
 }
 
+// One consistent light-blue icon treatment across all 5 cards — a
+// different color per card (blue/gray/green/amber/red) was exactly the
+// kind of competing-color noise the page is meant to avoid now. The
+// number/label stay neutral navy/gray; nothing here is amber except the
+// two places that are supposed to stay amber (the Call Back badge and
+// the primary Call All / Start AI Calling button — both live elsewhere).
 function KpiCard({
-  label, value, color, icon: Icon, onClick, delay,
-}: { label: string; value: number; color: string; icon: React.ElementType; onClick: () => void; delay: number }) {
+  label, value, icon: Icon, onClick, delay,
+}: { label: string; value: number; icon: React.ElementType; onClick: () => void; delay: number }) {
   const count = useCountUp(value);
   return (
     <motion.button
@@ -53,13 +59,13 @@ function KpiCard({
       className="relative overflow-hidden rounded-2xl border border-white/60 bg-white p-4 text-left shadow-[0_2px_12px_rgba(12,68,124,0.06)] transition-shadow hover:shadow-[0_6px_20px_rgba(12,68,124,0.12)]"
     >
       <div className="flex items-center justify-between">
-        <span className="flex size-8 items-center justify-center rounded-lg" style={{ backgroundColor: `${color}1A`, color }}>
+        <span className="flex size-8 items-center justify-center rounded-lg bg-[#0C447C]/10 text-[#0C447C]">
           <Icon className="size-4" />
         </span>
       </div>
       <div className="mt-2.5 text-2xl font-extrabold text-[#0C1E33]">{count}</div>
       <div className="mt-0.5 text-[11px] font-medium text-[#64748B]">{label}</div>
-      <span className="absolute inset-x-0 bottom-0 h-1" style={{ backgroundColor: color }} />
+      <span className="absolute inset-x-0 bottom-0 h-1 bg-[#0C447C]/25" />
     </motion.button>
   );
 }
@@ -118,12 +124,16 @@ export function CrmDashboardHeader({
               </p>
             </div>
 
+            {/* Blue throughout, active vs idle told apart by pulse motion
+                and a stronger tint — amber is reserved for the Call Back
+                badge and the primary CTA below, not a generic "active"
+                indicator. */}
             <div className="relative flex flex-col items-center gap-2">
               <div className="relative flex size-20 items-center justify-center">
                 {isCallingNow && (
                   <>
-                    <span className="absolute inset-0 animate-pulse-ring rounded-full border-2 border-[#F5A623]" />
-                    <span className="absolute inset-0 animate-pulse-ring rounded-full border-2 border-[#F5A623]" style={{ animationDelay: "0.7s" }} />
+                    <span className="absolute inset-0 animate-pulse-ring rounded-full border-2 border-[#0C447C]" />
+                    <span className="absolute inset-0 animate-pulse-ring rounded-full border-2 border-[#0C447C]" style={{ animationDelay: "0.7s" }} />
                   </>
                 )}
                 <span
@@ -133,8 +143,8 @@ export function CrmDashboardHeader({
                   <Phone className="size-6" />
                 </span>
               </div>
-              <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ${isCallingNow ? "bg-[#F5A623]/15 text-[#92400E]" : "bg-[#0C447C]/10 text-[#0C447C]"}`}>
-                <span className={`size-1.5 rounded-full ${isCallingNow ? "bg-[#F5A623] animate-glow-pulse" : "bg-[#0C447C]"}`} />
+              <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ${isCallingNow ? "bg-[#0C447C]/20 text-[#0C447C]" : "bg-[#0C447C]/10 text-[#0C447C]"}`}>
+                <span className={`size-1.5 rounded-full bg-[#0C447C] ${isCallingNow ? "animate-glow-pulse" : ""}`} />
                 {isCallingNow ? "AI Calling in Progress…" : "AI Caller Ready"}
               </span>
             </div>
@@ -186,10 +196,17 @@ export function CrmDashboardHeader({
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.35 }}
-          className="flex flex-col gap-3 rounded-2xl border border-[#F5A623]/30 bg-white p-4 shadow-[0_4px_20px_rgba(245,166,35,0.12)] sm:flex-row sm:items-center sm:justify-between"
+          className="flex flex-col gap-3 rounded-2xl border border-[#0C447C]/15 bg-white p-4 shadow-[0_4px_20px_rgba(12,68,124,0.08)] sm:flex-row sm:items-center sm:justify-between"
         >
           <div className="flex items-center gap-3">
-            <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-[#F5A623]/15 text-[#92400E]">
+            {/* This card covers both Interested and Call Back leads, so
+                its bell icon isn't specific to either status — stays
+                blue, same reasoning as the hero's "active" indicator
+                above. The two buttons below DO map to one specific
+                status each, so they keep that status's own badge color
+                (green / amber) — consistent with the badges themselves
+                carrying color per the row-tint fix. */}
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-[#0C447C]/10 text-[#0C447C]">
               <Bell className="size-4" />
             </span>
             <div>
@@ -216,7 +233,7 @@ export function CrmDashboardHeader({
               </button>
             )}
             <button onClick={() => setReminderDismissed(true)}
-              className="flex size-7 items-center justify-center rounded-lg text-[#92400E] hover:bg-[#FFF7ED]" aria-label="Dismiss">
+              className="flex size-7 items-center justify-center rounded-lg text-[#64748B] hover:bg-[#F1F5F9]" aria-label="Dismiss">
               <X className="size-4" />
             </button>
           </div>
@@ -225,11 +242,11 @@ export function CrmDashboardHeader({
 
       {/* KPI cards */}
       <div className="grid grid-cols-3 gap-3 sm:grid-cols-5">
-        <KpiCard label="Total Leads" value={stats.total} color="#0C447C" icon={Users} onClick={() => setFilterStatus("all")} delay={0.15} />
-        <KpiCard label="Pending" value={stats.pending} color="#64748B" icon={Clock} onClick={() => setFilterStatus("pending")} delay={0.2} />
-        <KpiCard label="Interested" value={stats.interested} color="#065F46" icon={Star} onClick={() => setFilterStatus("interested")} delay={0.25} />
-        <KpiCard label="Call Back" value={stats.callBack} color="#F5A623" icon={PhoneCall} onClick={() => setFilterStatus("call_back")} delay={0.3} />
-        <KpiCard label="Not Interested" value={stats.notInterested} color="#991B1B" icon={XCircle} onClick={() => setFilterStatus("not_interested")} delay={0.35} />
+        <KpiCard label="Total Leads" value={stats.total} icon={Users} onClick={() => setFilterStatus("all")} delay={0.15} />
+        <KpiCard label="Pending" value={stats.pending} icon={Clock} onClick={() => setFilterStatus("pending")} delay={0.2} />
+        <KpiCard label="Interested" value={stats.interested} icon={Star} onClick={() => setFilterStatus("interested")} delay={0.25} />
+        <KpiCard label="Call Back" value={stats.callBack} icon={PhoneCall} onClick={() => setFilterStatus("call_back")} delay={0.3} />
+        <KpiCard label="Not Interested" value={stats.notInterested} icon={XCircle} onClick={() => setFilterStatus("not_interested")} delay={0.35} />
       </div>
     </div>
   );
