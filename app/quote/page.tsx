@@ -32,6 +32,7 @@ interface QuoteForm {
   shadow: string;
   projectType: string;
   ppaRate: number;
+  ppaTermYears: string; // "10 Years" | "15 Years" — kept a string like the other <select>-bound fields (projectType, roofType, ...); parsed with parseInt() at the two OPEX table calc sites
   acCableSpec: string;
   batteryKwh: number;
 }
@@ -148,6 +149,54 @@ function savingsTable(f: QuoteForm, gen: number) {
     const savings = Math.round(genY * gridY);
     cumSavings   += savings;
     rows.push({ y, genY, gridRate: +gridY.toFixed(2), savings, cumSavings, profit: cumSavings - netCost });
+  }
+  return rows;
+}
+
+// OPEX year-by-year savings — same degraded generation (DEGRADE) and
+// escalating grid rate (GRID_RISE) as the CAPEX savingsTable() above, so
+// the two never drift apart. The one real difference: what the customer
+// pays isn't an upfront investment being paid off, it's a fixed Rs./kWh
+// PPA rate for the whole term (deliberately NOT escalated, unlike the
+// grid comparison) — so there's no "profit" column, just savings.
+function opexSavingsTable(f: QuoteForm, gen: number, termYears: number) {
+  const rows = [];
+  let cumSavings = 0;
+  for (let y = 1; y <= termYears; y++) {
+    const genY = Math.round(gen * Math.pow(1 - DEGRADE, y - 1));
+    const gridY = f.gridRate * Math.pow(1 + GRID_RISE, y - 1);
+    const gridCost = genY * gridY;
+    const ppaPaid = Math.round(genY * f.ppaRate);
+    const savings = Math.round(gridCost - ppaPaid);
+    cumSavings += savings;
+    rows.push({ y, genY, gridRate: +gridY.toFixed(2), ppaPaid, savings, cumSavings });
+  }
+  return rows;
+}
+
+function opexTotalSavings(f: QuoteForm, gen: number, termYears: number) {
+  const rows = opexSavingsTable(f, gen, termYears);
+  return rows[rows.length - 1]?.cumSavings ?? 0;
+}
+
+// Straight-line depreciation of the full system cost (c.net — "Total
+// (incl. GST)" in the Pricing Breakdown, i.e. the actual project value;
+// subsidy is a discount to the CUSTOMER, not a reduction in the asset's
+// own value, so this deliberately uses c.net, not c.netAfterSubsidy).
+// Every year but the last shows the same rounded straight-line amount;
+// the last year absorbs whatever rounding drift accumulated so the
+// buyback value lands on exactly ₹0, not "close to zero".
+function buybackTable(projectValue: number, termYears: number) {
+  const yearlyDep = Math.round(projectValue / termYears);
+  const rows = [];
+  let remaining = projectValue;
+  for (let y = 1; y <= termYears; y++) {
+    const start = remaining;
+    const isLastYear = y === termYears;
+    const dep = isLastYear ? start : yearlyDep;
+    const end = isLastYear ? 0 : Math.round(start - dep);
+    rows.push({ y, start: Math.round(start), dep: Math.round(dep), end });
+    remaining = start - dep;
   }
   return rows;
 }
@@ -516,6 +565,10 @@ function P1({ f, c, s, showSiteDetails }: { f: QuoteForm; c: Calc; s: AppSetting
    Switched to a fixed, moderate gap instead — predictable spacing that
    doesn't grow or shrink based on how much room happens to be left. */
 function P2({ f, c, s, panel, inverter }: { f: QuoteForm; c: Calc; s: AppSettings; panel: Product | null; inverter: Product | null }) {
+  const ppaTermYears = parseInt(f.ppaTermYears, 10) || 10;
+  const opexRows = opexSavingsTable(f, c.gen, ppaTermYears);
+  const opexTotal = opexTotalSavings(f, c.gen, ppaTermYears);
+  const buybackRows = buybackTable(c.net, ppaTermYears);
   const panelKpiSub = panel ? [panel.brand, panel.model].filter(Boolean).join(" ") : "Waaree 580 Wp TOPCon";
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", flex: 1, gap: 22 }}>
@@ -636,6 +689,75 @@ function P2({ f, c, s, panel, inverter }: { f: QuoteForm; c: Calc; s: AppSetting
             </div>
             <div style={{ marginTop: 10, fontSize: FONT, color: "#555", lineHeight: 1.6 }}>
               Under the OPEX model, {company.name} owns, operates and maintains the solar plant. You pay only for units generated at Rs. {f.ppaRate}/kWh — saving Rs. {(f.gridRate - f.ppaRate).toFixed(2)}/kWh vs current grid rate. Zero CAPEX investment required.
+            </div>
+          </div>
+
+          {/* OPEX year-by-year savings — same visual pattern as P3's CAPEX
+              Financial Analysis table (NAVY header, alternating rows, NAVY
+              total row), but no Investment/Net Profit framing since OPEX
+              has no upfront cost. */}
+          <div style={{ marginTop: 16 }}>
+            <SectionTitle title={`${ppaTermYears}-Year OPEX Savings`} sub={`Fixed PPA rate vs escalating grid tariff · ${ppaTermYears}-year contract term`} />
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: FONT }}>
+              <thead>
+                <tr style={{ background: NAVY, color: "white" }}>
+                  <th style={{ padding: "9px 11px", border: "1px solid #d0d7e2", textAlign: "center", width: "6%" }}>Year</th>
+                  <th style={{ padding: "9px 11px", border: "1px solid #d0d7e2", textAlign: "right" }}>Generation (kWh)</th>
+                  <th style={{ padding: "9px 11px", border: "1px solid #d0d7e2", textAlign: "right" }}>Grid Rate (Rs.)</th>
+                  <th style={{ padding: "9px 11px", border: "1px solid #d0d7e2", textAlign: "right" }}>Amount Paid to OPS</th>
+                  <th style={{ padding: "9px 11px", border: "1px solid #d0d7e2", textAlign: "right" }}>Annual Savings</th>
+                  <th style={{ padding: "9px 11px", border: "1px solid #d0d7e2", textAlign: "right" }}>Cumulative Savings</th>
+                </tr>
+              </thead>
+              <tbody>
+                {opexRows.map(r => (
+                  <tr key={r.y} style={{ background: r.y % 2 === 0 ? "#F5F9FF" : "#fff" }}>
+                    <td style={{ padding: "8px 11px", border: "1px solid #d0d7e2", textAlign: "center" }}>{r.y}</td>
+                    <td style={{ padding: "8px 11px", border: "1px solid #d0d7e2", textAlign: "right" }}>{r.genY.toLocaleString("en-IN")}</td>
+                    <td style={{ padding: "8px 11px", border: "1px solid #d0d7e2", textAlign: "right" }}>{r.gridRate.toFixed(2)}</td>
+                    <td style={{ padding: "8px 11px", border: "1px solid #d0d7e2", textAlign: "right" }}>{inr(r.ppaPaid)}</td>
+                    <td style={{ padding: "8px 11px", border: "1px solid #d0d7e2", textAlign: "right", fontWeight: 600, color: GREEN }}>{inr(r.savings)}</td>
+                    <td style={{ padding: "8px 11px", border: "1px solid #d0d7e2", textAlign: "right", fontWeight: 600 }}>{inr(r.cumSavings)}</td>
+                  </tr>
+                ))}
+                <tr style={{ background: NAVY }}>
+                  <td colSpan={5} style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: "white", fontWeight: 700, fontSize: FONT_L }}>TOTAL {ppaTermYears}-YEAR SAVINGS</td>
+                  <td style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: ACCENT, fontWeight: 700, textAlign: "right" }}>{inr(opexTotal)}</td>
+                </tr>
+              </tbody>
+            </table>
+            <div style={{ marginTop: 8, fontSize: FONT_S, color: "#555" }}>
+              Assumes {GRID_RISE * 100}% annual grid tariff escalation and {DEGRADE * 100}% panel degradation from Year 2, same as the CAPEX projection. The PPA rate (Rs.{f.ppaRate}/kWh) is fixed for the full contract term and does not escalate.
+            </div>
+          </div>
+
+          {/* Buyback value — straight-line depreciation of the same
+              project cost shown in the Pricing Breakdown above, over the
+              same contract term as the savings table. */}
+          <div style={{ marginTop: 16 }}>
+            <SectionTitle title="Buyback Value" sub={`Straight-line depreciation over ${ppaTermYears} years`} />
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: FONT }}>
+              <thead>
+                <tr style={{ background: NAVY, color: "white" }}>
+                  <th style={{ padding: "9px 11px", border: "1px solid #d0d7e2", textAlign: "center", width: "6%" }}>Year</th>
+                  <th style={{ padding: "9px 11px", border: "1px solid #d0d7e2", textAlign: "right" }}>Project Value (Start)</th>
+                  <th style={{ padding: "9px 11px", border: "1px solid #d0d7e2", textAlign: "right" }}>Depreciation</th>
+                  <th style={{ padding: "9px 11px", border: "1px solid #d0d7e2", textAlign: "right" }}>Buyback Value (End)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {buybackRows.map(r => (
+                  <tr key={r.y} style={{ background: r.y % 2 === 0 ? "#F5F9FF" : "#fff" }}>
+                    <td style={{ padding: "8px 11px", border: "1px solid #d0d7e2", textAlign: "center" }}>{r.y}</td>
+                    <td style={{ padding: "8px 11px", border: "1px solid #d0d7e2", textAlign: "right" }}>{inr(r.start)}</td>
+                    <td style={{ padding: "8px 11px", border: "1px solid #d0d7e2", textAlign: "right", color: RED }}>-{inr(r.dep)}</td>
+                    <td style={{ padding: "8px 11px", border: "1px solid #d0d7e2", textAlign: "right", fontWeight: 600 }}>{inr(r.end)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div style={{ marginTop: 8, fontSize: FONT_S, color: "#555" }}>
+              Project Value: {inrFull(c.net)} (Pricing Breakdown total, incl. GST) depreciated evenly over {ppaTermYears} years.
             </div>
           </div>
         </div>
@@ -1020,6 +1142,7 @@ function QuotePageInner() {
     shadow: "Minimal",
     projectType: "CAPEX (EPC)",
     ppaRate: 5.5,
+    ppaTermYears: "10 Years",
     acCableSpec: "4C x 25 sq. mm AL Armoured as per Design",
     batteryKwh: 0,
   })
@@ -1344,7 +1467,10 @@ function QuotePageInner() {
               <Field label="Govt. Subsidy Total (Rs.) — 0 if none" name="subsidyTotal" type="number" value={f.subsidyTotal} onChange={onChange} placeholder="270000" />
               <Field label="Battery Capacity (kWh) — 0 if none" name="batteryKwh" type="number" value={f.batteryKwh} onChange={onChange} placeholder="0" />
               {f.projectType === "OPEX / PPA" && (
-                <Field label="PPA Rate (Rs./kWh)" name="ppaRate" type="number" value={f.ppaRate} onChange={onChange} />
+                <>
+                  <Field label="PPA Rate (Rs./kWh)" name="ppaRate" type="number" value={f.ppaRate} onChange={onChange} />
+                  <SelectField label="Contract Term" name="ppaTermYears" value={f.ppaTermYears} onChange={onSelect} options={["10 Years", "15 Years"]} />
+                </>
               )}
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">Panel Model (optional)</label>
