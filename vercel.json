@@ -1,6 +1,5 @@
 {
   "crons": [
-    { "path": "/api/cron/lead-reminders", "schedule": "30 3 * * *" },
     { "path": "/api/cron/pipeline-staleness", "schedule": "0 4 * * *" }
   ]
 }

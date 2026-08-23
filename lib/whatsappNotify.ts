@@ -161,25 +161,10 @@ Stage: ${params.stage ?? "(unknown)"}
 Notes: ${params.notes?.trim() || "(none captured)"}`;
 }
 
-export function formatFollowUpReminderMessage(params: {
-  name: string;
-  phone: string | null;
-  stage: string | null;
-  notes: string | null;
-}): string {
-  const notesLine = params.notes?.trim() ? `Notes: ${params.notes.trim()}\n` : "";
-  return `⏰ Follow-up due today
-
-Lead: ${params.name}
-Number: ${params.phone ?? "(unknown)"}
-Stage: ${params.stage ?? "(unknown)"}
-${notesLine}
-This lead is waiting on you.`;
-}
-
 // Used by app/api/cron/send-reminders/route.ts — a precise, time-of-day
-// reminder for one lead or client, distinct from formatFollowUpReminderMessage
-// above (which is a "due sometime today" digest with no specific time).
+// reminder for one lead or client, tenant-scoped (unlike the old
+// cron/lead-reminders digest this superseded, which sent every match to
+// one hardcoded OWNER_WHATSAPP_NUMBER regardless of tenant).
 export function formatScheduledReminderMessage(params: {
   name: string;
   phone: string | null;
