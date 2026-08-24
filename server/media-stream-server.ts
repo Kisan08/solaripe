@@ -40,6 +40,7 @@
 
 import { createServer } from "http";
 import { WebSocketServer, WebSocket, type RawData } from "ws";
+import twilio from "twilio";
 import { streamGroqChat, type ChatMessage } from "../lib/calling/streamingGroq";
 import { streamElevenLabsTts } from "../lib/calling/streamingTts";
 
@@ -58,6 +59,16 @@ if (!process.env.ELEVENLABS_API_KEY) {
   console.error("[media-stream-server] ELEVENLABS_API_KEY not set — add it to .env.local and restart.");
   process.exit(1);
 }
+if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) {
+  console.error("[media-stream-server] TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN not set — add them to .env.local and restart.");
+  process.exit(1);
+}
+
+// Same client construction as app/api/make-call/route.ts — used here only
+// to actively hang up (calls(sid).update({status:"completed"})) once the
+// AI's closing message has been spoken, instead of leaving the call open
+// to keep listening and re-triggering the same closing line forever.
+const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
 // Single hardcoded system prompt for this POC — real prompt engineering
 // (persona, company context, CRM data) is a later phase, not this one.
@@ -78,7 +89,7 @@ const SYSTEM_PROMPT = `You are काजल, a friendly telecalling executive at
 
 Goal: get their city/area, then their average monthly electricity bill (or units), then close the call saying the team will follow up with a personalized quote.
 
-Rules: Already greeted the caller once (scripted, before this conversation) — don't re-greet. Name always काजल. Write ALL Hindi words in Devanagari (मैं, आप, कैसे, बात, करना), never romanized (not "main", "aap", "kaise", "baat"); only casual English words (sir, city, solar, thank you) stay Roman, every reply, all call long — e.g. "मैं काजल बोल रही हूँ Omkar Power Solutions से" or "आपका area या city क्या है?" Never formal/Sanskritized Hindi (not "आपका दिन शुभ रहे"). One short sentence per reply. Skip technical details (roof, appliances, shading) — that's for the site visit. Don't guess on pricing — say the team will explain later. Once you have city + bill, close right away — e.g. "Thank you sir, हम जल्दी आपको contact करेंगे quote के साथ!" — and stop. If not interested, acknowledge and end, don't push. Close in 4-6 exchanges total.`;
+Rules: Already greeted the caller once (scripted, before this conversation) — don't re-greet. Name always काजल. Write ALL Hindi words in Devanagari (मैं, आप, कैसे, बात, करना), never romanized (not "main", "aap", "kaise", "baat"); only casual English words (sir, city, solar, thank you) stay Roman, every reply, all call long — e.g. "मैं काजल बोल रही हूँ Omkar Power Solutions से" or "आपका area या city क्या है?" Never formal/Sanskritized Hindi (not "आपका दिन शुभ रहे"). One short sentence per reply. Skip technical details (roof, appliances, shading) — that's for the site visit. Don't guess on pricing — say the team will explain later. Once you have city + bill, or if they're not interested, close right away and stop — e.g. "Thank you sir, हम जल्दी आपको contact करेंगे quote के साथ! [END_CALL]" — always end that final closing message with [END_CALL] right after the sentence, a silent signal never spoken aloud, only on that one final message, nowhere else. Close in 4-6 exchanges total.`;
 
 // Scripted opening line, spoken immediately on call connect instead of
 // waiting for the caller's first word (Part 2) — faster and more reliable
@@ -91,6 +102,20 @@ const OPENING_GREETING =
 
 function ts(): string {
   return new Date().toISOString().slice(11, 23); // HH:MM:SS.mmm
+}
+
+// Machine-only end-of-call signal the LLM is instructed (SYSTEM_PROMPT) to
+// append once, right after its closing message. Two separate regexes on
+// purpose: END_CALL_DETECT has no "g" flag so repeated .test() calls are
+// always evaluated fresh (a shared global-flag regex's .test() mutates
+// lastIndex across calls and silently alternates true/false — the classic
+// footgun); END_CALL_STRIP's "g" flag is fine because .replace() resets
+// lastIndex itself before running, so state doesn't leak between calls.
+const END_CALL_DETECT = /\[END_CALL\]/i;
+const END_CALL_STRIP = /\s*\[END_CALL\]\s*/gi;
+
+function stripEndCallMarker(text: string): string {
+  return text.replace(END_CALL_STRIP, " ").trim();
 }
 
 // Natural-sounding filler lines for when Groq returns an empty response
@@ -194,15 +219,18 @@ wss.on("connection", (twilioWs) => {
   }
 
   // ── Deepgram real-time STT connection, one per call ──────────────────
-  // language=multi enables Nova-2's multilingual code-switching (needed
-  // for Hindi/English mixing). NOTE: per Deepgram's current docs, Nova-3
-  // has meaningfully better Hindi/Hinglish code-switching accuracy than
-  // Nova-2 — this uses Nova-2 per the brief, but swap the model param to
-  // nova-3 here if transcript quality turns out to be the bottleneck.
+  // model=nova-3 (was nova-2): confirmed against Deepgram's current docs
+  // that nova-3 supports language=multi for the same Hindi/English
+  // code-switching this pipeline needs (Deepgram's multilingual
+  // code-switching page explicitly lists Hindi among nova-3's supported
+  // languages for `multi`) — this param carries over unchanged. Also
+  // switched endpointing 300 -> 100: Deepgram's own code-switching guide
+  // specifically recommends endpointing=100 for this scenario, which
+  // wasn't being followed before.
   const dgUrl =
     "wss://api.deepgram.com/v1/listen" +
-    "?model=nova-2&language=multi&encoding=mulaw&sample_rate=8000&channels=1" +
-    "&punctuate=true&interim_results=true&endpointing=300";
+    "?model=nova-3&language=multi&encoding=mulaw&sample_rate=8000&channels=1" +
+    "&punctuate=true&interim_results=true&endpointing=100";
   const dgWs = new WebSocket(dgUrl, { headers: { Authorization: `Token ${DEEPGRAM_API_KEY}` } });
 
   let dgReady = false;
@@ -236,14 +264,29 @@ wss.on("connection", (twilioWs) => {
   dgWs.on("close", () => console.log(`[${ts()}] [deepgram] closed`));
 
   // Runs one Groq turn against the given history and speaks it via TTS as
-  // it streams, returning the full accumulated text. Factored out of
-  // handleFinalTranscript so a genuinely empty response can be retried
+  // it streams, returning the full accumulated text (marker stripped) and
+  // whether SYSTEM_PROMPT's [END_CALL] signal was present. Factored out
+  // of handleFinalTranscript so a genuinely empty response can be retried
   // once with a fresh request before falling back to a filler line — see
   // handleFinalTranscript for why that retry is worth doing.
-  async function runLlmTurn(): Promise<string> {
+  //
+  // The marker is stripped from every per-sentence chunk BEFORE it's
+  // handed to TTS, not just from the leftover buffer after streaming
+  // ends — the model could in principle emit "...quote ke saath [END_CALL]!"
+  // with the marker before the closing punctuation, which would otherwise
+  // flush it straight to speech as literal bracket text.
+  async function runLlmTurn(): Promise<{ reply: string; endCall: boolean }> {
     let sentenceBuffer = "";
+    let endCall = false;
     const flushSentence = makeSentenceSpeaker();
-    const fullReply = await streamGroqChat(conversationHistory, async (delta) => {
+
+    const speakCleaned = async (raw: string) => {
+      if (END_CALL_DETECT.test(raw)) endCall = true;
+      const cleaned = stripEndCallMarker(raw);
+      if (cleaned) await flushSentence(cleaned);
+    };
+
+    const fullReplyRaw = await streamGroqChat(conversationHistory, async (delta) => {
       sentenceBuffer += delta;
       // Flush on a sentence-ish boundary (Hindi/Devanagari full stop
       // included) so TTS can start speaking before the whole reply has
@@ -252,11 +295,12 @@ wss.on("connection", (twilioWs) => {
       if (boundary && boundary.index > 2) {
         const sentence = sentenceBuffer.slice(0, boundary.index + 1);
         sentenceBuffer = sentenceBuffer.slice(boundary.index + 1);
-        await flushSentence(sentence);
+        await speakCleaned(sentence);
       }
     });
-    await flushSentence(sentenceBuffer); // whatever's left after the stream ends
-    return fullReply;
+    await speakCleaned(sentenceBuffer); // whatever's left after the stream ends
+
+    return { reply: stripEndCallMarker(fullReplyRaw), endCall: endCall || END_CALL_DETECT.test(fullReplyRaw) };
   }
 
   // ── LLM -> TTS -> Twilio for one finalized transcript ─────────────────
@@ -282,7 +326,7 @@ wss.on("connection", (twilioWs) => {
     appendToHistory(conversationHistory, { role: "user", content: userText });
 
     try {
-      let fullReply = await runLlmTurn();
+      let { reply: fullReply, endCall } = await runLlmTurn();
 
       if (!fullReply.trim()) {
         // A genuinely empty response (finish_reason never even arrived,
@@ -290,7 +334,7 @@ wss.on("connection", (twilioWs) => {
         // streamGroqChat) reliably succeeded on a fresh retry during
         // testing, so try once more before resorting to a filler.
         console.warn(`[${ts()}] [llm] empty response, retrying once`);
-        fullReply = await runLlmTurn();
+        ({ reply: fullReply, endCall } = await runLlmTurn());
       }
 
       let replyForHistory = fullReply;
@@ -304,14 +348,48 @@ wss.on("connection", (twilioWs) => {
         console.warn(`[${ts()}] [llm] still empty after retry — using fallback filler: "${filler}"`);
         await flushSentence(filler);
         replyForHistory = filler;
+        endCall = false; // never hang up on a filler turn — nothing was actually closed
       }
 
       appendToHistory(conversationHistory, { role: "assistant", content: replyForHistory });
       console.log(`[${ts()}] [llm] response end (+${Date.now() - llmStart}ms total)`);
+
+      if (endCall) {
+        // Don't await inside the try/finally below — turnInFlight should
+        // clear immediately once speaking is done, not stay held for the
+        // few extra seconds the hangup takes.
+        endCallSoon();
+      }
     } catch (err) {
       console.error(`[${ts()}] [llm] error`, err);
     } finally {
       turnInFlight = false;
+    }
+  }
+
+  // Part 1: actively hang up via Twilio's REST API once the AI's closing
+  // message has finished being spoken, instead of leaving the WebSocket
+  // open to keep listening and re-triggering the same closing line on
+  // every subsequent utterance. Guarded so it only ever fires once even
+  // if [END_CALL] somehow shows up on more than one turn.
+  let callEnded = false;
+  async function endCallSoon() {
+    if (callEnded) return;
+    callEnded = true;
+    if (!callSid) {
+      console.warn(`[${ts()}] [twilio] end-call requested but no callSid captured yet — skipping hangup`);
+      return;
+    }
+    // Sending the last audio chunk over the media WebSocket only means
+    // Twilio has received the bytes, not that the caller has finished
+    // hearing them play out over the phone line — a short grace period
+    // avoids cutting the closing sentence off mid-word.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    try {
+      console.log(`[${ts()}] [twilio] ending call ${callSid} after closing message`);
+      await twilioClient.calls(callSid).update({ status: "completed" });
+    } catch (err) {
+      console.error(`[${ts()}] [twilio] failed to end call ${callSid}`, err);
     }
   }
 
