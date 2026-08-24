@@ -1,9 +1,9 @@
-// ⏸ PAUSED (not abandoned): blocked on ElevenLabs paid-plan access to the
-// library-voice API this pipeline needs for TTS. Intentionally left intact,
-// wired, and untouched so work can resume the moment that's unblocked —
-// this is a deliberate hold, not orphaned/forgotten code. If you're a
-// future session picking this up: nothing here is broken, it's just
-// waiting on that external dependency.
+// ElevenLabs paid-plan access (the earlier blocker on this pipeline's TTS)
+// is resolved as of 2026-08-25 — confirmed with a real streamElevenLabsTts
+// call during testing (200 response, real ulaw_8000 audio back). Still not
+// verified via an actual live Twilio call end-to-end in this environment
+// (no incoming call / ngrok tunnel available here), but the TTS dependency
+// itself is no longer the blocker.
 //
 // Standalone POC: real-time streaming voice pipeline (Twilio Media Stream
 // -> Deepgram STT -> Groq LLM -> ElevenLabs TTS -> back to Twilio).
@@ -89,7 +89,15 @@ const SYSTEM_PROMPT = `You are काजल, a friendly telecalling executive at
 
 Goal: get their city/area, then their average monthly electricity bill (or units), then close the call saying the team will follow up with a personalized quote.
 
-Rules: Already greeted the caller once (scripted, before this conversation) — don't re-greet. Name always काजल. Write ALL Hindi words in Devanagari (मैं, आप, कैसे, बात, करना), never romanized (not "main", "aap", "kaise", "baat"); only casual English words (sir, city, solar, thank you) stay Roman, every reply, all call long — e.g. "मैं काजल बोल रही हूँ Omkar Power Solutions से" or "आपका area या city क्या है?" Never formal/Sanskritized Hindi (not "आपका दिन शुभ रहे"). One short sentence per reply. Skip technical details (roof, appliances, shading) — that's for the site visit. Don't guess on pricing — say the team will explain later. Once you have city + bill, or if they're not interested, close right away and stop — e.g. "Thank you sir, हम जल्दी आपको contact करेंगे quote के साथ! [END_CALL]" — always end that final closing message with [END_CALL] right after the sentence, a silent signal never spoken aloud, only on that one final message, nowhere else. Close in 4-6 exchanges total.`;
+Rules: Already greeted the caller once (scripted, before this conversation) — don't re-greet. Name always काजल. Write ALL Hindi words in Devanagari (मैं, आप, कैसे, बात, करना), never romanized (not "main", "aap", "kaise", "baat"); only casual English words (sir, solar, bill, team, quote, contact, thank you, city names) stay Roman, every reply, all call long. Never formal/Sanskritized Hindi (not "आपका दिन शुभ रहे"). One short sentence per reply. Skip technical details (roof, appliances, shading) — that's for the site visit. Don't guess on pricing.
+
+Follow these EXACT patterns (fill in only the bracketed part, keep the rest word-for-word):
+- After they state their location: "Okay, [location]! ठीक है sir, आपका average monthly light bill कितना आता है?"
+- After they state their bill amount, close immediately with exactly: "समझ गई sir, [amount] का bill मतलब solar से अच्छी खासी बचत हो सकती है आपकी। हमारी team जल्दी ही आपको एक proper quote के साथ contact करेगी, thank you! [END_CALL]"
+- If not interested or asked not to call, acknowledge politely in your own words and end with [END_CALL] too.
+[END_CALL] is a silent signal, never spoken aloud, only on that one final closing message.
+
+Close in 4-6 exchanges total.`;
 
 // Scripted opening line, spoken immediately on call connect instead of
 // waiting for the caller's first word (Part 2) — faster and more reliable
@@ -98,7 +106,7 @@ Rules: Already greeted the caller once (scripted, before this conversation) — 
 // the English loanwords (Omkar Power Solutions, solar, city, area) stay
 // Roman, same mixing pattern as the prompt's own example sentences.
 const OPENING_GREETING =
-  "नमस्ते! मैं काजल बोल रही हूँ Omkar Power Solutions से, आपने solar के बारे में enquiry किया था ना? आपका city या area क्या है?";
+  "नमस्ते! मैं काजल बोल रही हूँ Omkar Power Solutions से, आपने solar के बारे में enquiry की थी ना? आप कहाँ रहते हैं sir?";
 
 function ts(): string {
   return new Date().toISOString().slice(11, 23); // HH:MM:SS.mmm
@@ -174,10 +182,17 @@ wss.on("connection", (twilioWs) => {
   // Shared TTS-speaking helper — used both for the scripted opening
   // greeting and for each LLM turn's sentences, each call getting its own
   // firstTtsChunkKicked so the "first byte" latency log is timed per
-  // utterance, not once for the whole call.
+  // utterance, not once for the whole call. Also tracks the exact
+  // playback duration of everything spoken through this speaker: the
+  // audio format is ulaw_8000 (8000 8-bit samples/sec), so byte count /
+  // 8000 gives seconds of audio precisely, no estimation needed. This
+  // powers endCallSoon's hangup delay (Part 2 below) — a fixed guess was
+  // tuned against a much shorter placeholder closing line and proved too
+  // short once the real, longer closing message was wired in.
   function makeSentenceSpeaker() {
     let firstTtsChunkKicked = false;
-    return async function flushSentence(raw: string) {
+    let audioBytesSent = 0;
+    const flushSentence = async (raw: string) => {
       const text = raw.trim();
       if (!text) return;
       const ttsStart = Date.now();
@@ -188,12 +203,14 @@ wss.on("connection", (twilioWs) => {
             firstTtsChunkKicked = true;
             console.log(`[${ts()}] [tts] first byte (+${Date.now() - ttsStart}ms)`);
           }
+          audioBytesSent += audioChunk.length;
           sendAudioToTwilio(audioChunk);
         });
       } catch (err) {
         console.error(`[${ts()}] [tts] error`, err);
       }
     };
+    return { flushSentence, getAudioMs: () => (audioBytesSent / 8000) * 1000 };
   }
 
   // Part 2: speak the opening line immediately on call connect instead of
@@ -210,7 +227,7 @@ wss.on("connection", (twilioWs) => {
     turnInFlight = true;
     console.log(`[${ts()}] [llm] speaking scripted opening greeting`);
     try {
-      const flushSentence = makeSentenceSpeaker();
+      const { flushSentence } = makeSentenceSpeaker();
       await flushSentence(OPENING_GREETING);
       appendToHistory(conversationHistory, { role: "assistant", content: OPENING_GREETING });
     } finally {
@@ -275,10 +292,10 @@ wss.on("connection", (twilioWs) => {
   // ends — the model could in principle emit "...quote ke saath [END_CALL]!"
   // with the marker before the closing punctuation, which would otherwise
   // flush it straight to speech as literal bracket text.
-  async function runLlmTurn(): Promise<{ reply: string; endCall: boolean }> {
+  async function runLlmTurn(): Promise<{ reply: string; endCall: boolean; audioMs: number }> {
     let sentenceBuffer = "";
     let endCall = false;
-    const flushSentence = makeSentenceSpeaker();
+    const { flushSentence, getAudioMs } = makeSentenceSpeaker();
 
     const speakCleaned = async (raw: string) => {
       if (END_CALL_DETECT.test(raw)) endCall = true;
@@ -300,7 +317,11 @@ wss.on("connection", (twilioWs) => {
     });
     await speakCleaned(sentenceBuffer); // whatever's left after the stream ends
 
-    return { reply: stripEndCallMarker(fullReplyRaw), endCall: endCall || END_CALL_DETECT.test(fullReplyRaw) };
+    return {
+      reply: stripEndCallMarker(fullReplyRaw),
+      endCall: endCall || END_CALL_DETECT.test(fullReplyRaw),
+      audioMs: getAudioMs(),
+    };
   }
 
   // ── LLM -> TTS -> Twilio for one finalized transcript ─────────────────
@@ -326,7 +347,7 @@ wss.on("connection", (twilioWs) => {
     appendToHistory(conversationHistory, { role: "user", content: userText });
 
     try {
-      let { reply: fullReply, endCall } = await runLlmTurn();
+      let { reply: fullReply, endCall, audioMs } = await runLlmTurn();
 
       if (!fullReply.trim()) {
         // A genuinely empty response (finish_reason never even arrived,
@@ -334,7 +355,7 @@ wss.on("connection", (twilioWs) => {
         // streamGroqChat) reliably succeeded on a fresh retry during
         // testing, so try once more before resorting to a filler.
         console.warn(`[${ts()}] [llm] empty response, retrying once`);
-        ({ reply: fullReply, endCall } = await runLlmTurn());
+        ({ reply: fullReply, endCall, audioMs } = await runLlmTurn());
       }
 
       let replyForHistory = fullReply;
@@ -344,7 +365,7 @@ wss.on("connection", (twilioWs) => {
         // error or dead air, and record THAT (not the empty string) as
         // this turn's assistant message so history stays coherent.
         const filler = pickFallbackFiller();
-        const flushSentence = makeSentenceSpeaker();
+        const { flushSentence } = makeSentenceSpeaker();
         console.warn(`[${ts()}] [llm] still empty after retry — using fallback filler: "${filler}"`);
         await flushSentence(filler);
         replyForHistory = filler;
@@ -358,7 +379,7 @@ wss.on("connection", (twilioWs) => {
         // Don't await inside the try/finally below — turnInFlight should
         // clear immediately once speaking is done, not stay held for the
         // few extra seconds the hangup takes.
-        endCallSoon();
+        endCallSoon(audioMs);
       }
     } catch (err) {
       console.error(`[${ts()}] [llm] error`, err);
@@ -372,19 +393,31 @@ wss.on("connection", (twilioWs) => {
   // open to keep listening and re-triggering the same closing line on
   // every subsequent utterance. Guarded so it only ever fires once even
   // if [END_CALL] somehow shows up on more than one turn.
+  //
+  // Bug this replaced: a flat 1500ms delay was tuned against a much
+  // shorter placeholder closing line and cut the real, longer closing
+  // message off mid-sentence ("धन्यवाद sir, हम आप" then dead). Sending the
+  // last audio chunk over the media WebSocket only means Twilio has
+  // received the bytes, not that the caller has finished hearing them
+  // play out over the phone line — that gap doesn't scale with a fixed
+  // number, it scales with how much audio there actually was. audioMs
+  // (from makeSentenceSpeaker's exact ulaw_8000 byte-count math, not a
+  // text-length guess) is the closing message's real playback duration;
+  // waiting that long, plus a fixed safety margin for Twilio's own
+  // delivery/jitter buffering on top, covers both a short and a long
+  // closing line correctly instead of one flat guess for both.
+  const HANGUP_SAFETY_MARGIN_MS = 2500;
   let callEnded = false;
-  async function endCallSoon() {
+  async function endCallSoon(audioMs: number) {
     if (callEnded) return;
     callEnded = true;
     if (!callSid) {
       console.warn(`[${ts()}] [twilio] end-call requested but no callSid captured yet — skipping hangup`);
       return;
     }
-    // Sending the last audio chunk over the media WebSocket only means
-    // Twilio has received the bytes, not that the caller has finished
-    // hearing them play out over the phone line — a short grace period
-    // avoids cutting the closing sentence off mid-word.
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    const delayMs = audioMs + HANGUP_SAFETY_MARGIN_MS;
+    console.log(`[${ts()}] [twilio] closing message audio ~${Math.round(audioMs)}ms, waiting ${Math.round(delayMs)}ms before hangup`);
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
     try {
       console.log(`[${ts()}] [twilio] ending call ${callSid} after closing message`);
       await twilioClient.calls(callSid).update({ status: "completed" });
