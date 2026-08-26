@@ -1,7 +1,11 @@
 "use client";
 import { useState, useEffect, type ChangeEvent, type ReactNode, type CSSProperties, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
-import { Phone, Mail, MapPin } from "lucide-react";
+import {
+  Phone, Mail, MapPin, Zap, Sun, Wallet, Calendar, Cpu, Gauge, TrendingUp,
+  PiggyBank, BatteryCharging, Clock, IndianRupee, FileText, Leaf, ShieldCheck,
+  type LucideIcon,
+} from "lucide-react";
 import { company } from "@/lib/company.config";
 import { PhoneInput, digitsForPhoneInput } from "@/components/ui/phone-input";
 import { getSettings, defaultSettings, type AppSettings, type PaymentMilestone } from '@/lib/settings'
@@ -209,7 +213,12 @@ const FONT_S = 13; // was 11
 const FONT_L = 17; // was 15
 
 const BASE: CSSProperties = { padding: "10px 14px", border: "1px solid #d0d7e2", fontSize: FONT, lineHeight: 1.6 };
-const TH: CSSProperties   = { ...BASE, background: NAVY, color: "white", fontWeight: 700, textAlign: "left" };
+// Restyle: pale-tinted header instead of a solid NAVY bar with white text —
+// matches the reference's own table headers (dark text on a light
+// background, not a heavy color block) and reads as one coherent light
+// style with the rest of the document's cards/KPIs, instead of a mix of
+// old heavy-block and new light styling on the same page.
+const TH: CSSProperties   = { ...BASE, background: LIGHT, color: NAVY, fontWeight: 700, textAlign: "left" };
 const TD: CSSProperties   = { ...BASE };
 const LB: CSSProperties   = { ...BASE, background: LIGHT, fontWeight: 600, color: NAVY };
 
@@ -221,9 +230,8 @@ const LB: CSSProperties   = { ...BASE, background: LIGHT, fontWeight: 600, color
 // letter of the full name if short_name is empty.
 // Always rendered inside its own rounded box (white for an uploaded image,
 // brand-gradient for the initials fallback) rather than a bare <img> —
-// makes the logo legible regardless of what's behind it, which matters
-// once this is placed over a dark photo hero (CoverHero below), not just
-// the plain white PdfHeader strip it originally lived in.
+// makes the logo legible regardless of what's behind it, used both here
+// and in CoverHeaderBand's light header band.
 function LogoBadge({ s, size = 54 }: { s: AppSettings; size?: number }) {
   if (s.logo_url) {
     return (
@@ -282,7 +290,6 @@ function PdfHeader({ s }: { s: AppSettings }) {
       </div>
       <div style={{ textAlign: "right" }}>
         <img src="/waaree_logo.png" alt="Waaree" style={{ height: 46, objectFit: "contain", display: "block" }} />
-        <div style={{ fontSize: 9, color: "#4B4B4B", marginTop: 4 }}>Authorized Partner</div>
       </div>
     </div>
   );
@@ -296,14 +303,20 @@ function PdfFooter({ s }: { s: AppSettings }) {
   );
 }
 
-// hideHeader: Page 1's cover folds the logo/company-info strip into its
-// own full-width photo banner (CoverHero) instead of using the slim
-// PdfHeader repeated on every other page — showing both would duplicate
-// the same logo/name/contact info twice at the top of the cover.
+// hideHeader: Page 1's cover uses its own light CoverHeaderBand instead
+// of the slim PdfHeader repeated on every other page — showing both would
+// duplicate the same logo/name/contact info twice at the top of the cover.
+//
+// Restyle: background switched from flat white to a very light top-to-
+// bottom gradient (matches the reference's soft blue-white page) — a
+// plain linear-gradient on the page div itself, nothing html2canvas would
+// choke on. White Card()s (below) sit on top of it, which is what gives
+// the whole document its "cards floating on a light backdrop" read.
 function Page({ children, s, hideHeader }: { children: ReactNode; s: AppSettings; hideHeader?: boolean }) {
   return (
     <div className="quote-page" style={{
-      fontFamily: "Arial, sans-serif", fontSize: FONT, color: "#1a1a1a", background: "white",
+      fontFamily: "Arial, sans-serif", fontSize: FONT, color: "#1a1a1a",
+      background: "linear-gradient(180deg, #F6F9FE 0%, #FFFFFF 260px)",
       padding: "26px 32px", width: 794, minHeight: 1123, margin: "0 auto 18px",
       boxSizing: "border-box", display: "flex", flexDirection: "column", pageBreakAfter: "always",
     }}>
@@ -314,19 +327,105 @@ function Page({ children, s, hideHeader }: { children: ReactNode; s: AppSettings
   );
 }
 
-function SectionTitle({ title, sub }: { title: string; sub?: string }) {
+// White rounded-card wrapper — the connective visual language behind
+// every restyled section (System Design, Pricing Breakdown, Payment
+// Schedule, Financial Analysis, Warranties, ...): a plain white box,
+// border, border-radius and a soft box-shadow, no clip-paths or multi-
+// shape tricks, so it renders identically through the html2canvas
+// pipeline as everything else already does.
+function Card({ children, style }: { children: ReactNode; style?: CSSProperties }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "14px 0 8px" }}>
-      <div style={{ width: 5, height: 22, background: BLUE2, borderRadius: 2 }} />
+    <div style={{
+      background: "white", border: "1px solid #E7ECF5", borderRadius: 14,
+      padding: "16px 18px", boxShadow: "0 1px 3px rgba(15,30,61,0.06)",
+      ...style,
+    }}>
+      {children}
+    </div>
+  );
+}
+
+// Same white rounded-card shell as Card, but with a subtle pale diagonal
+// wash instead of flat white — the cover page's "Prepared For" panel and
+// header band, so the two read as one continuous light surface instead
+// of two disconnected pieces with different backgrounds (matching the
+// reference exactly).
+//
+// The wash is a real two-layer overlay (a full-opacity gradient div with
+// its own `opacity`), not a `${BLUE2}14`-style hex-alpha suffix baked
+// into the gradient stop — BLUE2 is a CSS var() expression by design
+// (see NAVY's comment up top), and concatenating a hex suffix onto a
+// var() string is invalid CSS, silently dropped. This is the same fix
+// already applied throughout KpiCard/HeroBackground/etc., just reused
+// here for a diagonal wash instead of a radial highlight or a flat tint.
+function TintedCard({ children, style }: { children: ReactNode; style?: CSSProperties }) {
+  return (
+    <div style={{ position: "relative", background: "white", border: "1px solid #E7ECF5", borderRadius: 14, overflow: "hidden", ...style }}>
+      <div style={{ position: "absolute", inset: 0, backgroundImage: `linear-gradient(135deg, ${BLUE2} 0%, transparent 70%)`, opacity: 0.14 }} />
+      <div style={{ position: "relative" }}>{children}</div>
+    </div>
+  );
+}
+
+// number: circular badge in front of the heading (1, 2, 3, ...) — the
+// reference's numbered section markers. Each page hand-assigns numbers
+// at its own SectionTitle call sites via a simple `let n = 0; ... {++n}`
+// counter in source order, so numbering advances correctly even when a
+// section is conditionally skipped (e.g. Battery/Hybrid only when
+// batteryKwh > 0) — no separate bookkeeping needed, and it's why
+// "Pricing Breakdown" reads as badge 2 in the common no-battery case,
+// matching the reference, but shifts to 3 when Battery/Hybrid precedes it.
+function SectionTitle({ title, sub, number }: { title: string; sub?: string; number?: number }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "14px 0 10px" }}>
+      {number != null && (
+        <div style={{
+          width: 26, height: 26, borderRadius: "50%", flexShrink: 0,
+          background: BLUE2, color: "white", fontWeight: 800, fontSize: FONT_S,
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }}>
+          {number}
+        </div>
+      )}
       <span style={{ fontWeight: 700, fontSize: FONT_L, color: NAVY, letterSpacing: 0.3 }}>{title.toUpperCase()}</span>
       {sub && <span style={{ fontSize: FONT_S, color: "#555" }}>— {sub}</span>}
     </div>
   );
 }
 
-function KpiCard({ label, value, sub, color = BLUE2, bg = LIGHT }: { label: string; value: string; sub?: string; color?: string; bg?: string }) {
+// icon: optional Lucide icon rendered in a pastel circle above the label
+// (the reference's icon-circle stat cards) — tinted from `color` so it
+// stays on-brand for whatever primary/secondary/accent a tenant has set,
+// never a hardcoded reference-image color.
+//
+// `color` is frequently NAVY/BLUE2/ACCENT — CSS custom-property
+// references like "var(--quote-secondary, #1E88E5)", not literal hex —
+// because that's the whole point of this file's theming (see NAVY's own
+// comment above: components read tenant colors via CSS vars, not props).
+// String-concatenating a hex alpha suffix onto that (`${color}22`)
+// produces invalid CSS ("var(...)22") that gets silently dropped, which
+// is exactly what the border below did before this fix (no visible
+// border on any KpiCard using a theme-derived color, i.e. most of them).
+// A real two-layer background + opacity avoids that: `opacity` is its
+// own CSS property and works identically whether the color underneath is
+// a literal hex or a var() expression, so the tint renders correctly
+// either way. Border switched to a fixed neutral instead of trying to
+// alpha-blend `color` into it, matching the reference's plain light
+// borders on its stat cards anyway (color already carries the accent via
+// the fill/icon/value, not the border).
+function KpiCard({ label, value, sub, color = BLUE2, bg = LIGHT, icon: Icon }: {
+  label: string; value: string; sub?: string; color?: string; bg?: string; icon?: LucideIcon;
+}) {
   return (
-    <div style={{ background: bg, border: `1px solid ${color}30`, borderRadius: 8, padding: "12px 10px", textAlign: "center" }}>
+    <div style={{ background: bg, border: "1px solid #E7ECF5", borderRadius: 12, padding: "14px 10px", textAlign: "center" }}>
+      {Icon && (
+        <div style={{ position: "relative", width: 34, height: 34, margin: "0 auto 8px" }}>
+          <div style={{ position: "absolute", inset: 0, borderRadius: "50%", background: color, opacity: 0.16 }} />
+          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <Icon size={17} color={color} strokeWidth={2.25} />
+          </div>
+        </div>
+      )}
       <div style={{ fontSize: FONT_S, color: "#4B4B4B", fontWeight: 600, letterSpacing: 0.4, textTransform: "uppercase", marginBottom: 5 }}>{label}</div>
       <div style={{ fontSize: 20, fontWeight: 700, color, lineHeight: 1.2 }}>{value}</div>
       {sub && <div style={{ fontSize: FONT_S, color: "#4B4B4B", marginTop: 4 }}>{sub}</div>}
@@ -345,98 +444,67 @@ function KpiCard({ label, value, sub, color = BLUE2, bg = LIGHT }: { label: stri
 // No-cover-photo fallback: the old default, /solar_cover.jpg, was a stock
 // photo with "OMKAR POWER SOLUTIONS" baked into the image pixels — every
 // tenant who hadn't uploaded their own cover photo was unknowingly showing
-// a different company's name on their proposal's cover page. Replaced with
-// a CSS-generated solar-panel-grid pattern in the tenant's own brand
-// colors instead of swapping in a different stock photo, so no future
-// tenant can ever inherit baked-in branding again. Sized identically
-// (100% x 190, display:block) so the absolutely-positioned label/badge
-// siblings in P1 need no changes.
+// a different company's name on their proposal's cover page. /default_cover.jpg
+// (a generic rooftop-solar-panels-against-a-city-skyline photo, no text or
+// logo baked into any pixel) replaces that — safe as a shared fallback
+// across every tenant, the same reasoning that ruled out solar_cover.jpg
+// in the first place, just satisfied by starting from a genuinely blank
+// photo instead of avoiding photos altogether. The CSS-gradient fallback
+// this file used between those two states is gone — the actual concern
+// was always the baked-in branding, not "photo vs. no photo." Sized
+// identically (100% x height, display:block, object-fit:cover) so the
+// swap between the two <img> branches is visually seamless.
 function HeroBackground({ s, height = 190 }: { s: AppSettings; height?: number }) {
-  if (s.cover_image_url) {
-    return (
-      <img
-        src={s.cover_image_url}
-        alt={s.name}
-        style={{
-          width: "100%",
-          height,
-          objectFit: "cover",
-          objectPosition: "center center",
-          display: "block",
-          filter: "saturate(1.06) contrast(1.03) brightness(1.02)",
-        }}
-      />
-    );
-  }
-  const primary = s.primary_color || NAVY;
-  const secondary = s.secondary_color || BLUE2;
-  const accent = s.accent_color || ACCENT;
   return (
-    <div
+    <img
+      src={s.cover_image_url || "/default_cover.jpg"}
+      alt={s.name}
       style={{
         width: "100%",
         height,
+        objectFit: "cover",
+        objectPosition: "center center",
         display: "block",
-        position: "relative",
-        overflow: "hidden",
-        // Layered back-to-front: a small soft accent-colored highlight
-        // tucked into the corner, base brand-color gradient underneath.
-        // Earlier versions also had a panel-cell grid pattern and a
-        // diagonal light streak — both dropped since neither read cleanly
-        // at PDF size, leaving just a flat gradient with a corner glow.
-        backgroundImage: [
-          `radial-gradient(circle at 92% 8%, ${accent}55 0%, transparent 22%)`,
-          `linear-gradient(135deg, ${primary} 0%, ${secondary} 100%)`,
-        ].join(", "),
+        filter: "saturate(1.06) contrast(1.03) brightness(1.02)",
       }}
     />
   );
 }
 
-// Cover-page banner: replaces the old two-piece layout (a slim white
-// PdfHeader strip, then a separate photo hero below it with a small
-// bottom-corner label + badge) with one unified full-width photo/gradient
-// banner carrying logo, company info, proposal title, and the system-size
-// badge together — chosen (of four mockup options) as the one that's
-// reliably renderable in the html2canvas PDF pipeline (flexbox + a single
-// clip-path ribbon, no multi-shape chevron cutouts) and pairs naturally
-// with HeroBackground's photo-or-brand-gradient fallback. Only used here,
-// on Page 1 — every other page keeps the existing slim PdfHeader (a full
-// photo banner repeated on the financial/warranty pages would be visual
-// noise, not a proposal header).
-function CoverHero({ f, s }: { f: QuoteForm; s: AppSettings }) {
+// Restyle: the old single photo banner (logo/company info + proposal
+// title overlaid on the cover photo behind a dark scrim) is now a plain
+// light header band with no photo at all (so the logo/text is always on
+// a clean, on-brand-tinted background, not fighting a customer's own
+// bright cover photo for contrast) — the photo itself moved out of this
+// component entirely, now living beside the "Prepared For" card in P1's
+// next row (see P1 below), not stacked underneath this band. Wrapped in
+// TintedCard so this band and the Prepared For card share the exact same
+// pale diagonal wash and read as one continuous light surface, matching
+// the reference, instead of two disconnected pieces with different
+// backgrounds.
+function CoverHeaderBand({ f, s }: { f: QuoteForm; s: AppSettings }) {
+  const accentColor = s.accent_color || ACCENT;
   return (
-    <div style={{ position: "relative", marginTop: 8, borderRadius: 8, overflow: "hidden", height: 216 }}>
-      <HeroBackground s={s} height={216} />
-      {/* Stronger on the left (where the logo/text block sits) than the
-          right, so the ribbon badge doesn't disappear into the darkest
-          part of a customer's own bright cover photo. */}
-      <div
-        style={{
-          position: "absolute",
-          inset: 0,
-          background: "linear-gradient(90deg, rgba(8,18,45,0.72) 0%, rgba(8,18,45,0.45) 55%, rgba(8,18,45,0.22) 100%)",
-        }}
-      />
-      <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 22px", boxSizing: "border-box" }}>
+    <TintedCard style={{ padding: "16px 20px" }}>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
         <div style={{ display: "flex", gap: 14, alignItems: "flex-start", minWidth: 0 }}>
           <LogoBadge s={s} size={54} />
           <div style={{ minWidth: 0 }}>
-            <div style={{ color: "white", fontWeight: 800, fontSize: 21, letterSpacing: 0.4, lineHeight: 1.2 }}>
+            <div style={{ color: NAVY, fontWeight: 800, fontSize: 21, letterSpacing: 0.4, lineHeight: 1.2 }}>
               {s.name.toUpperCase()}
             </div>
-            <div style={{ color: "#c9d9f0", fontSize: FONT_S, marginTop: 3 }}>
+            <div style={{ color: "#556", fontSize: FONT_S, marginTop: 3 }}>
               {s.tagline || defaultSettings.tagline}
             </div>
             <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 4 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, color: "white", fontSize: FONT_S }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#444", fontSize: FONT_S }}>
                 <Phone size={12} /> {s.phone}
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, color: "white", fontSize: FONT_S }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#444", fontSize: FONT_S }}>
                 <Mail size={12} /> {s.email}
               </div>
               {s.address && (
-                <div style={{ display: "flex", alignItems: "center", gap: 6, color: "white", fontSize: FONT_S }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#444", fontSize: FONT_S }}>
                   <MapPin size={12} /> {s.address}
                 </div>
               )}
@@ -444,27 +512,33 @@ function CoverHero({ f, s }: { f: QuoteForm; s: AppSettings }) {
           </div>
         </div>
         <div style={{ textAlign: "right", flexShrink: 0 }}>
-          <div style={{ color: "white", fontWeight: 800, fontSize: 19, lineHeight: 1.3, letterSpacing: 0.4 }}>
-            TECHNO-COMMERCIAL<br />PROPOSAL
+          <div style={{ color: BLUE2, fontWeight: 700, fontSize: FONT_S, letterSpacing: 1.2 }}>
+            TECHNO-COMMERCIAL PROPOSAL
           </div>
-          <div style={{ width: 64, height: 3, background: ACCENT, marginTop: 8, marginLeft: "auto" }} />
+          <div style={{ color: NAVY, fontWeight: 800, fontSize: 30, lineHeight: 1.15, marginTop: 6 }}>
+            {f.systemCapacity} kWp
+          </div>
+          <div style={{ color: "#556", fontWeight: 600, fontSize: FONT, marginTop: 1 }}>
+            Solar Power System
+          </div>
           <div
             style={{
-              display: "inline-block",
-              marginTop: 14,
-              background: ACCENT,
-              color: NAVY,
-              fontWeight: 800,
-              fontSize: FONT_L,
-              padding: "8px 16px 8px 22px",
-              clipPath: "polygon(12px 0, 100% 0, 100% 100%, 12px 100%, 0 50%)",
+              display: "inline-flex", alignItems: "center", gap: 6, marginTop: 10,
+              // Fixed neutral border, not a `${accentColor}55` hex-alpha
+              // suffix — accentColor falls back to ACCENT (a var()
+              // expression) whenever the tenant hasn't set a custom
+              // accent_color, and that string concatenation produces
+              // invalid CSS. See KpiCard's icon-circle comment for the
+              // full reasoning behind this fix across the file.
+              border: "1px solid #E7ECF5", borderRadius: 999,
+              padding: "5px 12px", fontSize: FONT_S, color: NAVY, fontWeight: 600,
             }}
           >
-            {f.systemCapacity} kWp
+            <Calendar size={12} color={accentColor} /> Date: {fmtDate(f.date)}
           </div>
         </div>
       </div>
-    </div>
+    </TintedCard>
   );
 }
 
@@ -472,105 +546,145 @@ function P1({ f, c, s, showSiteDetails }: { f: QuoteForm; c: Calc; s: AppSetting
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", flex: 1, justifyContent: "space-between", gap: 0 }}>
       <div>
-        <CoverHero f={f} s={s} />
+        <CoverHeaderBand f={f} s={s} />
 
-        {/* Client name BELOW image — eyebrow label sets up the name as
-            the clear focal point (bigger/bolder than before, no longer
-            equal-weight with its own label), location moves from plain
-            text to a pill so it reads as metadata, not a second line of
-            the same sentence. Same NAVY background throughout — polish,
-            not a re-theme. */}
-        <div style={{ background: NAVY, borderRadius: 8, padding: "18px 18px 16px", marginTop: 6 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "#7a93c0", letterSpacing: 1.5, textTransform: "uppercase" }}>
-            Prepared For
-          </div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: "white", lineHeight: 1.3, wordBreak: "break-word", marginTop: 4 }}>
-            {f.clientName || "Client Name"}
-          </div>
-          <div
-            style={{
-              display: "inline-flex", alignItems: "center", gap: 6,
-              background: "rgba(170,201,240,0.15)", borderRadius: 999,
-              padding: "4px 12px 4px 10px", marginTop: 10,
-              fontSize: FONT_S, color: "#aac9f0",
-            }}
-          >
-            <MapPin size={12} />
-            {f.siteAddress || "Site Address"}
+        {/* Prepared For + photo, side by side — matches the reference's
+            actual layout (a two-column row directly below the header),
+            not the photo stacked full-width above a separate Prepared For
+            block. TintedCard gives this the same pale diagonal wash as
+            the header above it, so the two flow together as one
+            continuous light surface instead of two disconnected pieces.
+            Client name is the clear focal point (bigger/bolder, no longer
+            equal-weight with its own label); location is a pill so it
+            reads as metadata, not a second line of the same sentence. */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr", gap: 16, marginTop: 12 }}>
+          <TintedCard style={{ padding: "18px 18px 16px" }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#7a8aa8", letterSpacing: 1.5, textTransform: "uppercase" }}>
+              Prepared For
+            </div>
+            <div style={{ fontSize: 24, fontWeight: 800, color: NAVY, lineHeight: 1.3, wordBreak: "break-word", marginTop: 4 }}>
+              {f.clientName || "Client Name"}
+            </div>
+            <div style={{ width: 46, height: 3, borderRadius: 2, background: ACCENT, marginTop: 8 }} />
+            <div
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 6,
+                background: LIGHT, borderRadius: 999,
+                padding: "4px 12px 4px 10px", marginTop: 10,
+                fontSize: FONT_S, color: BLUE2, fontWeight: 600,
+              }}
+            >
+              <MapPin size={12} />
+              {f.siteAddress || "Site Address"}
+            </div>
+          </TintedCard>
+          <div style={{ borderRadius: 14, overflow: "hidden" }}>
+            <HeroBackground s={s} height={150} />
           </div>
         </div>
       </div>
 
       {/* KPI strip */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginTop: 12 }}>
-        <KpiCard label="System Size" value={`${f.systemCapacity} kWp`} sub={`${c.panels} Panels`} color={BLUE2} bg="#EEF5FF" />
-        <KpiCard label="Est. Generation" value={`${(c.gen/1000).toFixed(1)}k kWh`} sub="Per year" color={GREEN} bg={GREEN_L} />
-        <KpiCard label="Year 1 Savings" value={lakh(c.annualSavingsY1)} sub="Bill savings est." color={ACCENT} bg="#FFF8EE" />
-        <KpiCard label="Payback Period" value={`${c.paybackYears} yrs`} sub="Simple payback" color="#7C3AED" bg="#F3EEFF" />
+        <KpiCard icon={Zap} label="System Size" value={`${f.systemCapacity} kWp`} sub={`${c.panels} Panels`} color={BLUE2} bg="#EEF5FF" />
+        <KpiCard icon={Sun} label="Est. Generation" value={`${(c.gen/1000).toFixed(1)}k kWh`} sub="Per year" color={GREEN} bg={GREEN_L} />
+        <KpiCard icon={Wallet} label="Year 1 Savings" value={lakh(c.annualSavingsY1)} sub="Bill savings est." color={ACCENT} bg="#FFF8EE" />
+        <KpiCard icon={Calendar} label="Payback Period" value={`${c.paybackYears} yrs`} sub="Simple payback" color="#7C3AED" bg="#F3EEFF" />
       </div>
 
-      {/* Proposal + Site Details */}
+      {/* Proposal + Site Details — icon added next to each card's header
+          label (document icon / map-pin icon), Card wrapper instead of a
+          flat GRAY fill. */}
       {showSiteDetails ? (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 }}>
-          <div style={{ background: GRAY, borderRadius: 8, padding: "12px 14px" }}>
-            <div style={{ fontSize: FONT_S, color: "#555", fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 8 }}>Proposal Details</div>
+          <Card style={{ padding: "12px 14px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: FONT_S, color: "#555", fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 8 }}>
+              <FileText size={13} color={BLUE2} /> Proposal Details
+            </div>
             {[["Proposal No.", f.proposalNo], ["Date", fmtDate(f.date)], ["Valid Until", fmtDate(f.validUntil)]].map(([k, v]) => (
               <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: FONT, paddingBottom: 5, borderBottom: "1px solid #e5e7eb", marginBottom: 5 }}>
                 <span style={{ color: "#555" }}>{k}</span>
                 <span style={{ fontWeight: 600, color: NAVY }}>{v}</span>
               </div>
             ))}
-          </div>
-          <div style={{ background: GRAY, borderRadius: 8, padding: "12px 14px" }}>
-            <div style={{ fontSize: FONT_S, color: "#555", fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 8 }}>Site Details</div>
+          </Card>
+          <Card style={{ padding: "12px 14px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: FONT_S, color: "#555", fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 8 }}>
+              <MapPin size={13} color={BLUE2} /> Site Details
+            </div>
             {[["Roof Type", f.roofType], ["Floors", f.floors], ["Shading", f.shadow], ["Contact", f.contactPhone]].map(([k, v]) => (
               <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: FONT, paddingBottom: 5, borderBottom: "1px solid #e5e7eb", marginBottom: 5 }}>
                 <span style={{ color: "#555" }}>{k}</span>
                 <span style={{ fontWeight: 600, color: NAVY }}>{v || "—"}</span>
               </div>
             ))}
-          </div>
+          </Card>
         </div>
       ) : (
-        <div style={{ background: GRAY, borderRadius: 8, padding: "12px 14px", marginTop: 10 }}>
-          <div style={{ fontSize: FONT_S, color: "#555", fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 8 }}>Proposal Details</div>
+        <Card style={{ padding: "12px 14px", marginTop: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: FONT_S, color: "#555", fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 8 }}>
+            <FileText size={13} color={BLUE2} /> Proposal Details
+          </div>
           {[["Proposal No.", f.proposalNo], ["Date", fmtDate(f.date)], ["Valid Until", fmtDate(f.validUntil)]].map(([k, v]) => (
             <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: FONT, paddingBottom: 5, borderBottom: "1px solid #e5e7eb", marginBottom: 5 }}>
               <span style={{ color: "#555" }}>{k}</span>
               <span style={{ fontWeight: 600, color: NAVY }}>{v}</span>
             </div>
           ))}
-        </div>
+        </Card>
       )}
 
-      {/* Why Solar strip — tenant-toggleable, defaults on (generic content, no misattribution risk) */}
+      {/* Why Solar strip — tenant-toggleable, defaults on (generic content,
+          no misattribution risk). Restyle: white/light Card instead of a
+          solid navy fill, lucide icons in pastel tenant-tinted circles
+          instead of emoji, and a 4th item (Energy Independence) added
+          alongside the original 3, matching the reference's 4-item grid. */}
       {s.show_why_solar && (
-        <div style={{ background: NAVY, borderRadius: 8, padding: "14px 16px" }}>
-          <div style={{ fontSize: FONT_S, color: ACCENT, fontWeight: 700, letterSpacing: 1, marginBottom: 10 }}>WHY GO SOLAR NOW?</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+        <Card style={{ padding: "14px 16px" }}>
+          <div style={{ fontSize: FONT_S, color: BLUE2, fontWeight: 700, letterSpacing: 1, marginBottom: 12 }}>WHY GO SOLAR NOW?</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
             {[
-              { icon: "📉", t: "Reduce Electricity Bill", d: `Save approx. ${lakh(c.annualSavingsY1)} in Year 1 alone` },
-              { icon: "💰", t: `${lakh(totalSavings25(f, c.gen))} Total Savings`, d: "Projected savings over 25 years" },
-              { icon: "🌱", t: "Clean Energy", d: `${Math.round(c.gen * 25 * 0.82 / 1000)}T CO2 avoided over 25 years` },
+              { icon: Zap, color: BLUE2, t: "Reduce Electricity Bill", d: `Save approx. ${lakh(c.annualSavingsY1)} in Year 1 alone` },
+              { icon: TrendingUp, color: GREEN, t: "Total Savings", d: `${lakh(totalSavings25(f, c.gen))} projected over 25 years` },
+              { icon: Leaf, color: ACCENT, t: "Clean Energy", d: `${Math.round(c.gen * 25 * 0.82 / 1000)}T CO2 avoided over 25 years` },
+              { icon: ShieldCheck, color: "#7C3AED", t: "Energy Independence", d: "Protect against rising electricity costs" },
             ].map(item => (
               <div key={item.t} style={{ textAlign: "center" }}>
-                <div style={{ fontSize: 20 }}>{item.icon}</div>
-                <div style={{ color: "white", fontWeight: 700, fontSize: FONT, marginTop: 4 }}>{item.t}</div>
-                <div style={{ color: "#aac9f0", fontSize: FONT_S, marginTop: 3 }}>{item.d}</div>
+                {/* Two-layer tint, not a `${item.color}1F` alpha suffix —
+                    item.color is BLUE2/ACCENT (CSS var() expressions) for
+                    2 of these 4 items, and string-concatenating a hex
+                    suffix onto a var() reference is invalid CSS. See
+                    KpiCard's icon-circle comment for the full reasoning. */}
+                <div style={{ position: "relative", width: 32, height: 32, margin: "0 auto 6px" }}>
+                  <div style={{ position: "absolute", inset: 0, borderRadius: "50%", background: item.color, opacity: 0.16 }} />
+                  <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <item.icon size={16} color={item.color} strokeWidth={2.25} />
+                  </div>
+                </div>
+                <div style={{ color: NAVY, fontWeight: 700, fontSize: FONT_S, marginTop: 2 }}>{item.t}</div>
+                <div style={{ color: "#555", fontSize: FONT_S, marginTop: 3, lineHeight: 1.3 }}>{item.d}</div>
               </div>
             ))}
           </div>
-        </div>
+        </Card>
       )}
 
       {/* Partner logos — enlarged (was height:34, now 60) so this block
           carries more visual weight at the bottom of the cover page.
-          Tenant-toggleable, defaults on (generic panel-brand logos). */}
+          Tenant-toggleable, defaults on (generic panel-brand logos).
+          "Our Partner Brands" heading + logos, nothing else under them —
+          matches the reference exactly (no "Authorized Partner" caption
+          or similar text below the row). */}
       {s.show_partner_logos && (
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 32 }}>
-          <img src="/waaree_logo.png" alt="Waaree" style={{ height: 60, objectFit: "contain", opacity: 0.9 }} />
-          <img src="/adani_solar.png" alt="Adani" style={{ height: 60, objectFit: "contain", opacity: 0.9 }} />
-          <img src="/premier_energies.png" alt="Premier" style={{ height: 60, objectFit: "contain", opacity: 0.9 }} />
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontSize: FONT_S, color: "#7a8aa8", fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", marginBottom: 12 }}>
+            Our Partner Brands
+          </div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 32 }}>
+            <img src="/waaree_logo.png" alt="Waaree" style={{ height: 60, objectFit: "contain", opacity: 0.9 }} />
+            <img src="/adani_solar.png" alt="Adani" style={{ height: 60, objectFit: "contain", opacity: 0.9 }} />
+            <img src="/premier_energies.png" alt="Premier" style={{ height: 60, objectFit: "contain", opacity: 0.9 }} />
+          </div>
         </div>
       )}
     </div>
@@ -588,15 +702,20 @@ function P2({ f, c, s, panel, inverter }: { f: QuoteForm; c: Calc; s: AppSetting
   const opexTotal = opexTotalSavings(f, c.gen, ppaTermYears);
   const buybackRows = buybackTable(c.net, ppaTermYears);
   const panelKpiSub = panel ? [panel.brand, panel.model].filter(Boolean).join(" ") : "Waaree 580 Wp TOPCon";
+  // Per-page running counter for SectionTitle's numbered badge — see that
+  // component's comment. Advances in source order, so it naturally skips
+  // numbers for whatever's conditionally absent (Battery/Hybrid, the
+  // whole OPEX block) instead of needing separate bookkeeping.
+  let n = 0;
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", flex: 1, gap: 22 }}>
-      <div>
-        <SectionTitle title="System Design" sub="Technical configuration" />
+      <Card>
+        <SectionTitle number={++n} title="System Design" sub="Technical configuration" />
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 12 }}>
-          <KpiCard label="Solar Panels" value={`${c.panels}`} sub={panelKpiSub} color={BLUE2} bg="#EEF5FF" />
-          <KpiCard label="Inverter" value={`${f.systemCapacity} kW`} sub={inverterBrandModel(inverter)} color={NAVY} bg={LIGHT} />
-          <KpiCard label="AC Generation" value={`${c.gen.toLocaleString("en-IN")}`} sub="kWh / year" color={GREEN} bg={GREEN_L} />
-          <KpiCard label="Performance Ratio" value="75%" sub="GHI: 1,850 kWh/m2" color="#7C3AED" bg="#F3EEFF" />
+          <KpiCard icon={Sun} label="Solar Panels" value={`${c.panels}`} sub={panelKpiSub} color={BLUE2} bg="#EEF5FF" />
+          <KpiCard icon={Cpu} label="Inverter" value={`${f.systemCapacity} kW`} sub={inverterBrandModel(inverter)} color={NAVY} bg={LIGHT} />
+          <KpiCard icon={Zap} label="AC Generation" value={`${c.gen.toLocaleString("en-IN")}`} sub="kWh / year" color={GREEN} bg={GREEN_L} />
+          <KpiCard icon={Gauge} label="Performance Ratio" value="75%" sub="GHI: 1,850 kWh/m2" color="#7C3AED" bg="#F3EEFF" />
         </div>
 
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -619,20 +738,25 @@ function P2({ f, c, s, panel, inverter }: { f: QuoteForm; c: Calc; s: AppSetting
 
         {f.batteryKwh > 0 && (
           <>
-            <SectionTitle title="Battery / Hybrid Configuration" />
-            <div style={{ background: "#FFF8EE", border: `1px solid ${ACCENT}40`, borderRadius: 8, padding: "10px 14px" }}>
+            <SectionTitle number={++n} title="Battery / Hybrid Configuration" />
+            {/* Fixed neutral border, not `${ACCENT}40` — ACCENT is always
+                a var() expression (never a resolved literal), so a
+                hex-alpha suffix concatenated onto it was invalid CSS,
+                silently dropped. Same fix as KpiCard's icon-circle
+                comment above. */}
+            <div style={{ background: "#FFF8EE", border: "1px solid #F0DCC0", borderRadius: 8, padding: "10px 14px" }}>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
-                <KpiCard label="Battery Capacity" value={`${f.batteryKwh} kWh`} sub="LiFePO4" color={ACCENT} bg="white" />
-                <KpiCard label="Backup Hours" value={`~${Math.round(f.batteryKwh / (f.systemCapacity * 0.4))} hrs`} sub="Estimated" color={ACCENT} bg="white" />
-                <KpiCard label="Battery Type" value="LiFePO4" sub="10-yr warranty" color={ACCENT} bg="white" />
+                <KpiCard icon={BatteryCharging} label="Battery Capacity" value={`${f.batteryKwh} kWh`} sub="LiFePO4" color={ACCENT} bg="white" />
+                <KpiCard icon={Clock} label="Backup Hours" value={`~${Math.round(f.batteryKwh / (f.systemCapacity * 0.4))} hrs`} sub="Estimated" color={ACCENT} bg="white" />
+                <KpiCard icon={BatteryCharging} label="Battery Type" value="LiFePO4" sub="10-yr warranty" color={ACCENT} bg="white" />
               </div>
             </div>
           </>
         )}
-      </div>
+      </Card>
 
-      <div>
-        <SectionTitle title="Pricing Breakdown" sub="CAPEX model" />
+      <Card>
+        <SectionTitle number={++n} title="Pricing Breakdown" sub="CAPEX model" />
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr>
@@ -654,14 +778,25 @@ function P2({ f, c, s, panel, inverter }: { f: QuoteForm; c: Calc; s: AppSetting
                 <td style={{ ...TD, textAlign: "center" }}>{row.n}</td>
                 <td style={{ ...TD, fontWeight: row.bold ? 700 : 400, color: row.bold ? BLUE2 : "inherit" }}>{row.d}</td>
                 <td style={{ ...TD, color: "#4B4B4B" }}>{row.r}</td>
-                <td style={{ ...TD, textAlign: "right", fontWeight: row.bold ? 700 : 400 }}>{row.a}</td>
+                <td style={{ ...TD, textAlign: "right", fontWeight: row.bold ? 700 : 400, color: row.bold ? BLUE2 : "inherit" }}>{row.a}</td>
               </tr>
             ))}
-            <tr style={{ background: NAVY }}>
-              <td colSpan={3} style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: "white", fontWeight: 700, fontSize: FONT_L }}>
+          </tbody>
+        </table>
+
+        {/* Restyle: NET TOTAL kept as the exact same table structure/number
+            (task explicitly says keep structure as-is) — pale mint-tinted
+            background with bold dark-green text, matching the reference
+            exactly, instead of a solid saturated fill with white text.
+            Label in NAVY, amount in GREEN, same pairing the reference
+            uses. */}
+        <table style={{ width: "100%", borderCollapse: "collapse", marginTop: -1 }}>
+          <tbody>
+            <tr style={{ background: GREEN_L }}>
+              <td colSpan={3} style={{ padding: "12px 12px", border: "1px solid #d0d7e2", color: NAVY, fontWeight: 700, fontSize: FONT_L }}>
                 NET TOTAL (incl. GST)
               </td>
-              <td style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: ACCENT, fontWeight: 700, fontSize: 16, textAlign: "right" }}>
+              <td style={{ padding: "12px 12px", border: "1px solid #d0d7e2", color: GREEN, fontWeight: 800, fontSize: 20, textAlign: "right", width: "20%" }}>
                 {inrFull(c.net)}
               </td>
             </tr>
@@ -670,40 +805,36 @@ function P2({ f, c, s, panel, inverter }: { f: QuoteForm; c: Calc; s: AppSetting
                 <td colSpan={3} style={{ padding: "8px 12px", border: "1px solid #d0d7e2", color: "#0369a1", fontSize: FONT }}>
                   After PM Surya Ghar Subsidy of {inrFull(f.subsidyTotal)} - Net effective cost to society
                 </td>
-                <td style={{ padding: "8px 12px", border: "1px solid #d0d7e2", color: "#0369a1", fontWeight: 600, fontSize: FONT_L, textAlign: "right" }}>
+                <td style={{ padding: "8px 12px", border: "1px solid #d0d7e2", color: "#0369a1", fontWeight: 600, fontSize: FONT_L, textAlign: "right", width: "20%" }}>
                   {inrFull(c.netAfterSubsidy)}
                 </td>
               </tr>
             )}
           </tbody>
         </table>
-      </div>
+      </Card>
 
-      <div>
-        <SectionTitle title="Payment Schedule" sub="Milestone-based" />
+      <Card>
+        <SectionTitle number={++n} title="Payment Schedule" sub="Milestone-based" />
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
           {(s.default_payment_schedule ?? DEFAULT_SCHEDULE).map((m, i) => ({
             l: `T-${i + 1} | ${m.percent}%`,
             d: m.label,
             a: [c.t1, c.t2, c.t3, c.t4][i] ?? 0,
           })).map((m, i) => (
-            <div key={i} style={{ background: i === 0 ? NAVY : GRAY, borderRadius: 8, padding: "10px 12px", textAlign: "center", border: `1px solid ${i === 0 ? NAVY : "#e5e7eb"}` }}>
-              <div style={{ fontSize: FONT_S, fontWeight: 700, color: i === 0 ? ACCENT : BLUE2, letterSpacing: 0.5 }}>{m.l}</div>
-              <div style={{ fontSize: FONT_L, fontWeight: 700, color: i === 0 ? "white" : NAVY, margin: "6px 0 4px" }}>{inrFull(m.a)}</div>
-              <div style={{ fontSize: FONT_S, color: i === 0 ? "#aac9f0" : "#4B4B4B" }}>{m.d}</div>
-            </div>
+            <KpiCard key={i} icon={Calendar} label={m.l} value={inrFull(m.a)} sub={m.d} color={BLUE2} bg={LIGHT} />
           ))}
         </div>
-      </div>
+      </Card>
 
       {f.projectType === "OPEX / PPA" && f.ppaRate > 0 && (
-        <div>
-          <SectionTitle title="OPEX / PPA Model" sub="Alternative to CAPEX" />
+        <Card>
+          <SectionTitle number={++n} title="OPEX / PPA Model" sub="Alternative to CAPEX" />
           <div style={{ background: "#F3EEFF", border: "1px solid #7C3AED30", borderRadius: 8, padding: "12px 16px" }}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
-              <KpiCard label="PPA Rate" value={`Rs.${f.ppaRate}/kWh`} sub="Fixed for contract term" color="#7C3AED" bg="white" />
-              <KpiCard label="Grid Rate" value={`Rs.${f.gridRate}/kWh`} sub="Current tariff" color={RED} bg="white" />
-              <KpiCard label="Savings/Unit" value={`Rs.${(f.gridRate - f.ppaRate).toFixed(2)}`} sub="Per kWh saved" color={GREEN} bg="white" />
+              <KpiCard icon={IndianRupee} label="PPA Rate" value={`Rs.${f.ppaRate}/kWh`} sub="Fixed for contract term" color="#7C3AED" bg="white" />
+              <KpiCard icon={Zap} label="Grid Rate" value={`Rs.${f.gridRate}/kWh`} sub="Current tariff" color={RED} bg="white" />
+              <KpiCard icon={PiggyBank} label="Savings/Unit" value={`Rs.${(f.gridRate - f.ppaRate).toFixed(2)}`} sub="Per kWh saved" color={GREEN} bg="white" />
             </div>
             <div style={{ marginTop: 10, fontSize: FONT, color: "#555", lineHeight: 1.6 }}>
               Under the OPEX model, {company.name} owns, operates and maintains the solar plant. You pay only for units generated at Rs. {f.ppaRate}/kWh — saving Rs. {(f.gridRate - f.ppaRate).toFixed(2)}/kWh vs current grid rate. Zero CAPEX investment required.
@@ -715,10 +846,10 @@ function P2({ f, c, s, panel, inverter }: { f: QuoteForm; c: Calc; s: AppSetting
               total row), but no Investment/Net Profit framing since OPEX
               has no upfront cost. */}
           <div style={{ marginTop: 16 }}>
-            <SectionTitle title={`${ppaTermYears}-Year OPEX Savings`} sub={`Fixed PPA rate vs escalating grid tariff · ${ppaTermYears}-year contract term`} />
+            <SectionTitle number={++n} title={`${ppaTermYears}-Year OPEX Savings`} sub={`Fixed PPA rate vs escalating grid tariff · ${ppaTermYears}-year contract term`} />
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: FONT }}>
               <thead>
-                <tr style={{ background: NAVY, color: "white" }}>
+                <tr style={{ background: LIGHT, color: NAVY }}>
                   <th style={{ padding: "9px 11px", border: "1px solid #d0d7e2", textAlign: "center", width: "6%" }}>Year</th>
                   <th style={{ padding: "9px 11px", border: "1px solid #d0d7e2", textAlign: "right" }}>Generation (kWh)</th>
                   <th style={{ padding: "9px 11px", border: "1px solid #d0d7e2", textAlign: "right" }}>Grid Rate (Rs.)</th>
@@ -738,9 +869,11 @@ function P2({ f, c, s, panel, inverter }: { f: QuoteForm; c: Calc; s: AppSetting
                     <td style={{ padding: "8px 11px", border: "1px solid #d0d7e2", textAlign: "right", fontWeight: 600 }}>{inr(r.cumSavings)}</td>
                   </tr>
                 ))}
-                <tr style={{ background: NAVY }}>
-                  <td colSpan={5} style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: "white", fontWeight: 700, fontSize: FONT_L }}>TOTAL {ppaTermYears}-YEAR SAVINGS</td>
-                  <td style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: ACCENT, fontWeight: 700, textAlign: "right" }}>{inr(opexTotal)}</td>
+                {/* Restyle: pale mint tint instead of a solid NAVY bar —
+                    same treatment as the NET TOTAL box below. */}
+                <tr style={{ background: GREEN_L }}>
+                  <td colSpan={5} style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: NAVY, fontWeight: 700, fontSize: FONT_L }}>TOTAL {ppaTermYears}-YEAR SAVINGS</td>
+                  <td style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: GREEN, fontWeight: 800, fontSize: 16, textAlign: "right" }}>{inr(opexTotal)}</td>
                 </tr>
               </tbody>
             </table>
@@ -753,10 +886,10 @@ function P2({ f, c, s, panel, inverter }: { f: QuoteForm; c: Calc; s: AppSetting
               project cost shown in the Pricing Breakdown above, over the
               same contract term as the savings table. */}
           <div style={{ marginTop: 16 }}>
-            <SectionTitle title="Buyback Value" sub={`Straight-line depreciation over ${ppaTermYears} years`} />
+            <SectionTitle number={++n} title="Buyback Value" sub={`Straight-line depreciation over ${ppaTermYears} years`} />
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: FONT }}>
               <thead>
-                <tr style={{ background: NAVY, color: "white" }}>
+                <tr style={{ background: LIGHT, color: NAVY }}>
                   <th style={{ padding: "9px 11px", border: "1px solid #d0d7e2", textAlign: "center", width: "6%" }}>Year</th>
                   <th style={{ padding: "9px 11px", border: "1px solid #d0d7e2", textAlign: "right" }}>Project Value (Start)</th>
                   <th style={{ padding: "9px 11px", border: "1px solid #d0d7e2", textAlign: "right" }}>Depreciation</th>
@@ -778,7 +911,7 @@ function P2({ f, c, s, panel, inverter }: { f: QuoteForm; c: Calc; s: AppSetting
               Project Value: {inrFull(c.net)} (Pricing Breakdown total, incl. GST) depreciated evenly over {ppaTermYears} years.
             </div>
           </div>
-        </div>
+        </Card>
       )}
     </div>
   );
@@ -791,18 +924,18 @@ function P3({ f, c }: { f: QuoteForm; c: Calc }) {
   const paybackRow = rows.find(r => r.cumSavings >= c.netAfterSubsidy);
 
   return (
-    <>
-      <SectionTitle title="Financial Analysis" sub="25-year savings projection" />
+    <Card>
+      <SectionTitle number={1} title="Financial Analysis" sub="25-year savings projection" />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 12 }}>
-        <KpiCard label="Investment" value={lakh(c.netAfterSubsidy)} sub="Net after subsidy" color={BLUE2} bg="#EEF5FF" />
-        <KpiCard label="Year 1 Savings" value={lakh(c.annualSavingsY1)} sub={`@ Rs.${f.gridRate}/kWh`} color={GREEN} bg={GREEN_L} />
-        <KpiCard label="Payback Period" value={`${c.paybackYears} yrs`} sub="Simple payback" color={ACCENT} bg="#FFF8EE" />
-        <KpiCard label="25-Year Returns" value={lakh(total25)} sub={`ROI: ${c.roi25}%`} color="#7C3AED" bg="#F3EEFF" />
+        <KpiCard icon={Wallet} label="Investment" value={lakh(c.netAfterSubsidy)} sub="Net after subsidy" color={BLUE2} bg="#EEF5FF" />
+        <KpiCard icon={TrendingUp} label="Year 1 Savings" value={lakh(c.annualSavingsY1)} sub={`@ Rs.${f.gridRate}/kWh`} color={GREEN} bg={GREEN_L} />
+        <KpiCard icon={Calendar} label="Payback Period" value={`${c.paybackYears} yrs`} sub="Simple payback" color={ACCENT} bg="#FFF8EE" />
+        <KpiCard icon={PiggyBank} label="25-Year Returns" value={lakh(total25)} sub={`ROI: ${c.roi25}%`} color="#7C3AED" bg="#F3EEFF" />
       </div>
 
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: FONT }}>
         <thead>
-          <tr style={{ background: NAVY, color: "white" }}>
+          <tr style={{ background: LIGHT, color: NAVY }}>
             <th style={{ padding: "9px 11px", border: "1px solid #d0d7e2", textAlign: "center", width: "6%" }}>Year</th>
             <th style={{ padding: "9px 11px", border: "1px solid #d0d7e2", textAlign: "right" }}>Generation (kWh)</th>
             <th style={{ padding: "9px 11px", border: "1px solid #d0d7e2", textAlign: "right" }}>Grid Rate (Rs.)</th>
@@ -830,18 +963,20 @@ function P3({ f, c }: { f: QuoteForm; c: Calc }) {
               </tr>
             );
           })}
-          <tr style={{ background: NAVY }}>
-            <td colSpan={3} style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: "white", fontWeight: 700, fontSize: FONT_L }}>TOTAL 25-YEAR SAVINGS</td>
-            <td style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: ACCENT, fontWeight: 700, textAlign: "right" }}>{inr(total25)}</td>
-            <td style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: ACCENT, fontWeight: 700, textAlign: "right" }}>{inr(total25)}</td>
-            <td style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: "#4ade80", fontWeight: 700, textAlign: "right" }}>+{inr(total25 - c.netAfterSubsidy)}</td>
+          {/* Restyle: pale mint tint instead of a solid NAVY bar — same
+              treatment as the NET TOTAL box on the Pricing Breakdown. */}
+          <tr style={{ background: GREEN_L }}>
+            <td colSpan={3} style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: NAVY, fontWeight: 700, fontSize: FONT_L }}>TOTAL 25-YEAR SAVINGS</td>
+            <td style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: GREEN, fontWeight: 800, fontSize: 16, textAlign: "right" }}>{inr(total25)}</td>
+            <td style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: GREEN, fontWeight: 800, fontSize: 16, textAlign: "right" }}>{inr(total25)}</td>
+            <td style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: GREEN, fontWeight: 800, fontSize: 16, textAlign: "right" }}>+{inr(total25 - c.netAfterSubsidy)}</td>
           </tr>
         </tbody>
       </table>
       <div style={{ marginTop: 8, fontSize: FONT_S, color: "#555" }}>
         * Payback year highlighted. Assumes {f.gridEscalation}% annual grid tariff escalation and {DEGRADE*100}% panel degradation from Year 2. Actual savings may vary based on usage and local tariff.
       </div>
-    </>
+    </Card>
   );
 }
 
@@ -855,8 +990,8 @@ function P3({ f, c }: { f: QuoteForm; c: Calc }) {
    either. */
 function P3B({ projects }: { projects: TenantProject[] }) {
   return (
-    <>
-      <SectionTitle title="Completed Projects" sub="Recent installations" />
+    <Card>
+      <SectionTitle number={1} title="Completed Projects" sub="Recent installations" />
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         {projects.map(p => (
           <div key={p.id} style={{ border: "1px solid #d0d7e2", borderRadius: 8, overflow: "hidden" }}>
@@ -878,7 +1013,7 @@ function P3B({ projects }: { projects: TenantProject[] }) {
           </div>
         ))}
       </div>
-    </>
+    </Card>
   );
 }
 
@@ -892,13 +1027,18 @@ function P4({ s, panel, inverter, certifications }: { s: AppSettings; panel: Pro
   const warranty = s.default_warranty?.length ? s.default_warranty : defaultSettings.default_warranty;
   const scope = s.default_scope ?? defaultSettings.default_scope;
   return (
-    <>
-      <SectionTitle title="Warranties" sub="OEM guaranteed" />
+    <Card>
+      <SectionTitle number={1} title="Warranties" sub="OEM guaranteed" />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginBottom: 14 }}>
         {warranty.map((w, i) => {
           const color = WARRANTY_COLORS[i % WARRANTY_COLORS.length];
+          // Fixed neutral border, not `${color}30` — color is BLUE2/ACCENT
+          // (CSS var() expressions) for 2 of the 4 warranty rows, and a
+          // hex-alpha suffix concatenated onto a var() reference is
+          // invalid CSS (silently dropped, i.e. no visible border on
+          // those rows). Same bug/fix as KpiCard's icon-circle comment.
           return (
-            <div key={i} style={{ border: `1px solid ${color}30`, borderRadius: 8, padding: "10px 12px", background: "#FAFCFF" }}>
+            <div key={i} style={{ border: "1px solid #E7ECF5", borderRadius: 8, padding: "10px 12px", background: "#FAFCFF" }}>
               <div style={{ fontWeight: 700, color: NAVY, fontSize: FONT }}>{w.item}</div>
               <div style={{ fontSize: FONT_S, color: "#4B4B4B", marginTop: 2 }}>{w.coverage}</div>
               <div style={{ fontSize: FONT_L, fontWeight: 700, color, marginTop: 6 }}>{w.period}</div>
@@ -927,7 +1067,7 @@ function P4({ s, panel, inverter, certifications }: { s: AppSettings; panel: Pro
         </div>
       )}
 
-      <SectionTitle title="Scope of Work" sub="Inclusions and exclusions" />
+      <SectionTitle number={2} title="Scope of Work" sub="Inclusions and exclusions" />
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
         <div style={{ background: GREEN_L, borderRadius: 8, padding: "12px 14px" }}>
           <div style={{ fontWeight: 700, color: GREEN, fontSize: FONT, marginBottom: 8 }}>INCLUDED IN SCOPE</div>
@@ -943,7 +1083,7 @@ function P4({ s, panel, inverter, certifications }: { s: AppSettings; panel: Pro
         </div>
       </div>
 
-      <SectionTitle title="Bill of Material" sub="Key components" />
+      <SectionTitle number={3} title="Bill of Material" sub="Key components" />
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead>
           <tr>
@@ -973,7 +1113,7 @@ function P4({ s, panel, inverter, certifications }: { s: AppSettings; panel: Pro
           ))}
         </tbody>
       </table>
-    </>
+    </Card>
   );
 }
 
@@ -982,21 +1122,22 @@ function P4({ s, panel, inverter, certifications }: { s: AppSettings; panel: Pro
    genuinely fill the bottom of the page, plus wrapped in a flex column
    with justifyContent: 'space-between' for full-page spacing. */
 function P5({ f, s, testimonials, clientLogos }: { f: QuoteForm; s: AppSettings; testimonials: Testimonial[]; clientLogos: ClientLogo[] }) {
+  let n = 0; // per-page numbered-badge counter — see SectionTitle's comment
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", flex: 1, justifyContent: "space-between" }}>
-      <div>
-        <SectionTitle title="Terms and Acceptance" />
-        <div style={{ background: LIGHT, border: `1px solid ${BLUE2}`, borderRadius: 8, padding: "10px 16px", fontSize: FONT, lineHeight: 1.6 }}>
+      <Card>
+        <SectionTitle number={++n} title="Terms and Acceptance" />
+        <div style={{ background: LIGHT, border: `1px solid ${BLUE2}30`, borderRadius: 8, padding: "10px 16px", fontSize: FONT, lineHeight: 1.6 }}>
           {s.default_terms || defaultSettings.default_terms}
         </div>
-      </div>
+      </Card>
 
       {/* Phase 6: tenant testimonials — placed before the signature grid
           (per the confirmed placement decision), only rendered when the
           tenant has added at least one. */}
       {testimonials.length > 0 && (
-        <div>
-          <SectionTitle title="What Our Clients Say" sub="Testimonials" />
+        <Card>
+          <SectionTitle number={++n} title="What Our Clients Say" sub="Testimonials" />
           <div style={{ display: "grid", gridTemplateColumns: testimonials.length > 1 ? "1fr 1fr" : "1fr", gap: 10 }}>
             {testimonials.map(t => (
               <div key={t.id} style={{ border: "1px solid #d0d7e2", borderRadius: 8, padding: "10px 14px", background: "#FAFCFF" }}>
@@ -1018,7 +1159,7 @@ function P5({ f, s, testimonials, clientLogos }: { f: QuoteForm; s: AppSettings;
               </div>
             ))}
           </div>
-        </div>
+        </Card>
       )}
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
@@ -1026,8 +1167,11 @@ function P5({ f, s, testimonials, clientLogos }: { f: QuoteForm; s: AppSettings;
           { title: `FOR ${s.name.toUpperCase()}`, name: s.proprietor || company.proprietor, designation: "Proprietor" },
           { title: `ACCEPTED BY - ${f.clientName?.toUpperCase() || "CLIENT"}`, name: f.clientName || "___________________", designation: "___________________" },
         ].map((sig, i) => (
-          <div key={i} style={{ border: "1px solid #d0d7e2", borderRadius: 8, overflow: "hidden" }}>
-            <div style={{ background: i === 0 ? NAVY : BLUE2, color: "white", padding: "8px 14px", fontWeight: 700, fontSize: FONT }}>{sig.title}</div>
+          <div key={i} style={{ border: "1px solid #E7ECF5", borderRadius: 8, overflow: "hidden" }}>
+            {/* Restyle: pale tint header instead of a solid NAVY/BLUE2 bar
+                with white text — same light-card language as the rest of
+                the document. */}
+            <div style={{ background: LIGHT, color: NAVY, padding: "8px 14px", fontWeight: 700, fontSize: FONT }}>{sig.title}</div>
             <div style={{ padding: "40px 16px 16px" }}>
               <div style={{ borderTop: "1px solid #aaa", paddingTop: 8, fontSize: FONT }}>
                 <div style={{ color: "#4B4B4B" }}>Authorised Signatory</div>
@@ -1047,20 +1191,23 @@ function P5({ f, s, testimonials, clientLogos }: { f: QuoteForm; s: AppSettings;
           brand-new tenant sees no section at all rather than a toggle
           defaulted off (see lib/settings.ts's show_client_logos comment). */}
       {clientLogos.length > 0 && (
-        <div>
-          <SectionTitle title="Our Clients" sub="Trusted by leading developers" />
+        <Card>
+          <SectionTitle number={++n} title="Our Clients" sub="Trusted by leading developers" />
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 30, flexWrap: "wrap", padding: "20px 0" }}>
             {clientLogos.map(logo => (
               <img key={logo.id} src={logo.logo_url} alt={logo.name} style={{ height: 90, objectFit: "contain" }} />
             ))}
           </div>
-        </div>
+        </Card>
       )}
 
-      <div style={{ background: NAVY, color: "white", textAlign: "center", padding: "18px", borderRadius: 8 }}>
-        <div style={{ color: ACCENT, fontWeight: 700, fontSize: FONT_L }}>Thank you for choosing {s.name}</div>
-        <div style={{ color: "#aac9f0", fontSize: FONT, marginTop: 4 }}>Powering a Greener Tomorrow  |  {s.phone}  |  {s.email}</div>
-      </div>
+      {/* Restyle: light background, brand color carried by the text only —
+          not a full-bleed solid fill, matching the rest of the document's
+          light card language. */}
+      <Card style={{ textAlign: "center", padding: "18px" }}>
+        <div style={{ color: BLUE2, fontWeight: 700, fontSize: FONT_L }}>Thank you for choosing {s.name}</div>
+        <div style={{ color: "#555", fontSize: FONT, marginTop: 4 }}>Powering a Greener Tomorrow  |  {s.phone}  |  {s.email}</div>
+      </Card>
     </div>
   );
 }
