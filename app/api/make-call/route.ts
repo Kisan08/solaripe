@@ -36,10 +36,29 @@ export async function POST(req: NextRequest) {
 
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://solaripe.vercel.app";
 
+    // Now defaults to the streaming voice pipeline (Deepgram STT + Groq
+    // LLM + ElevenLabs TTS over a Twilio Media Stream, handled by
+    // server/media-stream-server.ts) instead of the old Gather/Say +
+    // Polly flow. The old flow is deliberately NOT deleted —
+    // call-twiml/route.ts and call-response/route.ts are kept in the
+    // codebase as an easy rollback (swap the URL back below) if the
+    // streaming pipeline has issues in real use.
+    //
+    // clientId/name are still passed here for URL-pattern consistency
+    // with the old call-twiml link and in case call-stream-twiml is later
+    // extended to use them, but call-stream-twiml/route.ts currently
+    // ignores all query params — it only reads MEDIA_STREAM_WS_URL and
+    // opens a generic <Connect><Stream>. Concretely, that means the
+    // streaming pipeline has NO per-call client context right now: no
+    // session tied to this clientId, no CRM updates or lead scoring
+    // during the call (unlike call-response/route.ts's fetchClientContext/
+    // applyCrmUpdates for the old flow) — the "calling" status flip below
+    // is the only per-client effect of this route once the call is
+    // dialed. The AI conversation itself is entirely generic.
     const call = await client.calls.create({
       to: `+91${clientRow.phone.replace(/\D/g, "").slice(-10)}`,
       from: process.env.TWILIO_PHONE_NUMBER!,
-      url: `${baseUrl}/api/call-twiml?clientId=${clientId}&name=${encodeURIComponent(clientRow.name)}`,
+      url: `${baseUrl}/api/call-stream-twiml?clientId=${clientId}&name=${encodeURIComponent(clientRow.name)}`,
       statusCallback: `${baseUrl}/api/call-webhook?clientId=${clientId}`,
       statusCallbackMethod: "POST",
     });
