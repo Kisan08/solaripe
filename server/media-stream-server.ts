@@ -17,8 +17,13 @@
 //
 // SCOPE: this proves the pipeline works and measures per-stage latency via
 // the console logs below. It deliberately does NOT implement barge-in/
-// interruption handling, lead scoring, CRM lookups, the scripted Hindi
-// fast-path opener, or error-fallback TwiML — those are later phases.
+// interruption handling, lead scoring, the scripted Hindi fast-path
+// opener, or error-fallback TwiML — those are still later phases. It DOES
+// now write a CRM outcome (status + notes via applyCrmUpdates) back to
+// the client's row once the call closes — see handleFinalTranscript's
+// [OUTCOME:...] handling below — but that's a one-shot end-of-call write,
+// not the old flow's turn-by-turn slot capture (city/electricity_bill
+// fields, lead scoring) in call-response/route.ts.
 //
 // ── Running this ──────────────────────────────────────────────────────
 //   npm run stream-server
@@ -43,6 +48,7 @@ import { WebSocketServer, WebSocket, type RawData } from "ws";
 import twilio from "twilio";
 import { streamGroqChat, type ChatMessage } from "../lib/calling/streamingGroq";
 import { streamElevenLabsTts } from "../lib/calling/streamingTts";
+import { applyCrmUpdates } from "../lib/calling/crmContext";
 
 const PORT = Number(process.env.MEDIA_STREAM_PORT || 8081);
 const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY;
@@ -61,6 +67,14 @@ if (!process.env.ELEVENLABS_API_KEY) {
 }
 if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) {
   console.error("[media-stream-server] TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN not set — add them to .env.local and restart.");
+  process.exit(1);
+}
+if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  // New dependency as of the applyCrmUpdates wiring below (lib/calling/
+  // crmContext.ts's supabaseAdmin client) — same guarded-exit pattern as
+  // every other external service this file depends on, rather than
+  // letting createClient() fail unpredictably deeper in the call.
+  console.error("[media-stream-server] NEXT_PUBLIC_SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY not set — add them to .env.local and restart.");
   process.exit(1);
 }
 
@@ -93,9 +107,9 @@ Rules: Already greeted the caller once (scripted, before this conversation) — 
 
 Follow these EXACT patterns (fill in only the bracketed part, keep the rest word-for-word):
 - After they state their location: "Okay, [location]! ठीक है sir, आपका average monthly light bill कितना आता है?"
-- After they state their bill amount, close immediately with exactly: "समझ गई sir, [amount] का bill मतलब solar से अच्छी खासी बचत हो सकती है आपकी। हमारी team जल्दी ही आपको एक proper quote के साथ contact करेगी, thank you! [END_CALL]"
-- If not interested or asked not to call, acknowledge politely in your own words and end with [END_CALL] too.
-[END_CALL] is a silent signal, never spoken aloud, only on that one final closing message.
+- After they state their bill amount, close immediately with exactly: "समझ गई sir, [amount] का bill मतलब solar से अच्छी खासी बचत हो सकती है आपकी। हमारी team जल्दी ही आपको एक proper quote के साथ contact करेगी, thank you! [END_CALL][OUTCOME:interested]"
+- If not interested or asked not to call, acknowledge politely in your own words and end with [END_CALL][OUTCOME:not_interested] too.
+[END_CALL] and [OUTCOME:...] are silent signals, never spoken aloud, only on that one final closing message.
 
 Close in 4-6 exchanges total.`;
 
@@ -124,6 +138,18 @@ const END_CALL_STRIP = /\s*\[END_CALL\]\s*/gi;
 
 function stripEndCallMarker(text: string): string {
   return text.replace(END_CALL_STRIP, " ").trim();
+}
+
+// Same convention as END_CALL_DETECT/END_CALL_STRIP above (non-global
+// regex for detection so repeated .exec()/.test() calls stay stateless;
+// global for stripping since .replace() resets lastIndex itself). Carries
+// the outcome value too, via the capture group, so the CRM write below
+// knows whether to record "interested" or "not_interested".
+const OUTCOME_DETECT = /\[OUTCOME:(interested|not_interested)\]/i;
+const OUTCOME_STRIP = /\s*\[OUTCOME:(?:interested|not_interested)\]\s*/gi;
+
+function stripOutcomeMarker(text: string): string {
+  return text.replace(OUTCOME_STRIP, " ").trim();
 }
 
 // Natural-sounding filler lines for when Groq returns an empty response
@@ -160,6 +186,7 @@ wss.on("connection", (twilioWs) => {
 
   let streamSid: string | null = null;
   let callSid: string | null = null;
+  let clientId: string | null = null;
   let firstAudioReceived = false;
   let firstAudioSentBack = false;
 
@@ -292,14 +319,17 @@ wss.on("connection", (twilioWs) => {
   // ends — the model could in principle emit "...quote ke saath [END_CALL]!"
   // with the marker before the closing punctuation, which would otherwise
   // flush it straight to speech as literal bracket text.
-  async function runLlmTurn(): Promise<{ reply: string; endCall: boolean; audioMs: number }> {
+  async function runLlmTurn(): Promise<{ reply: string; endCall: boolean; audioMs: number; outcome: "interested" | "not_interested" | null }> {
     let sentenceBuffer = "";
     let endCall = false;
+    let outcome: "interested" | "not_interested" | null = null;
     const { flushSentence, getAudioMs } = makeSentenceSpeaker();
 
     const speakCleaned = async (raw: string) => {
       if (END_CALL_DETECT.test(raw)) endCall = true;
-      const cleaned = stripEndCallMarker(raw);
+      const outcomeMatch = OUTCOME_DETECT.exec(raw);
+      if (outcomeMatch) outcome = outcomeMatch[1] as "interested" | "not_interested";
+      const cleaned = stripOutcomeMarker(stripEndCallMarker(raw));
       if (cleaned) await flushSentence(cleaned);
     };
 
@@ -317,10 +347,16 @@ wss.on("connection", (twilioWs) => {
     });
     await speakCleaned(sentenceBuffer); // whatever's left after the stream ends
 
+    if (!outcome) {
+      const finalMatch = OUTCOME_DETECT.exec(fullReplyRaw);
+      if (finalMatch) outcome = finalMatch[1] as "interested" | "not_interested";
+    }
+
     return {
-      reply: stripEndCallMarker(fullReplyRaw),
+      reply: stripOutcomeMarker(stripEndCallMarker(fullReplyRaw)),
       endCall: endCall || END_CALL_DETECT.test(fullReplyRaw),
       audioMs: getAudioMs(),
+      outcome,
     };
   }
 
@@ -347,7 +383,7 @@ wss.on("connection", (twilioWs) => {
     appendToHistory(conversationHistory, { role: "user", content: userText });
 
     try {
-      let { reply: fullReply, endCall, audioMs } = await runLlmTurn();
+      let { reply: fullReply, endCall, audioMs, outcome } = await runLlmTurn();
 
       if (!fullReply.trim()) {
         // A genuinely empty response (finish_reason never even arrived,
@@ -355,7 +391,7 @@ wss.on("connection", (twilioWs) => {
         // streamGroqChat) reliably succeeded on a fresh retry during
         // testing, so try once more before resorting to a filler.
         console.warn(`[${ts()}] [llm] empty response, retrying once`);
-        ({ reply: fullReply, endCall, audioMs } = await runLlmTurn());
+        ({ reply: fullReply, endCall, audioMs, outcome } = await runLlmTurn());
       }
 
       let replyForHistory = fullReply;
@@ -370,6 +406,7 @@ wss.on("connection", (twilioWs) => {
         await flushSentence(filler);
         replyForHistory = filler;
         endCall = false; // never hang up on a filler turn — nothing was actually closed
+        outcome = null; // nothing was actually closed, so no real outcome to record either
       }
 
       appendToHistory(conversationHistory, { role: "assistant", content: replyForHistory });
@@ -380,6 +417,24 @@ wss.on("connection", (twilioWs) => {
         // clear immediately once speaking is done, not stay held for the
         // few extra seconds the hangup takes.
         endCallSoon(audioMs);
+
+        // Write the outcome back to the client's row so status doesn't
+        // stay stuck on "calling" forever — this is the gap the whole POC
+        // header used to call out ("does NOT implement ... CRM lookups").
+        // Awaited (not fire-and-forget) since it's a quick DB write, not a
+        // multi-second wait like endCallSoon above; applyCrmUpdates
+        // already swallows its own errors, so this can't throw out of the
+        // turn either way.
+        if (!clientId) {
+          console.warn(`[${ts()}] [pipeline] call ending but no clientId captured — skipping CRM update`);
+        } else if (!outcome) {
+          console.warn(`[${ts()}] [pipeline] call ending but no OUTCOME marker found — skipping CRM update`);
+        } else {
+          await applyCrmUpdates(clientId, {
+            status: outcome,
+            notes: `Kajal AI call — city/bill captured via streaming pipeline. Transcript outcome: ${outcome}.`,
+          });
+        }
       }
     } catch (err) {
       console.error(`[${ts()}] [llm] error`, err);
@@ -454,7 +509,11 @@ wss.on("connection", (twilioWs) => {
       case "start":
         streamSid = msg.start?.streamSid ?? null;
         callSid = msg.start?.callSid ?? null;
-        console.log(`[${ts()}] [twilio] stream started callSid=${callSid} streamSid=${streamSid}`);
+        // Set by call-stream-twiml/route.ts's <Parameter name="clientId">
+        // inside <Stream> — without this, the pipeline has no way to know
+        // which client row to write CRM outcomes back to.
+        clientId = msg.start?.customParameters?.clientId ?? null;
+        console.log(`[${ts()}] [twilio] stream started callSid=${callSid} streamSid=${streamSid} clientId=${clientId}`);
         // Part 2: greet immediately, don't wait for the caller's first
         // word — sendAudioToTwilio needs streamSid, which is set above.
         speakOpeningGreeting().catch((err) => {

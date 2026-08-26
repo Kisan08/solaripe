@@ -18,8 +18,17 @@ import { NextRequest, NextResponse } from "next/server";
 // standalone server in server/media-stream-server.ts — Next.js API routes
 // (this file included) can't handle a raw WS upgrade, hence the separate
 // process. See that file's header comment for how to run and expose it.
+// XML-attribute-escape clientId before interpolating it into the TwiML
+// below — it comes from a query param on a URL Twilio requests, so even
+// though it's normally just a UUID we control, this is cheap insurance
+// against it ever containing a literal double-quote or "&".
+function escapeXmlAttr(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 async function handle(req: NextRequest) {
   const wsUrl = process.env.MEDIA_STREAM_WS_URL;
+  const clientId = req.nextUrl.searchParams.get("clientId") || "";
 
   if (!wsUrl) {
     console.error("[call-stream-twiml] MEDIA_STREAM_WS_URL not set — see server/media-stream-server.ts for setup");
@@ -33,10 +42,17 @@ async function handle(req: NextRequest) {
     );
   }
 
+  // <Parameter> passes clientId into the Media Stream's "start" event as
+  // customParameters, so server/media-stream-server.ts can identify which
+  // client this call belongs to and write outcomes back to the right row
+  // (see that file's applyCrmUpdates usage) — without this, the streaming
+  // pipeline has no way to know which client it's even talking to.
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <Stream url="${wsUrl}" />
+    <Stream url="${wsUrl}">
+      <Parameter name="clientId" value="${escapeXmlAttr(clientId)}" />
+    </Stream>
   </Connect>
 </Response>`;
 
