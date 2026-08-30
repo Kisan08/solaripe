@@ -200,7 +200,7 @@ function DashboardMockup() {
         <div className="grid grid-cols-1 gap-0 sm:grid-cols-[160px_1fr]">
           <div className="hidden flex-col gap-1 border-r border-gray-100 bg-gray-50/70 p-3 sm:flex">
             <div className="mb-2 flex items-center gap-1.5 px-1">
-              <img src="/brand/amsu-icon.svg" alt="" className="size-4" />
+              <img src="/brand/amsu-mark.png" alt="" className="size-4" />
               <span className="text-[11px] font-bold text-[#0F172A]">Amsu</span>
             </div>
             {["Dashboard", "Leads", "Quotes", "Designs", "Gigi AI"].map((item, i) => (
@@ -308,7 +308,7 @@ export function LandingPage() {
       {/* Nav */}
       <header className="sticky top-0 z-40 border-b border-gray-100 bg-white/90 backdrop-blur-md">
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-5 md:px-8">
-          <img src="/brand/amsu-logo.svg" alt="Amsu" className="h-11 w-auto sm:h-12" />
+          <img src="/brand/amsu-wordmark.png" alt="Amsu" className="h-11 w-auto sm:h-12" />
           <nav className="hidden items-center gap-8 text-sm font-medium text-gray-600 md:flex">
             <a href="#problem" className="hover:text-[#0F172A]">Problem</a>
             <a href="#features" className="hover:text-[#0F172A]">Features</a>
@@ -562,7 +562,23 @@ export function LandingPage() {
           <div className="border-t border-white/15 py-12">
             <div className="grid gap-10 sm:grid-cols-2 md:grid-cols-4">
               <div>
-                <img src="/brand/amsu-logo-white.svg" alt="Amsu" className="h-7 w-auto" />
+                {/* amsu-mark.png (icon only) + a separately styled white
+                    "Amsu" label — not amsu-wordmark.png, which (a) has
+                    blue gradient text that would have poor contrast
+                    against this dark bg-primary (#1a4f8a) footer, unlike
+                    the old amsu-logo-white.svg's white text, and (b)
+                    bakes its own "Elevate. Inspire. Empower." tagline
+                    into the image, which would duplicate the separate
+                    tagline line already rendered right below this. Best
+                    match for what the old white SVG variant was actually
+                    doing (icon + white wordmark text) using the correct
+                    mark. Worth a visual check: the icon's darkest gradient
+                    stop is close in value to this background color, so
+                    contrast there is tighter than on a lighter surface. */}
+                <div className="flex items-center gap-2">
+                  <img src="/brand/amsu-mark.png" alt="" className="h-7 w-auto" />
+                  <span className="text-xl font-semibold tracking-tight text-white">Amsu</span>
+                </div>
                 <div className="mt-1.5 text-[10px] font-semibold uppercase tracking-widest text-white/50">
                   Elevate. Inspire. Empower.
                 </div>
