@@ -308,7 +308,14 @@ export function LandingPage() {
       {/* Nav */}
       <header className="sticky top-0 z-40 border-b border-gray-100 bg-white/90 backdrop-blur-md">
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-5 md:px-8">
-          <img src="/brand/amsu-wordmark.png" alt="Amsu" className="h-11 w-auto sm:h-12" />
+          {/* Reverted from amsu-wordmark.png (a single baked icon+tagline
+              image) back to a coded icon + text lockup — amsu-mark.png as
+              the small icon only, "Amsu" as real text next to it, no
+              tagline, no logotype graphic. */}
+          <div className="flex items-center gap-2">
+            <img src="/brand/amsu-mark.png" alt="" className="h-8 w-auto sm:h-9" />
+            <span className="text-2xl font-bold tracking-tight text-[#0F172A]">Amsu</span>
+          </div>
           <nav className="hidden items-center gap-8 text-sm font-medium text-gray-600 md:flex">
             <a href="#problem" className="hover:text-[#0F172A]">Problem</a>
             <a href="#features" className="hover:text-[#0F172A]">Features</a>
