@@ -111,7 +111,13 @@ function DraggableLeadCard({
       style={{
         borderLeft: `3px solid ${accent}`,
         transform: transform ? CSS.Translate.toString(transform) : undefined,
-        touchAction: "none",
+        // "manipulation", not "none" — "none" disables native scroll at the
+        // browser level before the TouchSensor's activationConstraint below
+        // ever gets a chance to run, defeating its whole point (a quick
+        // touch-scroll would never scroll at all). "manipulation" allows
+        // normal scroll/pan and still lets dnd-kit intercept the gesture
+        // once its delay-based activation actually fires.
+        touchAction: "manipulation",
       }}
       className="card-shadow group block cursor-grab rounded-xl border border-border bg-card p-3 text-left transition-shadow hover:card-shadow-hover active:cursor-grabbing"
       {...listeners}

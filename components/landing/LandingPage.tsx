@@ -192,7 +192,12 @@ function DashboardMockup() {
           </div>
         </div>
 
-        <div className="grid grid-cols-[minmax(0,140px)_1fr] gap-0 sm:grid-cols-[160px_1fr]">
+        {/* grid-cols-1 below sm: the sidebar column is hidden (flex/hidden
+            below) but a fixed-width grid track still reserves its space
+            even when empty, squeezing the real content on mobile. Single
+            column with no dead reserved track until sm:, where the
+            sidebar reappears and the two-column layout applies. */}
+        <div className="grid grid-cols-1 gap-0 sm:grid-cols-[160px_1fr]">
           <div className="hidden flex-col gap-1 border-r border-gray-100 bg-gray-50/70 p-3 sm:flex">
             <div className="mb-2 flex items-center gap-1.5 px-1">
               <img src="/brand/amsu-mark.png" alt="" className="size-4" />

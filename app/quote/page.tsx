@@ -1474,6 +1474,25 @@ function QuotePageInner() {
   // sniffing). If it's genuinely unsupported, download the PDF and show
   // an explicit on-screen instruction to attach it manually inside
   // WhatsApp — never rely on sharing the browser tab itself.
+  // Shared fallback: download the PDF, open WhatsApp with the text only,
+  // and tell the user exactly what to do next — used both when the Web
+  // Share API's file support is genuinely absent, and when navigator.share
+  // throws for a reason other than the user cancelling (see the inner
+  // try/catch in shareWhatsApp below for why that second case exists).
+  const fallbackToManualAttach = (pdf: Awaited<ReturnType<typeof buildPdf>>, fileName: string, msg: string) => {
+    pdf.save(fileName);
+    const phone = f.contactPhone.replace(/\D/g, "");
+    window.open(
+      phone.length >= 10
+        ? `https://wa.me/91${phone.slice(-10)}?text=${encodeURIComponent(msg)}`
+        : `https://wa.me/?text=${encodeURIComponent(msg)}`,
+      "_blank"
+    );
+    setShareHint(
+      "Your browser can't attach the file automatically. The PDF has been downloaded, and WhatsApp opened with the message text — in WhatsApp, tap the attachment (📎) icon, choose Document, and select the downloaded PDF from your Downloads folder. Don't share the browser tab or its link — that link won't open for the client."
+    );
+  };
+
   const shareWhatsApp = async () => {
     setBusy(true);
     setShareHint(null);
@@ -1504,24 +1523,32 @@ function QuotePageInner() {
       const canShareFile = typeof navigator !== "undefined" && !!navigator.canShare?.({ files: [file] });
 
       if (canShareFile) {
-        // This is the only path that actually sends the real PDF file.
-        await navigator.share({ files: [file], text: msg });
+        try {
+          // This is the only path that actually sends the real PDF file.
+          await navigator.share({ files: [file], text: msg });
+        } catch (shareErr) {
+          // AbortError: the user manually cancelled the native share
+          // sheet — a deliberate choice, not a failure, so do nothing and
+          // don't force a download on them.
+          if (shareErr instanceof Error && shareErr.name === "AbortError") return;
+          // Any other error — Android Chrome enforces the Web Share API's
+          // user-activation window more strictly than iOS Safari, and
+          // waitForImages()+buildPdf() above can take a couple seconds on
+          // a slower device, so that window can expire before share() is
+          // even called (most likely NotAllowedError), or some
+          // Chrome-for-Android versions have a files+text combination
+          // quirk. Either way, fall back to the same graceful manual-
+          // attach path as the unsupported-browser branch below instead
+          // of a dead-end alert.
+          console.error(shareErr);
+          fallbackToManualAttach(pdf, fileName, msg);
+        }
       } else {
         // Genuine fallback for desktop or browsers without file sharing:
         // download the PDF, open WhatsApp with the text only, and tell
         // the user exactly what to do next — don't leave them to
         // improvise by sharing the downloaded tab's URL.
-        pdf.save(fileName);
-        const phone = f.contactPhone.replace(/\D/g, "");
-        window.open(
-          phone.length >= 10
-            ? `https://wa.me/91${phone.slice(-10)}?text=${encodeURIComponent(msg)}`
-            : `https://wa.me/?text=${encodeURIComponent(msg)}`,
-          "_blank"
-        );
-        setShareHint(
-          "Your browser can't attach the file automatically. The PDF has been downloaded, and WhatsApp opened with the message text — in WhatsApp, tap the attachment (📎) icon, choose Document, and select the downloaded PDF from your Downloads folder. Don't share the browser tab or its link — that link won't open for the client."
-        );
+        fallbackToManualAttach(pdf, fileName, msg);
       }
     } catch (err) {
       console.error(err);
