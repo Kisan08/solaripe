@@ -200,7 +200,7 @@ function DashboardMockup() {
         <div className="grid grid-cols-1 gap-0 sm:grid-cols-[160px_1fr]">
           <div className="hidden flex-col gap-1 border-r border-gray-100 bg-gray-50/70 p-3 sm:flex">
             <div className="mb-2 flex items-center gap-1.5 px-1">
-              <img src="/brand/amsu-mark.png" alt="" className="size-4" />
+              <img src="/brand/amsu-icon.svg" alt="" className="size-4" />
               <span className="text-[11px] font-bold text-[#0F172A]">Amsu</span>
             </div>
             {["Dashboard", "Leads", "Quotes", "Designs", "Gigi AI"].map((item, i) => (
