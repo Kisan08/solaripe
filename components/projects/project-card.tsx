@@ -3,10 +3,11 @@
 import { useState } from "react"
 import Link from "next/link"
 import { motion } from "framer-motion"
-import { MapPin, Zap, Pencil, PenTool, History, AlertTriangle, Loader2 } from "lucide-react"
+import { MapPin, Zap, Pencil, PenTool, History, AlertTriangle, Loader2, Phone } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { projectTypeBadge, statusBadge } from "@/lib/badges"
+import { telHref } from "@/lib/phone"
 import { formatINRCompact, formatDate } from "@/lib/format"
 import type { Project } from "@/lib/types"
 import {
@@ -53,6 +54,11 @@ export function ProjectCard({
 }) {
   const paidCount = MILESTONES.filter((m) => project[m.key]).length
   const progress = (paidCount / MILESTONES.length) * 100
+
+  // Manual follow-up dial — opens the caller's own phone dialer (tel:+91,
+  // same helper as the leads kanban/table and the AI Calling table).
+  // Hidden when the project has no usable number.
+  const callHref = telHref(project.phone)
 
   const activeStages = stages.filter((s) => s.active)
   const stale = daysStale(project, stages)
@@ -255,14 +261,26 @@ export function ProjectCard({
           </span>
         </div>
 
-        {/* NEW — Open in Designer */}
-        <Link
-          href={`/design?projectId=${project.id}`}
-          className="mt-3 inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-border text-sm font-medium text-foreground transition-colors hover:bg-secondary"
-        >
-          <PenTool className="size-4" />
-          Open in Designer
-        </Link>
+        <div className="mt-3 flex gap-2">
+          {callHref && (
+            <a
+              href={callHref}
+              title={`Call ${project.client_name} for follow-up`}
+              aria-label={`Call ${project.client_name} for follow-up`}
+              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-success/25 bg-success/10 px-3 text-sm font-medium text-success transition-colors hover:bg-success hover:text-success-foreground"
+            >
+              <Phone className="size-4" />
+              Call
+            </a>
+          )}
+          <Link
+            href={`/design?projectId=${project.id}`}
+            className="inline-flex h-9 flex-1 items-center justify-center gap-1.5 rounded-lg border border-border text-sm font-medium text-foreground transition-colors hover:bg-secondary"
+          >
+            <PenTool className="size-4" />
+            Open in Designer
+          </Link>
+        </div>
       </Card>
     </motion.div>
   )

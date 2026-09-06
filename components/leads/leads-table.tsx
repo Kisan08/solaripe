@@ -1,12 +1,40 @@
 "use client"
 
 import { useState } from "react"
-import { ChevronsUpDown, ChevronUp, ChevronDown } from "lucide-react"
+import { ChevronsUpDown, ChevronUp, ChevronDown, Phone } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { sourceBadge, stageAccent } from "@/lib/badges"
+import { telHref } from "@/lib/phone"
 import type { Lead, LeadSource } from "@/lib/types"
 import { formatINRCompact, formatDate } from "@/lib/format"
+
+// Phone column: the number as text plus a compact manual-dial button
+// (tel:+91, opens the caller's own phone dialer — same helper the kanban
+// card and the AI Calling table use). stopPropagation so tapping Call
+// dials instead of opening the row's edit modal. Button is omitted when
+// the lead has no usable number.
+function PhoneCell({ lead }: { lead: Lead }) {
+  const href = telHref(lead.phone)
+  if (!lead.phone) return <span className="text-muted-foreground">—</span>
+  return (
+    <span className="inline-flex items-center gap-2 text-muted-foreground">
+      {lead.phone}
+      {href && (
+        <a
+          href={href}
+          onClick={(e) => e.stopPropagation()}
+          title={`Call ${lead.name} for follow-up`}
+          aria-label={`Call ${lead.name} for follow-up`}
+          className="inline-flex items-center gap-1 rounded-md border border-success/25 bg-success/10 px-1.5 py-0.5 text-[11px] font-semibold text-success transition-colors hover:bg-success hover:text-success-foreground"
+        >
+          <Phone className="size-3" />
+          Call
+        </a>
+      )}
+    </span>
+  )
+}
 
 type SortKey = "name" | "system_size" | "budget" | "stage" | "follow_up_date"
 
@@ -101,8 +129,8 @@ export function LeadsTable({
                 <td className="px-4 py-3 font-semibold text-foreground">
                   {lead.name}
                 </td>
-                <td className="px-4 py-3 text-muted-foreground">
-                  {lead.phone ?? "—"}
+                <td className="px-4 py-3">
+                  <PhoneCell lead={lead} />
                 </td>
                 <td className="px-4 py-3 text-muted-foreground">
                   {lead.system_size != null ? `${lead.system_size} kWp` : "—"}
