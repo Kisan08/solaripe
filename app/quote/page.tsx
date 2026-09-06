@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, type ChangeEvent, type ReactNode, type CSSProperties, Suspense } from "react";
+import { useState, useEffect, useRef, type ChangeEvent, type ReactNode, type CSSProperties, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   Phone, Mail, MapPin, Zap, Sun, Wallet, Calendar, Cpu, Gauge, TrendingUp,
@@ -14,12 +14,17 @@ import {
   fetchClientLogos, fetchTestimonials, fetchCertifications, fetchFeaturedProjects,
   type ClientLogo, type Testimonial, type Certification, type TenantProject,
 } from '@/lib/media'
+import { saveLeadQuote, getLeadQuote } from '@/lib/data'
+import type { QuoteSnapshot } from '@/lib/quoteSnapshot'
 
 export const dynamic = 'force-dynamic'
 export const fetchCache = 'force-no-store'
 
 /* ─── Types ─── */
-interface QuoteForm {
+// Exported so a saved quote's snapshot (lib/quoteSnapshot.ts) can be
+// cast back to this on hydrate — see the ?quoteId= branch in
+// QuotePageInner's load effect below.
+export interface QuoteForm {
   proposalNo: string;
   date: string;
   validUntil: string;
@@ -1269,6 +1274,23 @@ function QuotePageInner() {
   const today = new Date().toISOString().split("T")[0];
   const valid = new Date(); valid.setDate(valid.getDate() + 30);
   const searchParams = useSearchParams();
+  // Set by the "Generate Quote" button on a lead card — turns on best-
+  // effort auto-save of the quote "recipe" to that lead after a
+  // successful Download / WhatsApp.
+  const leadId = searchParams.get("leadId") || "";
+  // Set by double-clicking a lead that has a saved quote. In this mode the
+  // page is a read-only VIEWER: it hydrates the saved snapshot, renders
+  // the document off-screen, builds the PDF once and shows it inline —
+  // no editor, no buttons to press.
+  const quoteId = searchParams.get("quoteId") || "";
+  const viewMode = !!quoteId;
+  const [hydrating, setHydrating] = useState<boolean>(viewMode);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  // Viewer-mode PDF render state.
+  const pdfRef = useRef<Awaited<ReturnType<typeof buildPdf>> | null>(null);
+  const pdfStartedRef = useRef(false);
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [pdfError, setPdfError] = useState<string | null>(null);
   const [settings, setSettings] = useState<AppSettings>(defaultSettings)
   // Optional product-library selections (Phase 5) — null means "not
   // selected," which is exactly what makes P2/P4 fall back to today's
@@ -1314,6 +1336,37 @@ function QuotePageInner() {
   })
 
   useEffect(() => {
+    // Reopening a saved quote: rebuild the exact document from its
+    // snapshot and skip every fresh fetch below — the snapshot IS the
+    // source of truth (settings/products/media as they were when the
+    // quote was saved), so re-fetching would only risk drift.
+    if (quoteId) {
+      getLeadQuote(quoteId)
+        .then((row) => {
+          const snap = row.snapshot
+          if (!snap || snap.v !== 1) throw new Error("Unrecognised saved-quote format")
+          setF(snap.f as unknown as QuoteForm)
+          setShowSiteDetails(!!snap.showSiteDetails)
+          setSettings(snap.settings as unknown as AppSettings)
+          // Seed the <select> option lists with just the saved choice so
+          // `selectedPanel`/`selectedInverter` resolve by id below.
+          setPanelOptions(snap.panel ? [snap.panel as unknown as Product] : [])
+          setInverterOptions(snap.inverter ? [snap.inverter as unknown as Product] : [])
+          setSelectedPanelId(snap.selectedPanelId || "")
+          setSelectedInverterId(snap.selectedInverterId || "")
+          setClientLogos((snap.clientLogos as ClientLogo[]) ?? [])
+          setTestimonials((snap.testimonials as Testimonial[]) ?? [])
+          setCertifications((snap.certifications as Certification[]) ?? [])
+          setFeaturedProjects((snap.featuredProjects as TenantProject[]) ?? [])
+        })
+        .catch((err) => {
+          console.error("Failed to load saved quote:", err)
+          setPdfError("Could not load this saved quote. It may have been deleted.")
+        })
+        .finally(() => setHydrating(false))
+      return
+    }
+
     const run = async () => {
       const s = await getSettings()
       setSettings(s)
@@ -1330,7 +1383,7 @@ function QuotePageInner() {
     fetchTestimonials().then(setTestimonials)
     fetchCertifications().then(setCertifications)
     fetchFeaturedProjects().then(setFeaturedProjects)
-  }, [])
+  }, [quoteId])
 
   const [busy, setBusy] = useState(false);
   const [shareHint, setShareHint] = useState<string | null>(null);
@@ -1366,6 +1419,43 @@ function QuotePageInner() {
           })
       )
     );
+  };
+
+  // The full "recipe" for this quote — everything <QuotationDocument>
+  // renders from. Saved as-is to lead_quotes.snapshot; the load effect
+  // above casts it straight back onto the same state setters.
+  const buildSnapshot = (): QuoteSnapshot => ({
+    v: 1,
+    f: f as unknown as Record<string, unknown>,
+    showSiteDetails,
+    selectedPanelId,
+    selectedInverterId,
+    settings: settings as unknown as Record<string, unknown>,
+    panel: (selectedPanel as unknown as Record<string, unknown>) ?? null,
+    inverter: (selectedInverter as unknown as Record<string, unknown>) ?? null,
+    clientLogos, testimonials, certifications, featuredProjects,
+  });
+
+  // Auto-save the quote "recipe" to the originating lead after a
+  // successful Download / WhatsApp, so "I sent it" also means "it's
+  // saved". Best-effort: never throws into the caller, a failed save must
+  // not break sending — but it does surface a message so the user knows.
+  const persistQuote = async () => {
+    if (!leadId) return;
+    try {
+      await saveLeadQuote({
+        leadId,
+        proposalNo: f.proposalNo,
+        clientName: f.clientName,
+        systemKwp: f.systemCapacity,
+        totalValue: c.net,
+        snapshot: buildSnapshot(),
+      });
+      setSaveMsg("Quote saved to this lead ✓ — double-click the lead to reopen it.");
+    } catch (err) {
+      console.error("Save quote to lead failed:", err);
+      setSaveMsg("Couldn't save this quote to the lead — check your connection and Download again.");
+    }
   };
 
   const buildPdf = async () => {
@@ -1444,6 +1534,7 @@ function QuotePageInner() {
       pdf.save(
         `Proposal for ${f.clientName || "Client"} ${f.systemCapacity} KW.pdf`
       );
+      await persistQuote();
     } catch (error) {
       console.error("PDF generation failed:", error);
       alert(
@@ -1550,6 +1641,7 @@ function QuotePageInner() {
         // improvise by sharing the downloaded tab's URL.
         fallbackToManualAttach(pdf, fileName, msg);
       }
+      await persistQuote();
     } catch (err) {
       console.error(err);
       alert("Could not share. Try Download PDF and attach it manually in WhatsApp.");
@@ -1557,6 +1649,113 @@ function QuotePageInner() {
       setBusy(false);
     }
   };
+
+  // Viewer mode: once the snapshot has hydrated, render the PDF a single
+  // time (pdfStartedRef guards against a re-run) and show it inline.
+  useEffect(() => {
+    if (!viewMode || hydrating || pdfError || pdfStartedRef.current) return;
+    pdfStartedRef.current = true;
+    let cancelled = false;
+    (async () => {
+      try {
+        // Let the just-hydrated <QuotationDocument> paint before html2canvas reads it.
+        await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+        await waitForImages();
+        const pdf = await buildPdf();
+        if (cancelled) return;
+        pdfRef.current = pdf;
+        setPdfUrl(pdf.output("bloburl") as unknown as string);
+      } catch (err) {
+        console.error("Saved-quote PDF render failed:", err);
+        if (!cancelled) setPdfError(err instanceof Error ? err.message : "Could not open this quote.");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [viewMode, hydrating, pdfError]);
+
+  // Release the blob URL when leaving the viewer.
+  useEffect(() => {
+    const url = pdfUrl;
+    return () => { if (url) URL.revokeObjectURL(url); };
+  }, [pdfUrl]);
+
+  const downloadSavedPdf = () => {
+    pdfRef.current?.save(`Proposal for ${f.clientName || "Client"} ${f.systemCapacity} KW.pdf`);
+  };
+
+  // ── Viewer mode (double-click a lead's saved quote) ────────────────
+  // Read-only: shows the rendered PDF inline. The hidden <QuotationDocument>
+  // at the bottom is what html2canvas rasterizes — it must be laid out
+  // (off-screen, not display:none) with the real 794px page width.
+  if (viewMode) {
+    return (
+      <div className="min-h-screen flex flex-col bg-[#e5e7eb]">
+        <div className="bg-white border-b border-gray-200 px-4 sm:px-6 py-3 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="text-sm sm:text-base font-bold text-gray-900 truncate">
+              {hydrating ? "Loading saved quote…" : `${f.clientName || "Saved quote"} — ${f.systemCapacity} kWp`}
+            </h1>
+            {!hydrating && (
+              <p className="text-xs text-gray-500 truncate">Proposal {f.proposalNo}</p>
+            )}
+          </div>
+          <button
+            onClick={downloadSavedPdf}
+            disabled={!pdfUrl}
+            className="shrink-0 flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium text-white disabled:opacity-50 transition-all"
+            style={{ background: "#1A4F8A" }}
+          >
+            Download PDF
+          </button>
+        </div>
+
+        <div className="relative flex-1">
+          {pdfError ? (
+            <div className="absolute inset-0 flex items-center justify-center p-6 text-center text-sm text-gray-600">
+              {pdfError}
+            </div>
+          ) : pdfUrl ? (
+            <>
+              <iframe title="Saved quote PDF" src={pdfUrl} className="absolute inset-0 h-full w-full border-0" />
+              <p className="pointer-events-none absolute bottom-2 left-0 right-0 text-center text-[11px] text-gray-500">
+                Not showing? Tap “Download PDF” above.
+              </p>
+            </>
+          ) : (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-sm text-gray-500">
+              <div className="h-6 w-6 animate-spin rounded-full border-2 border-gray-300 border-t-gray-600" />
+              {hydrating ? "Loading saved quote…" : "Generating your saved quote…"}
+            </div>
+          )}
+        </div>
+
+        {/* Source for html2canvas — mounted once hydrated, pinned behind the
+            opaque page background (z-index below the wrapper's own bg) so
+            it's fully laid out for rasterizing but never visible. */}
+        {!hydrating && !pdfError && (
+          <div
+            aria-hidden
+            style={{ position: "fixed", left: 0, top: 0, width: 794, zIndex: -1, pointerEvents: "none" }}
+          >
+            <div
+              style={{
+                ["--quote-primary" as string]: settings.primary_color || "#0F1E3D",
+                ["--quote-secondary" as string]: settings.secondary_color || "#1E88E5",
+                ["--quote-accent" as string]: settings.accent_color || "#F5A623",
+              } as CSSProperties}
+            >
+              <QuotationDocument
+                f={f} c={c} s={settings} showSiteDetails={showSiteDetails}
+                panel={selectedPanel} inverter={selectedInverter}
+                clientLogos={clientLogos} testimonials={testimonials}
+                certifications={certifications} featuredProjects={featuredProjects}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#F4F6F9]">
@@ -1579,6 +1778,11 @@ function QuotePageInner() {
             </button>
           </div>
         </div>
+        {saveMsg && (
+          <div className="max-w-7xl mx-auto mt-3 text-xs leading-relaxed text-blue-800 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3">
+            {saveMsg}
+          </div>
+        )}
         {shareHint && (
           <div className="max-w-7xl mx-auto mt-3 text-xs leading-relaxed text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
             {shareHint}

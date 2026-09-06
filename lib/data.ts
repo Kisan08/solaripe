@@ -1,8 +1,10 @@
 "use client"
 
+import { useMemo } from "react"
 import useSWR from "swr"
 import { createClient } from "@/lib/supabase/client"
 import type { Lead, Project } from "@/lib/types"
+import type { QuoteSnapshot } from "@/lib/quoteSnapshot"
 
 const supabase = createClient()
 
@@ -46,6 +48,100 @@ export function useProjects() {
     }
   )
   return { projects: data ?? [], error, isLoading, mutate }
+}
+
+// ── lead_quotes ────────────────────────────────────────────────────
+// Saved quote "recipes" — see lib/quoteSnapshot.ts and
+// supabase/migrations/0019_lead_quotes.sql. Same RLS-scoped direct-from-
+// browser pattern as leads/projects above.
+
+export interface LeadQuoteRow {
+  id: string
+  lead_id: string
+  proposal_no: string | null
+  client_name: string | null
+  system_kwp: number | null
+  total_value: number | null
+  created_at: string
+}
+
+/**
+ * Every saved quote for the tenant, newest first, plus `latestByLead` —
+ * the most recent quote per lead, which is what the Leads kanban/table
+ * use to show the "has a quote" marker and as the double-click target.
+ * The heavy `snapshot` column is intentionally NOT selected here; fetch
+ * it per-quote with getLeadQuote() only when one is actually opened.
+ */
+export function useLeadQuotes() {
+  const { data, error, isLoading, mutate } = useSWR<LeadQuoteRow[]>(
+    "lead_quotes",
+    async () => {
+      const { data, error } = await supabase
+        .from("lead_quotes")
+        .select("id, lead_id, proposal_no, client_name, system_kwp, total_value, created_at")
+        .order("created_at", { ascending: false })
+      if (error) throw error
+      return (data ?? []) as LeadQuoteRow[]
+    },
+    {
+      revalidateOnFocus: true,
+      revalidateOnMount: true,
+      revalidateOnReconnect: true,
+      dedupingInterval: 5000,
+    }
+  )
+
+  const latestByLead = useMemo(() => {
+    const map = new Map<string, LeadQuoteRow>()
+    // `data` is already created_at-desc, so the first row seen per lead
+    // is the newest.
+    for (const row of data ?? []) {
+      if (!map.has(row.lead_id)) map.set(row.lead_id, row)
+    }
+    return map
+  }, [data])
+
+  return { quotes: data ?? [], latestByLead, error, isLoading, mutate }
+}
+
+export async function saveLeadQuote(input: {
+  leadId: string
+  proposalNo?: string | null
+  clientName?: string | null
+  systemKwp?: number | null
+  totalValue?: number | null
+  snapshot: QuoteSnapshot
+}) {
+  const { data, error } = await supabase
+    .from("lead_quotes")
+    .insert({
+      lead_id: input.leadId,
+      proposal_no: input.proposalNo ?? null,
+      client_name: input.clientName ?? null,
+      system_kwp: input.systemKwp ?? null,
+      total_value: input.totalValue ?? null,
+      snapshot: input.snapshot,
+    })
+    .select("id")
+    .single()
+  if (error) throw error
+  return data as { id: string }
+}
+
+export async function getLeadQuote(id: string) {
+  const { data, error } = await supabase
+    .from("lead_quotes")
+    .select("id, lead_id, proposal_no, snapshot, created_at")
+    .eq("id", id)
+    .single()
+  if (error) throw error
+  return data as {
+    id: string
+    lead_id: string
+    proposal_no: string | null
+    snapshot: QuoteSnapshot
+    created_at: string
+  }
 }
 
 export async function saveLead(lead: Partial<Lead> & { id?: string }) {

@@ -1,23 +1,32 @@
 "use client"
 
 import { useState } from "react"
+import { useRouter } from "next/navigation"
 import { Plus, LayoutGrid, Table2, Users, Loader2 } from "lucide-react"
 import { PageHeader } from "@/components/page-header"
 import { Card } from "@/components/ui/card"
 import { LeadsKanban } from "@/components/leads/leads-kanban"
 import { LeadsTable } from "@/components/leads/leads-table"
 import { LeadModal } from "@/components/leads/lead-modal"
-import { useLeads, saveLead, deleteLead, updateLeadStage } from "@/lib/data"
+import { useLeads, useLeadQuotes, saveLead, deleteLead, updateLeadStage } from "@/lib/data"
 import { cn } from "@/lib/utils"
 import type { Lead, LeadStage } from "@/lib/types"
 
 type View = "kanban" | "table"
 
 export default function LeadsPage() {
+  const router = useRouter()
   const { leads, isLoading, mutate } = useLeads()
+  // Latest saved quote per lead — drives the "has a quote" marker and the
+  // double-click-to-open target on the kanban cards / table rows.
+  const { latestByLead } = useLeadQuotes()
   const [view, setView] = useState<View>("kanban")
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<Lead | null>(null)
+
+  // Double-click a lead with a saved quote → the quote page in viewer
+  // mode, which renders and shows the PDF (no editor).
+  const openQuote = (quoteId: string) => router.push(`/quote?quoteId=${quoteId}`)
 
   const openNew = () => {
     setEditing(null)
@@ -149,9 +158,20 @@ export default function LeadsPage() {
             </button>
           </Card>
         ) : view === "kanban" ? (
-          <LeadsKanban leads={leads} onEdit={openEdit} onStageChange={handleStageChange} />
+          <LeadsKanban
+            leads={leads}
+            onEdit={openEdit}
+            onStageChange={handleStageChange}
+            quoteByLead={latestByLead}
+            onOpenQuote={openQuote}
+          />
         ) : (
-          <LeadsTable leads={leads} onEdit={openEdit} />
+          <LeadsTable
+            leads={leads}
+            onEdit={openEdit}
+            quoteByLead={latestByLead}
+            onOpenQuote={openQuote}
+          />
         )}
       </div>
 

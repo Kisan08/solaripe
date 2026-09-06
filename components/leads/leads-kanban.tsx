@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import {
   DndContext,
   DragOverlay,
@@ -21,6 +21,7 @@ import { Badge } from "@/components/ui/badge"
 import { sourceBadge, stageAccent } from "@/lib/badges"
 import { LEAD_STAGES, type Lead, type LeadSource, type LeadStage } from "@/lib/types"
 import { telHref } from "@/lib/phone"
+import type { LeadQuoteRow } from "@/lib/data"
 import { formatINRCompact } from "@/lib/format"
 
 function LeadCardInfo({ lead }: { lead: Lead }) {
@@ -57,11 +58,15 @@ function LeadCardInfo({ lead }: { lead: Lead }) {
 
 function LeadCardContent({
   lead,
+  quote,
   onEdit,
+  onOpenQuote,
   onGenerateQuote,
 }: {
   lead: Lead
+  quote?: LeadQuoteRow
   onEdit?: (lead: Lead) => void
+  onOpenQuote?: (quoteId: string) => void
   onGenerateQuote: (e: React.MouseEvent, lead: Lead) => void
 }) {
   // Manual follow-up dial — opens the caller's own phone dialer (same
@@ -69,9 +74,34 @@ function LeadCardContent({
   // entirely when the lead has no usable number rather than showing a
   // dead button.
   const callHref = telHref(lead.phone)
+
+  // Single click still opens the edit modal. When this lead has a saved
+  // quote, a DOUBLE click opens that quote instead — so the edit open is
+  // held ~220ms and cancelled if a second click lands. Leads with no
+  // saved quote keep the old instant-edit behaviour (no delay, no timer).
+  const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => { if (clickTimer.current) clearTimeout(clickTimer.current) }, [])
+  const handleInfoClick = () => {
+    if (!quote) { onEdit?.(lead); return }
+    if (clickTimer.current) return
+    clickTimer.current = setTimeout(() => {
+      clickTimer.current = null
+      onEdit?.(lead)
+    }, 220)
+  }
+  const handleInfoDoubleClick = () => {
+    if (clickTimer.current) { clearTimeout(clickTimer.current); clickTimer.current = null }
+    if (quote) onOpenQuote?.(quote.id)
+  }
+
   return (
     <>
-      <button className="w-full text-left" onClick={() => onEdit?.(lead)}>
+      <button
+        className="w-full text-left"
+        onClick={handleInfoClick}
+        onDoubleClick={handleInfoDoubleClick}
+        title={quote ? "Click to edit · double-click to open the saved quote" : undefined}
+      >
         <LeadCardInfo lead={lead} />
       </button>
       {/* Always visible (not hover-gated) — a hover-only reveal is
@@ -99,6 +129,12 @@ function LeadCardContent({
           Generate Quote
         </button>
       </div>
+      {quote && (
+        <p className="mt-1.5 flex items-center gap-1 text-[10px] font-medium text-muted-foreground">
+          <FileText className="size-3" />
+          Quote saved · double-click to open
+        </p>
+      )}
     </>
   )
 }
@@ -106,12 +142,16 @@ function LeadCardContent({
 function DraggableLeadCard({
   lead,
   accent,
+  quote,
   onEdit,
+  onOpenQuote,
   onGenerateQuote,
 }: {
   lead: Lead
   accent: string
+  quote?: LeadQuoteRow
   onEdit: (lead: Lead) => void
+  onOpenQuote?: (quoteId: string) => void
   onGenerateQuote: (e: React.MouseEvent, lead: Lead) => void
 }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
@@ -144,7 +184,13 @@ function DraggableLeadCard({
       {...listeners}
       {...attributes}
     >
-      <LeadCardContent lead={lead} onEdit={onEdit} onGenerateQuote={onGenerateQuote} />
+      <LeadCardContent
+        lead={lead}
+        quote={quote}
+        onEdit={onEdit}
+        onOpenQuote={onOpenQuote}
+        onGenerateQuote={onGenerateQuote}
+      />
     </motion.div>
   )
 }
@@ -152,12 +198,16 @@ function DraggableLeadCard({
 function KanbanColumn({
   stage,
   leads,
+  quoteByLead,
   onEdit,
+  onOpenQuote,
   onGenerateQuote,
 }: {
   stage: LeadStage
   leads: Lead[]
+  quoteByLead?: Map<string, LeadQuoteRow>
   onEdit: (lead: Lead) => void
+  onOpenQuote?: (quoteId: string) => void
   onGenerateQuote: (e: React.MouseEvent, lead: Lead) => void
 }) {
   const accent = stageAccent[stage]
@@ -187,7 +237,9 @@ function KanbanColumn({
               key={lead.id}
               lead={lead}
               accent={accent}
+              quote={quoteByLead?.get(lead.id)}
               onEdit={onEdit}
+              onOpenQuote={onOpenQuote}
               onGenerateQuote={onGenerateQuote}
             />
           ))}
@@ -207,10 +259,14 @@ export function LeadsKanban({
   leads,
   onEdit,
   onStageChange,
+  quoteByLead,
+  onOpenQuote,
 }: {
   leads: Lead[]
   onEdit: (lead: Lead) => void
   onStageChange: (id: string, stage: LeadStage) => void
+  quoteByLead?: Map<string, LeadQuoteRow>
+  onOpenQuote?: (quoteId: string) => void
 }) {
   const router = useRouter()
   const [activeLead, setActiveLead] = useState<Lead | null>(null)
@@ -227,6 +283,9 @@ export function LeadsKanban({
   const generateQuote = (e: React.MouseEvent, lead: Lead) => {
     e.stopPropagation()
     const params = new URLSearchParams({
+      // leadId lets the quote page auto-save the generated quote back to
+      // this lead after a successful Download / WhatsApp.
+      leadId: lead.id,
       name: lead.name ?? "",
       phone: lead.phone ?? "",
       address: lead.address ?? "",
@@ -264,7 +323,9 @@ export function LeadsKanban({
             key={stage}
             stage={stage}
             leads={leads.filter((l) => l.stage === stage)}
+            quoteByLead={quoteByLead}
             onEdit={onEdit}
+            onOpenQuote={onOpenQuote}
             onGenerateQuote={generateQuote}
           />
         ))}

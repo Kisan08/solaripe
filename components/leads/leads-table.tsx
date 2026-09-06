@@ -1,11 +1,12 @@
 "use client"
 
-import { useState } from "react"
-import { ChevronsUpDown, ChevronUp, ChevronDown, Phone } from "lucide-react"
+import { useEffect, useRef, useState } from "react"
+import { ChevronsUpDown, ChevronUp, ChevronDown, Phone, FileText } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { sourceBadge, stageAccent } from "@/lib/badges"
 import { telHref } from "@/lib/phone"
+import type { LeadQuoteRow } from "@/lib/data"
 import type { Lead, LeadSource } from "@/lib/types"
 import { formatINRCompact, formatDate } from "@/lib/format"
 
@@ -41,12 +42,36 @@ type SortKey = "name" | "system_size" | "budget" | "stage" | "follow_up_date"
 export function LeadsTable({
   leads,
   onEdit,
+  quoteByLead,
+  onOpenQuote,
 }: {
   leads: Lead[]
   onEdit: (lead: Lead) => void
+  quoteByLead?: Map<string, LeadQuoteRow>
+  onOpenQuote?: (quoteId: string) => void
 }) {
   const [sortKey, setSortKey] = useState<SortKey>("name")
   const [asc, setAsc] = useState(true)
+
+  // Row single click opens the edit modal (unchanged). For a lead that
+  // has a saved quote, a DOUBLE click opens that quote instead — the edit
+  // open is held ~220ms and cancelled if a second click lands. One shared
+  // timer is enough: only one click can be pending at a time.
+  const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => { if (clickTimer.current) clearTimeout(clickTimer.current) }, [])
+  const handleRowClick = (lead: Lead) => {
+    if (!quoteByLead?.get(lead.id)) { onEdit(lead); return }
+    if (clickTimer.current) return
+    clickTimer.current = setTimeout(() => {
+      clickTimer.current = null
+      onEdit(lead)
+    }, 220)
+  }
+  const handleRowDoubleClick = (lead: Lead) => {
+    if (clickTimer.current) { clearTimeout(clickTimer.current); clickTimer.current = null }
+    const quote = quoteByLead?.get(lead.id)
+    if (quote) onOpenQuote?.(quote.id)
+  }
 
   const sorted = [...leads].sort((a, b) => {
     const av = a[sortKey]
@@ -120,14 +145,25 @@ export function LeadsTable({
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
-            {sorted.map((lead) => (
+            {sorted.map((lead) => {
+              const hasQuote = !!quoteByLead?.get(lead.id)
+              return (
               <tr
                 key={lead.id}
-                onClick={() => onEdit(lead)}
+                onClick={() => handleRowClick(lead)}
+                onDoubleClick={() => handleRowDoubleClick(lead)}
+                title={hasQuote ? "Click to edit · double-click to open the saved quote" : undefined}
                 className="cursor-pointer transition-colors hover:bg-secondary/40"
               >
                 <td className="px-4 py-3 font-semibold text-foreground">
-                  {lead.name}
+                  <span className="inline-flex items-center gap-1.5">
+                    {lead.name}
+                    {hasQuote && (
+                      <span className="inline-flex text-primary" title="Saved quote — double-click the row to open">
+                        <FileText className="size-3.5" />
+                      </span>
+                    )}
+                  </span>
                 </td>
                 <td className="px-4 py-3">
                   <PhoneCell lead={lead} />
@@ -165,7 +201,8 @@ export function LeadsTable({
                   {formatDate(lead.follow_up_date)}
                 </td>
               </tr>
-            ))}
+              )
+            })}
           </tbody>
         </table>
       </div>
