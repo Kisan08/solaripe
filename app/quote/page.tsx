@@ -1291,6 +1291,9 @@ function QuotePageInner() {
   const pdfStartedRef = useRef(false);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [pdfError, setPdfError] = useState<string | null>(null);
+  // Rotating status line for the viewer's loading skeleton — keeps the
+  // ~3 s render from reading as a hang / bug.
+  const [loadStep, setLoadStep] = useState(0);
   const [settings, setSettings] = useState<AppSettings>(defaultSettings)
   // Optional product-library selections (Phase 5) — null means "not
   // selected," which is exactly what makes P2/P4 fall back to today's
@@ -1679,6 +1682,20 @@ function QuotePageInner() {
     return () => { if (url) URL.revokeObjectURL(url); };
   }, [pdfUrl]);
 
+  // Advance the loading-skeleton status line every ~2 s until the PDF is
+  // ready (or errors).
+  useEffect(() => {
+    if (!viewMode || pdfUrl || pdfError) return;
+    const id = setInterval(() => setLoadStep((s) => s + 1), 2000);
+    return () => clearInterval(id);
+  }, [viewMode, pdfUrl, pdfError]);
+  const LOAD_STEPS = [
+    "Opening your saved quote…",
+    "Rebuilding the proposal pages…",
+    "Laying out the numbers…",
+    "Almost ready — preparing the PDF…",
+  ];
+
   const downloadSavedPdf = () => {
     pdfRef.current?.save(`Proposal for ${f.clientName || "Client"} ${f.systemCapacity} KW.pdf`);
   };
@@ -1722,9 +1739,43 @@ function QuotePageInner() {
               </p>
             </>
           ) : (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-sm text-gray-500">
-              <div className="h-6 w-6 animate-spin rounded-full border-2 border-gray-300 border-t-gray-600" />
-              {hydrating ? "Loading saved quote…" : "Generating your saved quote…"}
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-6 px-4">
+              <div className="loading-wave">
+                <div className="loading-bar" />
+                <div className="loading-bar" />
+                <div className="loading-bar" />
+                <div className="loading-bar" />
+              </div>
+
+              <p className="text-sm text-gray-500">
+                {LOAD_STEPS[loadStep % LOAD_STEPS.length]}
+              </p>
+
+              <style>{`
+                .loading-wave {
+                  width: 300px;
+                  height: 100px;
+                  display: flex;
+                  justify-content: center;
+                  align-items: flex-end;
+                }
+                .loading-bar {
+                  width: 20px;
+                  height: 10px;
+                  margin: 0 5px;
+                  background-color: #1A4F8A;
+                  border-radius: 5px;
+                  animation: loading-wave-animation 1s ease-in-out infinite;
+                }
+                .loading-bar:nth-child(2) { animation-delay: 0.1s; }
+                .loading-bar:nth-child(3) { animation-delay: 0.2s; }
+                .loading-bar:nth-child(4) { animation-delay: 0.3s; }
+                @keyframes loading-wave-animation {
+                  0% { height: 10px; }
+                  50% { height: 50px; }
+                  100% { height: 10px; }
+                }
+              `}</style>
             </div>
           )}
         </div>
