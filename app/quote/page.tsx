@@ -1286,13 +1286,15 @@ function QuotePageInner() {
   const viewMode = !!quoteId;
   const [hydrating, setHydrating] = useState<boolean>(viewMode);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
-  // Viewer-mode PDF render state.
-  const pdfRef = useRef<Awaited<ReturnType<typeof buildPdf>> | null>(null);
+  // Viewer-mode render state. The saved quote is shown as a scrollable
+  // stack of page images (works on every device, unlike a blob PDF in an
+  // <iframe>); pdfRef holds the jsPDF for the "Download PDF" button.
+  const pdfRef = useRef<Awaited<ReturnType<typeof buildPdf>>["pdf"] | null>(null);
   const pdfStartedRef = useRef(false);
-  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [pageImages, setPageImages] = useState<string[]>([]);
   const [pdfError, setPdfError] = useState<string | null>(null);
-  // Rotating status line for the viewer's loading skeleton — keeps the
-  // ~3 s render from reading as a hang / bug.
+  // Rotating status line while the pages render — keeps the ~3 s wait from
+  // reading as a hang / bug.
   const [loadStep, setLoadStep] = useState(0);
   const [settings, setSettings] = useState<AppSettings>(defaultSettings)
   // Optional product-library selections (Phase 5) — null means "not
@@ -1483,6 +1485,11 @@ function QuotePageInner() {
     const pageWidth = pdf.internal.pageSize.getWidth();
     const pageHeight = pdf.internal.pageSize.getHeight();
 
+    // Also collected here (no extra html2canvas passes) so the saved-quote
+    // viewer can show each page as a plain <img> — a blob PDF in an
+    // <iframe> only renders page 1 on most mobile browsers.
+    const pageImages: string[] = [];
+
     for (let i = 0; i < pages.length; i++) {
       const canvas = await html2canvas(pages[i], {
         scale: 1.35,
@@ -1496,6 +1503,7 @@ function QuotePageInner() {
       });
 
       const imageData = canvas.toDataURL("image/jpeg", 0.78);
+      pageImages.push(imageData);
       const renderedHeight = (canvas.height * pageWidth) / canvas.width;
       const finalHeight = Math.min(renderedHeight, pageHeight);
       const y = finalHeight < pageHeight ? (pageHeight - finalHeight) / 2 : 0;
@@ -1526,14 +1534,14 @@ function QuotePageInner() {
       creator: settings.name,
     });
 
-    return pdf;
+    return { pdf, pageImages };
   };
 
   const downloadPDF = async () => {
     setBusy(true);
     try {
       await waitForImages();
-      const pdf = await buildPdf();
+      const { pdf } = await buildPdf();
       pdf.save(
         `Proposal for ${f.clientName || "Client"} ${f.systemCapacity} KW.pdf`
       );
@@ -1573,7 +1581,7 @@ function QuotePageInner() {
   // Share API's file support is genuinely absent, and when navigator.share
   // throws for a reason other than the user cancelling (see the inner
   // try/catch in shareWhatsApp below for why that second case exists).
-  const fallbackToManualAttach = (pdf: Awaited<ReturnType<typeof buildPdf>>, fileName: string, msg: string) => {
+  const fallbackToManualAttach = (pdf: Awaited<ReturnType<typeof buildPdf>>["pdf"], fileName: string, msg: string) => {
     pdf.save(fileName);
     const phone = f.contactPhone.replace(/\D/g, "");
     window.open(
@@ -1592,7 +1600,7 @@ function QuotePageInner() {
     setShareHint(null);
     try {
       await waitForImages();
-      const pdf = await buildPdf();
+      const { pdf } = await buildPdf();
       const fileName = `Proposal_${f.clientName || "Client"}_${f.systemCapacity}KW.pdf`;
       const msg = [
         `Hello ${f.clientName || ""},`,
@@ -1653,8 +1661,8 @@ function QuotePageInner() {
     }
   };
 
-  // Viewer mode: once the snapshot has hydrated, render the PDF a single
-  // time (pdfStartedRef guards against a re-run) and show it inline.
+  // Viewer mode: once the snapshot has hydrated, rasterize the pages once
+  // (pdfStartedRef guards against a re-run) into images + a jsPDF.
   useEffect(() => {
     if (!viewMode || hydrating || pdfError || pdfStartedRef.current) return;
     pdfStartedRef.current = true;
@@ -1664,10 +1672,10 @@ function QuotePageInner() {
         // Let the just-hydrated <QuotationDocument> paint before html2canvas reads it.
         await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
         await waitForImages();
-        const pdf = await buildPdf();
+        const { pdf, pageImages: imgs } = await buildPdf();
         if (cancelled) return;
         pdfRef.current = pdf;
-        setPdfUrl(pdf.output("bloburl") as unknown as string);
+        setPageImages(imgs);
       } catch (err) {
         console.error("Saved-quote PDF render failed:", err);
         if (!cancelled) setPdfError(err instanceof Error ? err.message : "Could not open this quote.");
@@ -1676,19 +1684,12 @@ function QuotePageInner() {
     return () => { cancelled = true; };
   }, [viewMode, hydrating, pdfError]);
 
-  // Release the blob URL when leaving the viewer.
+  // Advance the loading status line every ~2 s until the pages are ready.
   useEffect(() => {
-    const url = pdfUrl;
-    return () => { if (url) URL.revokeObjectURL(url); };
-  }, [pdfUrl]);
-
-  // Advance the loading-skeleton status line every ~2 s until the PDF is
-  // ready (or errors).
-  useEffect(() => {
-    if (!viewMode || pdfUrl || pdfError) return;
+    if (!viewMode || pageImages.length || pdfError) return;
     const id = setInterval(() => setLoadStep((s) => s + 1), 2000);
     return () => clearInterval(id);
-  }, [viewMode, pdfUrl, pdfError]);
+  }, [viewMode, pageImages.length, pdfError]);
   const LOAD_STEPS = [
     "Opening your saved quote…",
     "Rebuilding the proposal pages…",
@@ -1718,7 +1719,7 @@ function QuotePageInner() {
           </div>
           <button
             onClick={downloadSavedPdf}
-            disabled={!pdfUrl}
+            disabled={pageImages.length === 0}
             className="shrink-0 flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium text-white disabled:opacity-50 transition-all"
             style={{ background: "#1A4F8A" }}
           >
@@ -1731,49 +1732,43 @@ function QuotePageInner() {
             <div className="absolute inset-0 flex items-center justify-center p-6 text-center text-sm text-gray-600">
               {pdfError}
             </div>
-          ) : pdfUrl ? (
-            <>
-              <iframe title="Saved quote PDF" src={pdfUrl} className="absolute inset-0 h-full w-full border-0" />
-              <p className="pointer-events-none absolute bottom-2 left-0 right-0 text-center text-[11px] text-gray-500">
-                Not showing? Tap “Download PDF” above.
-              </p>
-            </>
-          ) : (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-6 px-4">
-              <div className="loading-wave">
-                <div className="loading-bar" />
-                <div className="loading-bar" />
-                <div className="loading-bar" />
-                <div className="loading-bar" />
+          ) : pageImages.length > 0 ? (
+            <div className="absolute inset-0 overflow-y-auto px-3 py-4 sm:px-6 sm:py-6">
+              <div className="mx-auto flex max-w-3xl flex-col gap-3 sm:gap-5">
+                {pageImages.map((src, i) => (
+                  <img
+                    key={i}
+                    src={src}
+                    alt={`Proposal page ${i + 1}`}
+                    className="w-full rounded bg-white shadow-md"
+                  />
+                ))}
               </div>
-
-              <p className="text-sm text-gray-500">
+            </div>
+          ) : (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-7 px-4">
+              <div className="qv-wave">
+                <span /><span /><span /><span /><span />
+              </div>
+              <p className="text-sm font-medium text-gray-500">
                 {LOAD_STEPS[loadStep % LOAD_STEPS.length]}
               </p>
 
               <style>{`
-                .loading-wave {
-                  width: 300px;
-                  height: 100px;
-                  display: flex;
-                  justify-content: center;
-                  align-items: flex-end;
+                .qv-wave { display: flex; align-items: center; gap: 7px; height: 56px; }
+                .qv-wave span {
+                  display: block; width: 12px; height: 48px; border-radius: 7px;
+                  background: #1A4F8A; transform: scaleY(0.28); transform-origin: center;
+                  will-change: transform, opacity;
+                  animation: qvWave 1s ease-in-out infinite;
                 }
-                .loading-bar {
-                  width: 20px;
-                  height: 10px;
-                  margin: 0 5px;
-                  background-color: #1A4F8A;
-                  border-radius: 5px;
-                  animation: loading-wave-animation 1s ease-in-out infinite;
-                }
-                .loading-bar:nth-child(2) { animation-delay: 0.1s; }
-                .loading-bar:nth-child(3) { animation-delay: 0.2s; }
-                .loading-bar:nth-child(4) { animation-delay: 0.3s; }
-                @keyframes loading-wave-animation {
-                  0% { height: 10px; }
-                  50% { height: 50px; }
-                  100% { height: 10px; }
+                .qv-wave span:nth-child(2) { animation-delay: .1s; }
+                .qv-wave span:nth-child(3) { animation-delay: .2s; }
+                .qv-wave span:nth-child(4) { animation-delay: .3s; }
+                .qv-wave span:nth-child(5) { animation-delay: .4s; }
+                @keyframes qvWave {
+                  0%, 100% { transform: scaleY(0.28); opacity: .55; }
+                  50%      { transform: scaleY(1);    opacity: 1; }
                 }
               `}</style>
             </div>

@@ -104,6 +104,11 @@ export function useLeadQuotes() {
   return { quotes: data ?? [], latestByLead, error, isLoading, mutate }
 }
 
+// One quote row per lead (unique constraint on lead_id, see
+// migration 0020). Upserting on lead_id means re-generating / re-sending
+// a quote overwrites the stored one instead of piling up history rows.
+// created_at is refreshed each time so the Leads card shows the latest
+// save date.
 export async function saveLeadQuote(input: {
   leadId: string
   proposalNo?: string | null
@@ -114,14 +119,18 @@ export async function saveLeadQuote(input: {
 }) {
   const { data, error } = await supabase
     .from("lead_quotes")
-    .insert({
-      lead_id: input.leadId,
-      proposal_no: input.proposalNo ?? null,
-      client_name: input.clientName ?? null,
-      system_kwp: input.systemKwp ?? null,
-      total_value: input.totalValue ?? null,
-      snapshot: input.snapshot,
-    })
+    .upsert(
+      {
+        lead_id: input.leadId,
+        proposal_no: input.proposalNo ?? null,
+        client_name: input.clientName ?? null,
+        system_kwp: input.systemKwp ?? null,
+        total_value: input.totalValue ?? null,
+        snapshot: input.snapshot,
+        created_at: new Date().toISOString(),
+      },
+      { onConflict: "lead_id" }
+    )
     .select("id")
     .single()
   if (error) throw error
