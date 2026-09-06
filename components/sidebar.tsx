@@ -1,14 +1,12 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { motion } from "framer-motion"
-import { LogOut } from "lucide-react"
 import { NAV_ITEMS } from "@/lib/nav"
 import { cn } from "@/lib/utils"
-import { createClient } from "@/lib/supabase/client"
-import { signOutAction } from "@/lib/auth/actions"
+import { AccountSheet, useAccountInfo, initialsFor } from "@/components/account-menu"
 
 // Collapsed width shows icons only; hovering the rail expands it to reveal
 // labels, matching the SeaArt-style reference. The rail is `fixed` and
@@ -19,28 +17,11 @@ import { signOutAction } from "@/lib/auth/actions"
 // AppShell's content padding matches the COLLAPSED width permanently.
 export function Sidebar() {
   const pathname = usePathname()
-  const [companyName, setCompanyName] = useState<string | null>(null)
-
-  useEffect(() => {
-    const supabase = createClient()
-    let cancelled = false
-
-    async function loadTenant() {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
-      const { data } = await supabase
-        .from("tenants")
-        .select("company_name")
-        .eq("id", user.id)
-        .single()
-      if (!cancelled && data) setCompanyName(data.company_name)
-    }
-
-    loadTenant()
-    return () => { cancelled = true }
-  }, [])
+  const { email, companyName } = useAccountInfo()
+  const [accountOpen, setAccountOpen] = useState(false)
 
   return (
+    <>
     <aside
       className={cn(
         "app-sidebar-rail group fixed inset-y-0 left-0 z-30 hidden flex-col overflow-hidden",
@@ -103,36 +84,33 @@ export function Sidebar() {
       </nav>
 
       <div className="shrink-0 border-t border-sidebar-border p-2">
-        {/* Matches the nav items' own px-3 inset above (not this div's own
-            padding) so the avatar sits at the same horizontal position as
-            the icons and stays inside the 68px collapsed rail — it was
-            previously p-4 wrapping a px-3 pill around a size-8 (32px)
-            avatar, ~88px of required width against a 68px rail, so the
-            circle was getting clipped by the rail's overflow-hidden. */}
-        <div className="flex items-center gap-3 rounded-lg bg-secondary px-2 py-2">
+        {/* Whole block is now the account trigger — opens the shared sheet
+            (identity + Settings + Log out), same as the mobile bottom nav.
+            px-2 keeps the avatar aligned with the nav icons and inside the
+            68px collapsed rail (overflow-hidden would clip anything wider). */}
+        <button
+          type="button"
+          onClick={() => setAccountOpen(true)}
+          title="Account"
+          className="flex w-full items-center gap-3 rounded-lg bg-secondary px-2 py-2 text-left transition-colors hover:bg-secondary/70"
+        >
           <div className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-[10px] font-semibold text-primary-foreground">
-            {(companyName ?? "?").slice(0, 2).toUpperCase()}
+            {initialsFor(companyName, email)}
           </div>
-          <div className="flex flex-1 items-center justify-between gap-2 leading-tight whitespace-nowrap opacity-0 transition-opacity duration-150 group-hover:opacity-100 overflow-hidden">
-            <span className="text-xs font-semibold text-foreground truncate" title={companyName ?? undefined}>
-              {/* First word only — "Suryodaya Solar Solutions" reads as
-                  "Suryodaya" here, which actually fits the expanded rail's
-                  width instead of ellipsizing mid-name. Full name is still
-                  available on hover via the title attribute above. */}
-              {companyName ? companyName.split(" ")[0] : "Loading…"}
-            </span>
-            <form action={signOutAction}>
-              <button
-                type="submit"
-                title="Log out"
-                className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <LogOut className="size-4" aria-hidden="true" />
-              </button>
-            </form>
-          </div>
-        </div>
+          <span
+            className="flex-1 truncate whitespace-nowrap text-xs font-semibold text-foreground opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+            title={companyName ?? undefined}
+          >
+            {/* First word only — "Suryodaya Solar Solutions" reads as
+                "Suryodaya" here, which fits the expanded rail instead of
+                ellipsizing mid-name. */}
+            {companyName ? companyName.split(" ")[0] : "Account"}
+          </span>
+        </button>
       </div>
     </aside>
+
+    <AccountSheet open={accountOpen} onClose={() => setAccountOpen(false)} />
+    </>
   )
 }

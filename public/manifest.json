@@ -1,0 +1,25 @@
+{
+  "name": "AMSU — Solar EPC Operating System",
+  "short_name": "AMSU",
+  "description": "All-in-one CRM and project management platform for Indian solar EPCs — track leads, manage projects, and close more proposals.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f4f6f9",
+  "theme_color": "#1a4f8a",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

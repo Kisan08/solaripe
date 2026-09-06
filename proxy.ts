@@ -24,6 +24,20 @@ function isPublicPath(pathname: string, searchParams: URLSearchParams): boolean 
   if (pathname === "/") return true;
   if (pathname === "/login" || pathname === "/signup") return true;
   if (pathname === "/design" && searchParams.get("client") === "1") return true;
+  // PWA assets: the manifest and the service worker (+ its workbox
+  // runtime / offline-fallback chunks) are fetched with no session — a
+  // logged-out visitor still needs the install metadata, and the SW
+  // script itself loads uncredentialed. The .png/.svg icons already
+  // bypass this middleware via the matcher's extension exclusion below.
+  if (pathname === "/manifest.json" || pathname === "/offline") return true;
+  if (
+    pathname === "/sw.js" ||
+    pathname.startsWith("/workbox-") ||
+    pathname.startsWith("/worker-") ||
+    pathname.startsWith("/fallback-")
+  ) {
+    return true;
+  }
   return false;
 }
 

@@ -19,7 +19,11 @@ const AUTH_ROUTES = ["/login", "/signup"]
 // tenant (proxy.ts bounces them to /dashboard first), so it never needs
 // the app chrome either. Exact match only — every other real route lives
 // under its own path segment.
-const STANDALONE_ROUTES = ["/"]
+//
+// /offline is the PWA fallback (app/offline/page.tsx), served by the
+// service worker with no network — it must render without the sidebar,
+// bottom nav or Gigi widget (all of which expect a live session).
+const STANDALONE_ROUTES = ["/", "/offline"]
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
@@ -59,7 +63,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         }
       `}</style>
       <div className="app-content">
-        <main className="mx-auto min-h-screen w-full max-w-7xl pb-24 md:pb-0">
+        <main className="mx-auto min-h-screen w-full max-w-7xl pb-28 md:pb-0">
           <motion.div
             key={pathname}
             initial={{ opacity: 0, y: 6 }}
