@@ -20,6 +20,7 @@ import { useRouter } from "next/navigation"
 import { Badge } from "@/components/ui/badge"
 import { sourceBadge, stageAccent } from "@/lib/badges"
 import { LEAD_STAGES, type Lead, type LeadSource, type LeadStage } from "@/lib/types"
+import { telHref } from "@/lib/phone"
 import { formatINRCompact } from "@/lib/format"
 
 function LeadCardInfo({ lead }: { lead: Lead }) {
@@ -63,6 +64,11 @@ function LeadCardContent({
   onEdit?: (lead: Lead) => void
   onGenerateQuote: (e: React.MouseEvent, lead: Lead) => void
 }) {
+  // Manual follow-up dial — opens the caller's own phone dialer (same
+  // tel:+91 pattern as the AI Calling table's ManualDialButton). Hidden
+  // entirely when the lead has no usable number rather than showing a
+  // dead button.
+  const callHref = telHref(lead.phone)
   return (
     <>
       <button className="w-full text-left" onClick={() => onEdit?.(lead)}>
@@ -70,14 +76,29 @@ function LeadCardContent({
       </button>
       {/* Always visible (not hover-gated) — a hover-only reveal is
           permanently inaccessible on touch devices, since there's no
-          :hover state to trigger it. */}
-      <button
-        onClick={(e) => onGenerateQuote(e, lead)}
-        className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-lg border border-primary/20 bg-primary/5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary hover:text-white"
-      >
-        <FileText className="size-3.5" />
-        Generate Quote
-      </button>
+          :hover state to trigger it. stopPropagation so a tap dials /
+          opens the quote instead of being read as the start of a card drag. */}
+      <div className="mt-2.5 flex gap-1.5">
+        {callHref && (
+          <a
+            href={callHref}
+            onClick={(e) => e.stopPropagation()}
+            title={`Call ${lead.name} for follow-up`}
+            aria-label={`Call ${lead.name} for follow-up`}
+            className="flex items-center justify-center gap-1.5 rounded-lg border border-success/25 bg-success/10 px-2.5 py-1.5 text-xs font-medium text-success transition-colors hover:bg-success hover:text-success-foreground"
+          >
+            <Phone className="size-3.5" />
+            Call
+          </a>
+        )}
+        <button
+          onClick={(e) => onGenerateQuote(e, lead)}
+          className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-primary/20 bg-primary/5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary hover:text-white"
+        >
+          <FileText className="size-3.5" />
+          Generate Quote
+        </button>
+      </div>
     </>
   )
 }
