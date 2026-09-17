@@ -32,14 +32,17 @@ const withPWA = withPWAInit({
   // components/pwa-register.tsx, mounted in app/layout.tsx.
   register: false,
   skipWaiting: true, // a freshly built SW activates without waiting for tabs to close
+  cacheStartUrl: false,
+  dynamicStartUrl: false,
+  runtimeCaching: [],
+  importScripts: ['/security-cache-cleanup.js'],
   // No SW during `next dev` (which runs Turbopack, not webpack, so this
   // plugin can't hook in there anyway) — the SW is strictly a
   // `next build` artifact.
   disable: process.env.NODE_ENV === 'development',
   // Precache /offline and serve it for navigations that fail while the
   // requested page isn't in the cache (see app/offline/page.tsx).
-  // Previously-visited pages still return from next-pwa's default
-  // runtime cache.
+  // Private pages and API responses must never be runtime-cached across accounts.
   fallbacks: {
     document: '/offline',
   },

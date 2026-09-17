@@ -1,22 +1,31 @@
 'use client';
-import React, { useEffect, useRef, useMemo, useState, useCallback } from 'react';
+
+import { requestDesignShare } from '@/lib/requestDesignShare';
+import React, { useEffect, useRef, useMemo, useState, useCallback, useId } from 'react';
 import { useRouter } from 'next/navigation';
 import * as THREE from 'three';
+import { solarPositionAtIST } from './solarPosition';
+import { obstacleModel } from './obstacleModels';
+import { moduleFits, moduleFootprint } from './designAccuracy';
+import { footprintsOverlap, defaultObstacleHeight } from './roofGeometry';
+import { sampleShading, type ShadingObstacle, type ShadingSurface } from './sampleShading';
+import { concreteTexture, moduleTexture, disposeSceneObjects } from './sceneMaterials';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { useDesignStore, metersPerPixel } from '../../store/designStore';
+import { Orbit, MousePointer2, Hand, Scan, ZoomIn, ZoomOut, Maximize, Box, Layers, Sun, Cable, Home, PanelTop, Download, ArrowLeft, SlidersHorizontal, Play, Pause, Save, X, Map as MapIcon, Move } from 'lucide-react';
+import './design-workspace.css';
 import type { SolarPanel } from '../../types';
+import { normalizeEquipmentDimensions, recoverUndersizedModule } from '../../utils/moduleDimensions';
 
-// Zoom level requested for the satellite ground-plane image. 19 (not 20)
-// covers roughly double the ground area (~180m across vs ~90m) so the
-// image extends well past a typical building footprint instead of fading
-// into the paver/grass fallback just past the roof edge.
-const SATELLITE_ZOOM = 19;
+// Context coverage expands with the roof; keep imagery and meter scale tied to the same zoom.
+const MAX_CONTEXT_ZOOM = 18;
 
 interface RoofPoint { x: number; y: number; }
 // x/z are METERS, centered on roof. azimuth = the panel's facing (also the array's rotation).
-interface Panel3D { id: string; x: number; z: number; tilt: number; azimuth: number; }
+interface Panel3D { id: string; x: number; z: number; tilt: number; azimuth: number; widthM?: number; depthM?: number; stored?: SolarPanel }
 // Obstacle footprint in centered METERS, same frame as panels/roof.
-interface Obstacle3D { id: string; x: number; z: number; w: number; d: number; rotDeg: number; label: string; }
+interface Obstacle3D { id: string; x: number; z: number; w: number; d: number; rotDeg: number; label: string; heightM?: number; }
 interface SolarDesign3DProps {
   roofPoints: RoofPoint[]; onClose: () => void; lat?: number; readOnly?: boolean;
   // The roof polygon's own real-world lat/lng, distinct from the design
@@ -28,25 +37,12 @@ interface SolarDesign3DProps {
   roofCenterLatLng?: { lat: number; lng: number } | null;
 }
 
-const PANEL_W_M = 1.134;   // module width  (portrait: short side, runs along a row)
-const PANEL_H_M = 2.278;   // module height (portrait: long side, along the slope)
-const PANEL_POWER = 580;
-const MOUNT_H = 0.3;       // front leg height (m)
+const DEFAULT_MOUNT_H = 2.4; // illustrative front-edge clearance, adjustable per roof
 const COL_GAP = 0.02;      // 2 cm between panels IN a row (frames nearly touching)
 const DEFAULT_ROW_GAP = 1.0; // 1m default anti-shading gap between rows (was 0.6m — too tight, causes inter-row shading at low sun angles)
 const TX = { text: 'var(--design-text)', muted: 'var(--design-muted)', border: 'var(--design-border)', navy: 'var(--design-navy)', blue: 'var(--design-primary)' };
 
-function sunPosition(lat: number, hour: number, dayOfYear: number) {
-  const rad = Math.PI / 180;
-  const decl = 23.45 * Math.sin(rad * (360 / 365) * (dayOfYear - 81));
-  const ha = 15 * (hour - 12);
-  const sinE = Math.sin(rad * lat) * Math.sin(rad * decl) + Math.cos(rad * lat) * Math.cos(rad * decl) * Math.cos(rad * ha);
-  const elev = Math.asin(sinE) / rad;
-  const cosA = (Math.sin(rad * decl) - Math.sin(rad * lat) * sinE) / (Math.cos(rad * lat) * Math.cos(Math.asin(sinE)));
-  let az = Math.acos(Math.max(-1, Math.min(1, cosA))) / rad;
-  if (ha > 0) az = 360 - az;
-  return { azimuth: az, elevation: Math.max(0, elev) };
-}
+
 
 function dirFromAz(az: number): string {
   if (az < 23 || az >= 338) return 'N';
@@ -202,7 +198,8 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
   const mountRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
-  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const cameraRef = useRef<THREE.PerspectiveCamera | THREE.OrthographicCamera | null>(null);
+  const [topView, setTopView] = useState(false);
   const controlsRef = useRef<OrbitControls | null>(null);
   const sunRef = useRef<THREE.DirectionalLight | null>(null);
   const sunSphereRef = useRef<THREE.Mesh | null>(null);
@@ -211,10 +208,29 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
   const satelliteMeshGroup = useRef<THREE.Group | null>(null);
 
   const frameRef = useRef<number>(0);
+  const needsRender = useRef(true);
+  useEffect(() => { needsRender.current = true; });
   const raycaster = useRef(new THREE.Raycaster());
   const mouse = useRef(new THREE.Vector2());
 
-  const equipment = useDesignStore(s => s.equipment);
+  const savedEquipment = useDesignStore(s => s.equipment);
+  const equipment = useMemo(() => normalizeEquipmentDimensions(savedEquipment), [savedEquipment]);
+  const PANEL_W_M = equipment.panelWidth / 1000;
+  const PANEL_H_M = equipment.panelHeight / 1000;
+  const PANEL_POWER = equipment.panelPower;
+  const equipmentValid = [PANEL_W_M, PANEL_H_M, PANEL_POWER].every(v => Number.isFinite(v) && v > 0) && PANEL_W_M >= 0.1 && PANEL_H_M >= 0.1;
+  const currentRoof = useDesignStore(s => s.roofs[0]);
+  const [designNotice, setDesignNotice] = useState('');
+  const shadingController = useRef<AbortController | null>(null);
+  const [analysisProgress, setAnalysisProgress] = useState(0);
+  const [unlitCount, setUnlitCount] = useState(0);
+  const [analysisPeriod, setAnalysisPeriod] = useState<'instant' | 'day'>('day');
+  const [analysisDate, setAnalysisDate] = useState(() => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()));
+  const dimensions = useCallback((p: Panel3D) => {
+    const landscape = p.stored?.orientation === 'landscape';
+    return recoverUndersizedModule(p.widthM ?? PANEL_W_M, p.depthM ?? PANEL_H_M,
+      landscape ? PANEL_H_M : PANEL_W_M, landscape ? PANEL_W_M : PANEL_H_M);
+  }, [PANEL_W_M, PANEL_H_M]);
   const project = useDesignStore(s => s.project);
   const roofId = useDesignStore(s => s.roofs[0]?.id ?? '');
   const roofAreaM2 = useDesignStore(s => s.roofs[0]?.area ?? 0);
@@ -229,6 +245,28 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
     () => traceMpp ?? (metersPerPixel(mapConfig.center?.lat ?? lat, mapConfig.zoom ?? 20) * (stageScale || 1)),
     [traceMpp, mapConfig.center?.lat, mapConfig.zoom, lat, stageScale]
   );
+
+  const roofSettings = useDesignStore(s => s.roofs[0]?.design3D);
+  const MOUNT_H = roofSettings?.mountingHeightM ?? DEFAULT_MOUNT_H;
+  const parapetHeightM = roofSettings?.parapetHeightM ?? 1;
+  const setbackM = roofSettings?.setbackM ?? 0.5;
+  const siteLng = roofCenterLatLng?.lng ?? mapConfig.center?.lng;
+  const sunPosition = useCallback((hour: number) =>
+    solarPositionAtIST(roofCenterLatLng?.lat ?? mapConfig.center?.lat ?? lat, siteLng, analysisDate, hour),
+    [roofCenterLatLng?.lat, mapConfig.center?.lat, lat, siteLng, analysisDate]);
+  const setMountHeight = (value: number) => {
+    if (!readOnly && roofId) useDesignStore.getState().updateRoof(roofId, {
+      design3D: { ...roofSettings, mountingHeightM: value },
+    });
+  };
+  const [showSatellite, setShowSatellite] = useState(true);
+  const contextSpan = Math.max(360, ...['x', 'y'].map(axis => {
+    const values = roofPoints.map(p => p[axis as 'x' | 'y']);
+    return values.length ? (Math.max(...values) - Math.min(...values)) * mpp * 3 : 0;
+  }));
+  const siteLat = roofCenterLatLng?.lat ?? mapConfig.center?.lat ?? lat;
+  const satelliteZoom = Math.max(10, Math.min(MAX_CONTEXT_ZOOM,
+    Math.floor(Math.log2(640 * metersPerPixel(siteLat, 0) / contextSpan))));
 
   // Real satellite ground imagery (app/api/satellite-image), cached per
   // project in Supabase so it's only ever fetched once per project unless
@@ -245,12 +283,10 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
     const center = roofCenterLatLng ?? mapConfig.center;
     if (!projectId || !center) { setSatelliteImageUrl(null); return; }
     let cancelled = false;
+    setSatelliteImageUrl(null);
     const qs = new URLSearchParams({
-      // zoom 19 (not 20) — covers roughly double the ground area (~180m
-      // across vs ~90m) so the satellite plane extends well past the
-      // building footprint instead of fading into the paver/grass
-      // fallback just past the roof edge. Must match SATELLITE_ZOOM below.
-      projectId, lat: String(center.lat), lng: String(center.lng), zoom: String(SATELLITE_ZOOM),
+      projectId, lat: String(center.lat), lng: String(center.lng), zoom: String(satelliteZoom),
+      shareToken: new URLSearchParams(window.location.search).get('shareToken') || '',
       ...(satelliteRefreshNonce > 0 ? { refresh: 'true' } : {}),
     });
     fetch(`/api/satellite-image?${qs}`)
@@ -261,9 +297,13 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
       })
       .catch(() => { if (!cancelled) setSatelliteImageUrl(null); });
     return () => { cancelled = true; };
-  }, [projectId, roofCenterLatLng?.lat, roofCenterLatLng?.lng, mapConfig.center?.lat, mapConfig.center?.lng, satelliteRefreshNonce]);
+  }, [projectId, roofCenterLatLng?.lat, roofCenterLatLng?.lng, mapConfig.center?.lat, mapConfig.center?.lng, satelliteRefreshNonce, satelliteZoom]);
 
-  const [advancedMode, setAdvancedMode] = useState(false); // Simple mode is the default for EPC vendors
+  const [toolPanel, setToolPanel] = useState('panels');
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const saveStatus = useDesignStore(s => s.saveStatus);
+  const [saveError, setSaveError] = useState('');
+  useEffect(() => { setInspectorOpen(window.innerWidth > 900); }, []);
   // Optimal default facing: south in the northern hemisphere, north below the equator.
   const optimalAzimuth = lat >= 0 ? 180 : 0;
   const [rows, setRows] = useState(5);
@@ -296,16 +336,19 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
     const xs = roofPoints.map(p => p.x), ys = roofPoints.map(p => p.y);
     const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
     const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
-    return st.panels.map(sp => ({
+    return st.panels.filter(sp => sp.roofId === st.roofs[0]?.id).map(sp => ({
       id: sp.id, x: (sp.x - cx) * m, z: (sp.y - cy) * m, tilt: sp.tilt, azimuth: sp.rotation,
+      widthM: sp.orientation === 'landscape' ? (sp.moduleHeightM ?? sp.height * m) : (sp.moduleWidthM ?? sp.width * m),
+      depthM: sp.orientation === 'landscape' ? (sp.moduleWidthM ?? sp.width * m) : (sp.moduleHeightM ?? sp.height * m), stored: sp,
     }));
   });
 
+  const totalPower = panels.reduce((sum, p) => sum + (p.stored?.power ?? PANEL_POWER), 0);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [hour, setHour] = useState(12);
-  const [month, setMonth] = useState(6);
+
   const [animating, setAnimating] = useState(false);
-  const [mode, setMode] = useState<'orbit' | 'select' | 'drag' | 'zone'>('orbit');
+  const [mode, setMode] = useState<'orbit' | 'pan' | 'select' | 'drag' | 'zone'>('orbit');
   const [boxSel, setBoxSel] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
 
   // Zone-based placement (Solar Ladder-style): user drags a box directly on
@@ -354,14 +397,69 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
     const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
     return st.obstacles.map(o => ({
       id: o.id, x: (o.x - cx) * m, z: (o.y - cy) * m,
-      w: o.width * m, d: o.height * m, rotDeg: o.rotation, label: o.label,
+      w: o.width * m, d: o.height * m, rotDeg: o.rotation, label: o.label, heightM: o.heightM,
     }));
   });
   const [selectedObstacleId, setSelectedObstacleId] = useState<string | null>(null);
+  useEffect(() => { if (selectedObstacleId) { setToolPanel('obstacles'); setInspectorOpen(true); } }, [selectedObstacleId]);
   const obstaclesRef = useRef<Obstacle3D[]>([]);
   obstaclesRef.current = obstacles;
   const selectedObstacleIdRef = useRef<string | null>(null);
   selectedObstacleIdRef.current = selectedObstacleId;
+
+  const geometryFor = useCallback((p: Panel3D) => ({ x: p.x, z: p.z, tilt: p.tilt, azimuth: p.azimuth, ...dimensions(p) }), [dimensions]);
+  const freezePanel = useCallback((p: Panel3D): Panel3D => ({
+    ...p, ...dimensions(p), stored: p.stored ?? {
+      id: p.id, type: 'panel', x: 0, y: 0, width: PANEL_W_M / mpp, height: PANEL_H_M / mpp,
+      moduleWidthM: PANEL_W_M, moduleHeightM: PANEL_H_M, rotation: p.azimuth, tilt: p.tilt,
+      orientation: 'portrait', manufacturer: equipment.panelModel.split(' ')[0], model: equipment.panelModel,
+      power: PANEL_POWER, stringNumber: 1, roofId,
+    },
+  }), [dimensions, PANEL_W_M, PANEL_H_M, PANEL_POWER, mpp, equipment.panelModel, roofId]);
+  const fits = useCallback((p: Panel3D) => moduleFits(geometryFor(p), roofPolyMeters, obstacles, setbackM), [geometryFor, roofPolyMeters, obstacles, setbackM]);
+  const invalidPanelIds = useMemo(() => {
+    const bad = new Set(panels.filter(p => !fits(p)).map(p => p.id));
+    const footprints = panels.map(p => moduleFootprint(geometryFor(p)));
+    for (let i = 0; i < panels.length; i++) for (let j = i + 1; j < panels.length; j++) {
+      if (footprintsOverlap(footprints[i], footprints[j])) { bad.add(panels[i].id); bad.add(panels[j].id); }
+    }
+    return bad;
+  }, [panels, fits, geometryFor]);
+  const lastValidPanels = useRef(panels);
+  useEffect(() => { if (invalidPanelIds.size === 0) lastValidPanels.current = panels; }, [panels, invalidPanelIds]);
+  const addValidPanels = useCallback((existing: Panel3D[], candidates: Panel3D[]) => {
+    const result = [...existing];
+    for (const candidate of candidates) {
+      if (fits(candidate) && !result.some(p => footprintsOverlap(moduleFootprint(geometryFor(p)), moduleFootprint(geometryFor(candidate))))) result.push(freezePanel(candidate));
+    }
+    return result;
+  }, [fits, geometryFor, freezePanel]);
+  const dataIssues = [
+    !equipmentValid ? 'Module dimensions or power are missing.' : '',
+    !equipment.specificationsConfirmed ? 'Module specifications are not confirmed.' : '',
+    !roofSettings?.measurementsConfirmed ? 'Site dimensions and heights are not confirmed.' : '',
+    !currentRoof?.traceMpp ? 'Trace scale is missing; calibrate the roof before analysis.' : '',
+    currentRoof?.slope !== 0 || (roofSettings?.terraces?.length ?? 0) > 0 ? 'Sloped or stepped roofs are not supported by this analysis.' : '',
+    obstacles.some(o => !(o.heightM && o.heightM > 0)) ? 'Enter the height of every obstacle.' : '',
+    obstacles.some(o => !moduleFits({ x: o.x, z: o.z, widthM: o.w, depthM: o.d, tilt: 0, azimuth: 180 - o.rotDeg }, roofPolyMeters, [], 0)) ? 'An obstacle extends outside the active roof.' : '',
+    invalidPanelIds.size ? `${invalidPanelIds.size} panels violate roof clearance, obstacles or overlap checks.` : '',
+    panels.some(p => !Number.isFinite(p.stored?.power ?? PANEL_POWER) || (p.stored?.power ?? PANEL_POWER) <= 0) ? 'A placed module has invalid power data.' : '',
+  ].filter(Boolean);
+  const analysisBlocked = dataIssues.length > 0;
+  const modelSignature = JSON.stringify({ panels, obstacles, wallHeightM, MOUNT_H, parapetHeightM, roofPolyMeters, analysisDate, hour, analysisPeriod, equipment, roofSettings });
+  useEffect(() => {
+    shadingController.current?.abort();
+    setShadingResults(null); setRunningShading(false); setUnlitCount(0);
+    return () => shadingController.current?.abort();
+  }, [modelSignature]);
+  const measurementSignature = JSON.stringify({ obstacles, wallHeightM, MOUNT_H, parapetHeightM, roofPolyMeters, slope: currentRoof?.slope });
+  const previousMeasurements = useRef(measurementSignature);
+  useEffect(() => {
+    if (previousMeasurements.current !== measurementSignature && !readOnly && roofId && roofSettings?.measurementsConfirmed) {
+      useDesignStore.getState().updateRoof(roofId, { design3D: { ...roofSettings, measurementsConfirmed: false } });
+    }
+    previousMeasurements.current = measurementSignature;
+  }, [measurementSignature, readOnly, roofId, roofSettings]);
 
   // Realistic default footprints (meters) for a quick "Add" click
   const DEFAULT_OBSTACLE_SIZE_M: Record<string, { w: number; d: number }> = {
@@ -408,23 +506,26 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
   const firstSyncRef = useRef(true);
   useEffect(() => {
     if (firstSyncRef.current) { firstSyncRef.current = false; return; }
-    if (!roofDims) return;
+    if (!roofDims || readOnly) return;
     const ppm = 1 / mpp;
     const { cx, cy } = roofDims;
     const mapped: SolarPanel[] = panels.map((p) => {
       const physicalIdx = physicalOrderMap.get(p.id) ?? 0;
       return {
-        id: p.id, type: 'panel',
+        ...p.stored, id: p.id, type: 'panel',
         x: cx + p.x * ppm, y: cy + p.z * ppm,
-        width: PANEL_W_M * ppm, height: PANEL_H_M * ppm,
-        rotation: p.azimuth, orientation: 'portrait',
-        manufacturer: equipment.panelModel.split(' ')[0] || 'Waaree',
-        model: equipment.panelModel, power: equipment.panelPower,
+        width: (p.stored?.orientation === 'landscape' ? dimensions(p).depthM : dimensions(p).widthM) * ppm,
+        height: (p.stored?.orientation === 'landscape' ? dimensions(p).widthM : dimensions(p).depthM) * ppm,
+        moduleWidthM: p.stored?.orientation === 'landscape' ? dimensions(p).depthM : dimensions(p).widthM,
+        moduleHeightM: p.stored?.orientation === 'landscape' ? dimensions(p).widthM : dimensions(p).depthM,
+        rotation: p.azimuth, orientation: p.stored?.orientation ?? 'portrait',
+        manufacturer: p.stored?.manufacturer ?? equipment.panelModel.split(' ')[0],
+        model: p.stored?.model ?? equipment.panelModel, power: p.stored?.power ?? PANEL_POWER,
         tilt: p.tilt, stringNumber: Math.floor(physicalIdx / stringSize) + 1, roofId,
       };
     });
-    useDesignStore.setState({ panels: mapped, saveStatus: 'unsaved' });
-  }, [panels, equipment, roofId, roofDims, mpp, stringSize, physicalOrderMap]);
+    useDesignStore.setState(st => ({ panels: [...st.panels.filter(p => p.roofId !== roofId), ...mapped], saveStatus: 'unsaved' }));
+  }, [panels, equipment, roofId, roofDims, mpp, stringSize, physicalOrderMap, dimensions, readOnly]);
 
   // ── Sync 3D obstacles BACK to store (meters → canvas px) ──
   const firstObsSyncRef = useRef(true);
@@ -437,10 +538,10 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
       id: o.id, type: 'obstacle' as const,
       x: cx + o.x * ppm, y: cy + o.z * ppm,
       width: o.w * ppm, height: o.d * ppm,
-      rotation: o.rotDeg, label: o.label,
+      rotation: o.rotDeg, label: o.label, heightM: o.heightM,
     }));
     useDesignStore.setState({ obstacles: mappedObs, saveStatus: 'unsaved' });
-  }, [obstacles, roofDims, mpp]);
+  }, [obstacles, roofDims, mpp, readOnly]);
 
   // ─────────────────────────────────────────────────────────────
   // ROTATED-LATTICE GRID
@@ -476,7 +577,7 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
       }
     }
     return out;
-  }, [rowGapM, lat]);
+  }, [rowGapM, lat, PANEL_W_M, PANEL_H_M]);
 
   const generateGrid = useCallback(() => {
     if (!roofDims || roofPolyMeters.length < 3) return;
@@ -526,9 +627,9 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
       alert(`Placed ${valid.length} of ${rows * cols} panels — ${skippedOffRoof + skippedOverlap} were skipped (off-roof, an obstacle, or overlapping an existing panel).`);
     }
 
-    setPanels(prev => [...prev, ...valid]);
+    setPanels(prev => addValidPanels(prev, valid));
     setSelectedIds(valid.map(p => p.id));
-  }, [rows, cols, globalTilt, roofDims, roofPolyMeters, buildLattice, obstacles, forceTrueSouth]);
+  }, [rows, cols, globalTilt, roofDims, roofPolyMeters, buildLattice, obstacles, forceTrueSouth, addValidPanels, PANEL_W_M, PANEL_H_M]);
 
   // ─────────────────────────────────────────────────────────────
   // AUTO-FILL — lay continuous rows along the building's long edge,
@@ -554,7 +655,7 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
     const minX = Math.min(...xs), maxX = Math.max(...xs);
     const minZ = Math.min(...zs), maxZ = Math.max(...zs);
 
-    const setback = 0.5;
+    const setback = setbackM;
     const usableMinX = minX + setback, usableMaxX = maxX - setback;
     const usableMinZ = minZ + setback, usableMaxZ = maxZ - setback;
 
@@ -591,37 +692,35 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
         );
         if (blocked) continue;
 
+        if (!moduleFits({ ...centerReal, widthM: PANEL_W_M, depthM: PANEL_H_M, tilt: globalTilt, azimuth }, roofPolyMeters, obstacles, setbackM)) continue;
         placed.push({ id: `af-${r}-${c}-${Date.now()}`, x: centerReal.x, z: centerReal.z, tilt: globalTilt, azimuth });
       }
     }
     return placed;
-  }, [roofDims, roofPolyMeters, globalTilt, obstacles, rowGapM, lat, forceTrueSouth]);
+  }, [roofDims, roofPolyMeters, globalTilt, obstacles, rowGapM, lat, forceTrueSouth, setbackM, PANEL_W_M, PANEL_H_M, PANEL_POWER]);
 
   const autoFillToTarget = useCallback((overrideKw?: number) => {
+    if (!equipmentValid || !equipment.specificationsConfirmed) { setDesignNotice('Confirm module specifications before generating panels.'); return; }
     const effTargetKw = overrideKw ?? targetKw;
     const panelsNeeded = Math.ceil((effTargetKw * 1000) / PANEL_POWER);
     const placed = computeWholeRoofFill(effTargetKw);
     if (placed.length < panelsNeeded) {
       alert(`Roof fits ${placed.length} panels (${((placed.length * PANEL_POWER) / 1000).toFixed(1)} kW max, obstacles avoided). Target was ${panelsNeeded} panels for ${effTargetKw} kW.`);
     }
-    setPanels(placed);
+    setPanels(placed.map(freezePanel));
     setSelectedIds([]);
-  }, [computeWholeRoofFill, targetKw]);
+  }, [computeWholeRoofFill, targetKw, equipmentValid, equipment.specificationsConfirmed, PANEL_POWER, freezePanel]);
 
   // Safety net: after a manual Rotate or Move, remove any panel whose center
   // ended up outside the roof edge (this is what causes the "overhang" look —
   // manual rotation doesn't re-check the boundary the way Auto-Fill does).
   const pruneOutOfBoundsPanels = useCallback(() => {
-    if (roofPolyMeters.length < 3) return;
-    setPanels(prev => {
-      const kept = prev.filter(p => pointInPoly(p.x, p.z, roofPolyMeters));
-      const removedCount = prev.length - kept.length;
-      if (removedCount > 0) {
-        setTimeout(() => alert(`${removedCount} panel(s) ended up past the roof edge after that change and were removed. Tip: use "🧭 Perfect Align" instead of manual rotation to avoid this.`), 0);
-      }
-      return kept;
-    });
-  }, [roofPolyMeters]);
+    const current = panelsRef.current;
+    const bad = current.some(p => !fits(p)) || current.some((p, i) => current.slice(i + 1).some(q => footprintsOverlap(moduleFootprint(geometryFor(p)), moduleFootprint(geometryFor(q)))));
+    if (bad) { setPanels(lastValidPanels.current); setDesignNotice('Move rejected: panels must stay clear of roof edges, obstacles and other panels.'); }
+  }, [fits, geometryFor]);
+  const prunePanelsRef = useRef(pruneOutOfBoundsPanels);
+  prunePanelsRef.current = pruneOutOfBoundsPanels;
 
   // ONE-CLICK FIX for the "manually rotating makes it look weird" problem:
   // regenerate the whole layout at the SAME panel count, freshly aligned and
@@ -629,11 +728,14 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
   // could leave a stray old panel behind.
   const alignAllToBuilding = useCallback(() => {
     if (panels.length === 0) return;
-    const currentKw = Math.max(0.5, (panels.length * PANEL_POWER) / 1000);
+    if (panels.some(p => dimensions(p).widthM !== PANEL_W_M || dimensions(p).depthM !== PANEL_H_M || (p.stored?.power ?? PANEL_POWER) !== PANEL_POWER)) {
+      setDesignNotice('Align requires the selected module to match the placed modules. Existing specifications have been preserved.'); return;
+    }
+    const currentKw = Math.max(0.5, totalPower / 1000);
     const placed = computeWholeRoofFill(currentKw);
-    setPanels(placed);
+    setPanels(placed.map(freezePanel));
     setSelectedIds([]);
-  }, [panels.length, computeWholeRoofFill]);
+  }, [panels, totalPower, computeWholeRoofFill, freezePanel, dimensions, PANEL_W_M, PANEL_H_M, PANEL_POWER]);
 
   // ─────────────────────────────────────────────────────────────
   // CLIENT VIEW EXPORT — captures whatever angle the vendor has orbited to
@@ -643,6 +745,7 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
   // or send over WhatsApp.
   // ─────────────────────────────────────────────────────────────
   const exportClientView = useCallback(() => {
+    if (invalidPanelIds.size) { setDesignNotice('Resolve invalid panel placements before exporting.'); return; }
     const renderer = rendererRef.current, scene = sceneRef.current, camera = cameraRef.current;
     if (!renderer || !scene || !camera) return;
 
@@ -682,8 +785,8 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
       ctx.fillText(address, pad, shotH - bandH * 0.30);
     }
 
-    const localKwp = (panels.length * PANEL_POWER) / 1000;
-    const statLine = `${localKwp.toFixed(2)} kWp  ·  ${panels.length} panels  ·  ~${(localKwp * 1332 / 1000).toFixed(1)} MWh/yr`;
+    const localKwp = totalPower / 1000;
+    const statLine = `${localKwp.toFixed(2)} kWp  ·  ${panels.length} panels  ·  Preliminary layout`;
     ctx.fillStyle = '#93C5FD';
     ctx.font = `600 ${Math.round(shotH * 0.024)}px Inter, system-ui, sans-serif`;
     ctx.textAlign = 'right';
@@ -702,26 +805,35 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
       document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(url), 2000);
     }, 'image/png');
-  }, [project.clientName, project.address, panels.length]);
+  }, [project.clientName, project.address, panels.length, totalPower, invalidPanelIds]);
 
   // Same integration as the 2D Statistics panel's "Generate Quote" button —
   // duplicated here since finishing the design in 3D is often the natural
   // moment to jump straight to the quote, without going back to 2D first.
-  const generateQuote = useCallback(() => {
+  const generateQuote = useCallback(async () => {
     if (panels.length === 0) return;
-    const localKwp = (panels.length * PANEL_POWER) / 1000;
+    if (!projectId) { setDesignNotice('Save this design to a project before creating its quote.'); return; }
+    let shareToken = '';
+    try {
+      await useDesignStore.getState().saveToSupabase();
+      if (useDesignStore.getState().saveStatus !== 'saved') throw new Error('Save failed');
+    } catch (error) { setDesignNotice(error instanceof Error ? error.message : 'Could not save or share the design.'); return; }
+    try { shareToken = await requestDesignShare(projectId); }
+    catch { window.alert('The design is saved. Your quote will open without a design link because secure sharing is unavailable.'); }
+    const localKwp = totalPower / 1000;
     const params = new URLSearchParams({
       name: project.clientName && project.clientName !== 'New Client' ? project.clientName : '',
       address: project.address && project.address !== 'Enter address...' ? project.address : '',
       system_size: localKwp.toFixed(2),
       panel_count: String(panels.length),
       roof_area: roofAreaM2.toFixed(1),
-      yearly_units: String(Math.round(localKwp * 1332)),
-      monthly_units: String(Math.round(localKwp * 1332 / 12)),
+      projectId,
+      shareToken,
+
     });
     // Hard navigation, not router.push — see page.tsx's generateQuote for why
     window.location.href = `/quote?${params.toString()}`;
-  }, [panels.length, project.clientName, project.address, roofAreaM2, router]);
+  }, [totalPower, panels.length, project.clientName, project.address, roofAreaM2, router, projectId]);
 
   // ─────────────────────────────────────────────────────────────
   // SHADING ANALYSIS — for each panel, sample the sun's position across a
@@ -733,85 +845,39 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
   // panels/rows, though it's a sampled approximation (20 time-of-year
   // samples), not a full irradiance-weighted simulation like PVsyst/PVGIS.
   // ─────────────────────────────────────────────────────────────
-  const runShadingAnalysis = useCallback(() => {
-    const scene = sceneRef.current;
-    const pg = panelMeshGroup.current;
-    const og = obstacleMeshGroup.current;
-    if (!scene || !pg || panels.length === 0) return;
-    setRunningShading(true);
+  const runShadingAnalysis = useCallback(async () => {
+    if (analysisBlocked) { setDesignNotice(dataIssues.join(' ')); return; }
+    const scene = sceneRef.current, pg = panelMeshGroup.current, og = obstacleMeshGroup.current;
+    if (!scene || !pg || !panels.length) return;
+    shadingController.current?.abort();
+    const controller = new AbortController(); shadingController.current = controller;
+    setRunningShading(true); setAnalysisProgress(0); setDesignNotice('');
+    scene.updateMatrixWorld(true);
+    const surfaces: ShadingSurface[] = [];
+    const blockers: ShadingObstacle[] = [];
+    pg.children.forEach(root => {
+      if (!root.userData.panelId) return;
+      const p = panels.find(p => p.id === root.userData.panelId);
+      const mesh = root.getObjectByName('pv-face') as THREE.Mesh | undefined;
+      if (p && mesh) surfaces.push({ id: p.id, mesh, width: dimensions(p).widthM, depth: dimensions(p).depthM });
+      root.traverse(obj => { if (obj instanceof THREE.Mesh) blockers.push({ mesh: obj, owner: root.userData.panelId }); });
+    });
+    og?.traverse(obj => { if (obj instanceof THREE.Mesh && !obj.userData.visualDetail) blockers.push({ mesh: obj }); });
+    scene.traverse(obj => { if (obj instanceof THREE.Mesh && obj.userData.isBuildingMass) blockers.push({ mesh: obj }); });
+    const hours = analysisPeriod === 'instant' ? [hour] : Array.from({ length: 48 }, (_, i) => i / 2);
+    const directions = hours.map(h => sunPosition(h)).filter(s => s.elevation > 0).map(s => {
+      const az = THREE.MathUtils.degToRad(s.azimuth), el = THREE.MathUtils.degToRad(s.elevation);
+      return new THREE.Vector3(Math.cos(el) * Math.sin(az), Math.sin(el), -Math.cos(el) * Math.cos(az));
+    });
+    if (!directions.length) { setDesignNotice('Sun is below the horizon for this selection.'); setRunningShading(false); return; }
+    try {
+      const result = await sampleShading(surfaces, blockers, directions, controller.signal, setAnalysisProgress);
+      if (!controller.signal.aborted) { setShadingResults(result.results); setUnlitCount(result.unlit.length); }
+    } catch (error) {
+      if (!controller.signal.aborted) setDesignNotice('Analysis failed. Please retry after checking the model.');
+    } finally { if (!controller.signal.aborted) setRunningShading(false); }
+  }, [analysisBlocked, modelSignature, panels, dimensions, sunPosition, analysisPeriod, hour]);
 
-    // Defer to next tick so the "Running…" state actually paints before the
-    // (synchronous, potentially chunky) raycasting work blocks the main thread.
-    setTimeout(() => {
-      const buildingObstructions: THREE.Object3D[] = [];
-      scene.traverse(obj => { if (obj.userData.isBuildingMass) buildingObstructions.push(obj); });
-      const obstacleObstructions = og ? og.children : [];
-
-      const sampleMonths = [1, 4, 7, 10]; // Jan, Apr, Jul, Oct — spread across the year
-      // 9am-3pm instead of 8-4: at 8am/4pm the sun is low enough (often
-      // <30° elevation) that even a reasonably-spaced array legitimately
-      // self-shades row-to-row — real, but those hours carry little of the
-      // day's actual energy, so counting them made ordinary, well-spaced
-      // layouts look far more "affected" than their real annual output
-      // loss. Restricting to the hours that carry most of the day's yield
-      // keeps the check meaningful without flagging normal geometry.
-      const sampleHours = [9, 11, 13, 15];
-      const raycaster = new THREE.Raycaster();
-      const results: Record<string, number> = {};
-
-      panels.forEach(panel => {
-        const tiltRad = panel.tilt * Math.PI / 180;
-        // Roughly the panel's center height above the roof, accounting for tilt
-        const centerY = wallHeightM + MOUNT_H + Math.sin(tiltRad) * PANEL_H_M / 2 + 0.15;
-        const origin = new THREE.Vector3(panel.x, centerY, panel.z);
-
-        // Every OTHER panel's assembly is a valid obstruction; a panel can't
-        // shade itself, so exclude meshes tagged with this panel's own id.
-        // `pg` also holds the mounting-rack groups (rails/legs/braces/
-        // ballasts) added alongside the panel assemblies — those never set
-        // userData.panelId, so the old "keep unless tagged with THIS id"
-        // filter silently let every rack group through as an obstruction
-        // for every panel, producing false "shaded by my own racking" hits.
-        // Only real panel assemblies (root has userData.panelId) count.
-        const otherPanelMeshes = pg.children.filter(child =>
-          child.userData.panelId !== undefined && child.userData.panelId !== panel.id);
-        const candidates = [...otherPanelMeshes, ...obstacleObstructions, ...buildingObstructions];
-
-        let daytimeSamples = 0, shadedSamples = 0;
-        sampleMonths.forEach(month => {
-          const doy = Math.floor((month - 1) * 30.4) + 15;
-          sampleHours.forEach(hour => {
-            const { azimuth, elevation } = sunPosition(lat, hour, doy);
-            if (elevation <= 2) return; // sun too low to matter / below horizon
-            daytimeSamples++;
-            const azR = azimuth * Math.PI / 180, elR = elevation * Math.PI / 180;
-            const dir = new THREE.Vector3(
-              Math.cos(elR) * Math.sin(azR),
-              Math.sin(elR),
-              -Math.cos(elR) * Math.cos(azR),
-            ).normalize();
-            raycaster.set(origin, dir);
-            raycaster.far = 100;
-            // Same-row panels sit only 2cm apart — without a minimum hit
-            // distance, the ray toward the sun grazes that immediate
-            // neighbor's edge at nearly every angle and registers as a false
-            // "shaded" hit every time, which is what produced the impossible
-            // 100%-shaded-on-every-panel result. Coplanar same-row panels
-            // can never actually shade each other; real inter-row shading
-            // happens several meters away, so this threshold safely clears
-            // same-row geometry while still catching genuine shading.
-            raycaster.near = 1.5;
-            const hits = raycaster.intersectObjects(candidates, true);
-            if (hits.length > 0) shadedSamples++;
-          });
-        });
-        results[panel.id] = daytimeSamples > 0 ? shadedSamples / daytimeSamples : 0;
-      });
-
-      setShadingResults(results);
-      setRunningShading(false);
-    }, 30);
-  }, [panels, lat, wallHeightM]);
 
   // Derived summary from the last analysis run
   const shadingSummary = (() => {
@@ -821,10 +887,7 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
     const avgLossAcrossShaded = shadedPanels.length > 0
       ? shadedPanels.reduce((a, [, f]) => a + f, 0) / shadedPanels.length
       : 0;
-    // Rough annual energy loss estimate: affected panels' kWp × their average
-    // shaded fraction × the same generation constant used elsewhere (1332 kWh/kWp/yr)
-    const estLossKwh = shadedPanels.length * (PANEL_POWER / 1000) * avgLossAcrossShaded * 1332;
-    return { totalPanels: entries.length, shadedCount: shadedPanels.length, estLossKwh, avgLossAcrossShaded };
+    return { totalPanels: entries.length, shadedCount: shadedPanels.length, avgLossAcrossShaded };
   })();
 
   // ─────────────────────────────────────────────────────────────
@@ -892,8 +955,8 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
     if (placed.length < panelsNeeded) {
       alert(`This area fits ${placed.length} panels (${((placed.length * PANEL_POWER) / 1000).toFixed(1)} kW max). Target was ${panelsNeeded} panels for ${zoneTargetKw} kW.`);
     }
-    setPanels(prev => [...prev, ...placed]);
-  }, [roofDims, roofPolyMeters, zoneRect, zoneTargetKw, globalTilt, obstacles, rowGapM, lat, forceTrueSouth]);
+    setPanels(prev => addValidPanels(prev, placed));
+  }, [roofDims, roofPolyMeters, zoneRect, zoneTargetKw, globalTilt, obstacles, rowGapM, lat, forceTrueSouth, addValidPanels, PANEL_W_M, PANEL_H_M, PANEL_POWER]);
 
   const clearZone = useCallback(() => setZoneRect(null), []);
 
@@ -993,21 +1056,33 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
     const W = Math.max(mount.clientWidth, 1), H = Math.max(mount.clientHeight, 1);
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color('#aed4e8');
-    scene.fog = new THREE.Fog('#B0D4E8', 100, 450);
+    scene.background = new THREE.Color('#e5e9ea');
     sceneRef.current = scene;
 
     const WALL_H = wallHeightM;
-    const camera = new THREE.PerspectiveCamera(45, W / H, 0.1, 1500);
     const roofSpanM = Math.max(roofDims.widthM, roofDims.heightM, 8);
+    const halfHeight = roofSpanM * .7 / Math.min(1,W/H);
+    const camera = topView
+      ? new THREE.OrthographicCamera(-halfHeight*W/H,halfHeight*W/H,halfHeight,-halfHeight,.1,5000)
+      : new THREE.PerspectiveCamera(45, W / H, 0.5, 5000);
     const camDist = Math.max(18, roofSpanM * 1.6);
-    camera.position.set(camDist * 0.5, camDist * 0.6, camDist * 0.9);
+    camera.position.set(topView ? 0 : camDist * 0.5, topView ? WALL_H+camDist : camDist * 0.6, topView ? 0 : camDist * 0.9);
+    if (topView) camera.up.set(0,0,-1);
     camera.lookAt(0, WALL_H, 0);
     cameraRef.current = camera;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
     renderer.setSize(W, H);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.15;
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    const room = new RoomEnvironment();
+    const environment = pmrem.fromScene(room, 0.04);
+    scene.environment = environment.texture;
+    scene.environmentIntensity = 0.35;
+    room.dispose(); pmrem.dispose();
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     // Fade in rather than hard-cutting from the 2D canvas — 2D and 3D are
@@ -1022,10 +1097,14 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
+    controls.enablePan = true;
+    controls.screenSpacePanning = true;
+    controls.touches.TWO = THREE.TOUCH.DOLLY_PAN;
+    controls.addEventListener('change', () => { needsRender.current = true; });
     controls.dampingFactor = 0.05;
     controls.minDistance = 5;
     controls.maxDistance = Math.max(150, camDist * 3);
-    controls.maxPolarAngle = Math.PI / 2.05;
+    controls.maxPolarAngle = topView ? Math.PI : Math.PI / 2.05;
     controls.target.set(0, WALL_H, 0);
     controls.update();
     controlsRef.current = controls;
@@ -1038,7 +1117,7 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
     // left over from when the fallback ground was solid grass, which was
     // tinting every shadow-facing wall a muddy olive regardless of what
     // ground texture was actually in use.
-    scene.add(new THREE.HemisphereLight(0xcfe0f5, 0x9c9284, 0.65));
+    scene.add(new THREE.HemisphereLight(0xffffff, 0xbac0bd, 1.2));
     const sun = new THREE.DirectionalLight(0xfff8e8, 1.5);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
@@ -1063,13 +1142,16 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
       left: -shadowHalfSpan, right: shadowHalfSpan,
       top: shadowHalfSpan, bottom: -shadowHalfSpan,
     });
-    sun.shadow.bias = -0.0015;
+    sun.shadow.bias = -0.00015;
     sun.shadow.normalBias = 0.02;
     sun.shadow.camera.updateProjectionMatrix();
+    sun.target.position.set(0, WALL_H, 0);
+    scene.add(sun.target);
     scene.add(sun);
     sunRef.current = sun;
 
     const sunSphere = new THREE.Mesh(new THREE.SphereGeometry(2.5, 16, 16), new THREE.MeshBasicMaterial({ color: 0xffdd44 }));
+    sunSphere.visible = false;
     scene.add(sunSphere);
     sunSphereRef.current = sunSphere;
 
@@ -1079,336 +1161,45 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
 
     const normPoints = roofPolyMeters;
 
-    // Finite (not infinite) so the blurred satellite backdrop plane below
-    // shows through past its edges — matches the reference images' clean
-    // CG model over a real-world photo backdrop, rather than a flat green
-    // field to the horizon.
-    const grassSize = Math.max(90, roofSpanM * 3);
-    const grass = new THREE.Mesh(new THREE.PlaneGeometry(grassSize, grassSize), new THREE.MeshStandardMaterial({ color: '#7a9270', roughness: 0.95, metalness: 0 }));
-    grass.rotation.x = -Math.PI / 2; grass.position.y = -0.05; grass.receiveShadow = true;
-    scene.add(grass);
-
-    // Paved courtyard immediately around the building — a light concrete
-    // paver texture whose ALPHA channel fades radially to fully transparent,
-    // so it blends softly into the grass plane below instead of showing a
-    // hard rectangular edge. Matches the reference renders' look of a paved
-    // area right at the building, opening onto lawn further out.
-    const paverAreaSize = Math.max(30, roofSpanM * 2.2);
-    const paverTexture = (() => {
-      const size = 512;
-      const canvas = document.createElement('canvas');
-      canvas.width = size; canvas.height = size;
-      const ctx = canvas.getContext('2d')!;
-      ctx.fillStyle = '#c9c2b4';
-      ctx.fillRect(0, 0, size, size);
-      // Brick coursing — offset rows, matching a real paver-block courtyard.
-      const brickW = 40, brickH = 20;
-      ctx.strokeStyle = 'rgba(150, 142, 128, 0.5)';
-      ctx.lineWidth = 2;
-      for (let row = 0; row * brickH < size + brickH; row++) {
-        const offset = (row % 2) * (brickW / 2);
-        const y = row * brickH;
-        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(size, y); ctx.stroke();
-        for (let x = -brickW + offset; x < size + brickW; x += brickW) {
-          ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y + brickH); ctx.stroke();
-        }
-      }
-      // Subtle per-tile tone variation so it doesn't read as a flat repeat.
-      for (let i = 0; i < 900; i++) {
-        const x = Math.random() * size, y = Math.random() * size;
-        ctx.fillStyle = `rgba(0,0,0,${(Math.random() * 0.05).toFixed(3)})`;
-        ctx.fillRect(x, y, 3, 3);
-      }
-      // Radial alpha fade baked in: opaque at center, transparent at the
-      // rim, so the paver plane's edge disappears into the grass beneath
-      // it rather than cutting off sharply.
-      const alphaGrad = ctx.createRadialGradient(size / 2, size / 2, size * 0.28, size / 2, size / 2, size * 0.5);
-      alphaGrad.addColorStop(0, 'rgba(0,0,0,0)');
-      alphaGrad.addColorStop(1, 'rgba(0,0,0,1)');
-      ctx.globalCompositeOperation = 'destination-out';
-      ctx.fillStyle = alphaGrad;
-      ctx.fillRect(0, 0, size, size);
-      ctx.globalCompositeOperation = 'source-over';
-      const tex = new THREE.CanvasTexture(canvas);
-      tex.colorSpace = THREE.SRGBColorSpace;
-      tex.wrapS = THREE.ClampToEdgeWrapping; tex.wrapT = THREE.ClampToEdgeWrapping;
-      return tex;
-    })();
-    const paverArea = new THREE.Mesh(
-      new THREE.PlaneGeometry(paverAreaSize, paverAreaSize),
-      new THREE.MeshStandardMaterial({ map: paverTexture, roughness: 0.85, metalness: 0, transparent: true })
-    );
-    paverArea.rotation.x = -Math.PI / 2; paverArea.position.y = -0.04; paverArea.receiveShadow = true;
-    scene.add(paverArea);
-
-    // No satellite-photo backdrop — a neutral studio-style scene instead:
-    // the flat-color sky (scene.background, set above) simply meets the
-    // grass plane's edge, which is all "plain flat-color sky above plain
-    // ground" needs. A second, larger grass plane extends that same
-    // low-saturation green out to the far clip distance so there's no
-    // visible edge even at the widest zoom-out.
-    const farGround = new THREE.Mesh(
-      new THREE.PlaneGeometry(grassSize * 6, grassSize * 6),
-      new THREE.MeshStandardMaterial({ color: '#7a9270', roughness: 0.95, metalness: 0 })
-    );
-    farGround.rotation.x = -Math.PI / 2; farGround.position.y = -0.06;
-    scene.add(farGround);
-
-    // Small tileable grayscale noise texture — used as a roughnessMap on
-    // the roof deck so the concrete reads as a real weathered surface with
-    // subtle variation instead of a flat, uniform gray.
-    const noiseTexture = (() => {
-      const size = 128;
-      const canvas = document.createElement('canvas');
-      canvas.width = size; canvas.height = size;
-      const ctx = canvas.getContext('2d')!;
-      const imgData = ctx.createImageData(size, size);
-      for (let i = 0; i < imgData.data.length; i += 4) {
-        const v = 150 + Math.floor(Math.random() * 90); // mid-gray band, avoids pure black/white specks
-        imgData.data[i] = imgData.data[i + 1] = imgData.data[i + 2] = v;
-        imgData.data[i + 3] = 255;
-      }
-      ctx.putImageData(imgData, 0, 0);
-      const tex = new THREE.CanvasTexture(canvas);
-      tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.RepeatWrapping;
-      tex.repeat.set(12, 12);
-      return tex;
-    })();
-
-    // Weathering/staining color map for the roof deck — soft irregular
-    // blotches (water pooling/algae discoloration) plus a few straight
-    // runoff streaks from parapet drains, layered over the base concrete
-    // tone so the roof reads as an aged real surface instead of a flat
-    // uniform color.
-    const roofStainTexture = (() => {
-      const size = 512;
-      const canvas = document.createElement('canvas');
-      canvas.width = size; canvas.height = size;
-      const ctx = canvas.getContext('2d')!;
-      ctx.fillStyle = '#9E9488';
-      ctx.fillRect(0, 0, size, size);
-
-      // Waterproofing-sheet / tile-joint seams — the single strongest
-      // "this is a real rooftop" cue at a distance. Real Indian RCC
-      // terraces are laid in large rectangular sections with visible
-      // seams; a flat single-tone plane reads as obviously fake next to
-      // real satellite-photo neighbors.
-      ctx.strokeStyle = 'rgba(70,68,60,0.35)';
-      ctx.lineWidth = 2;
-      const cell = size / 6;
-      for (let i = 1; i < 6; i++) {
-        ctx.beginPath(); ctx.moveTo(i * cell, 0); ctx.lineTo(i * cell, size); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(0, i * cell); ctx.lineTo(size, i * cell); ctx.stroke();
-      }
-
-      // Weathering blotches — water pooling / algae discoloration.
-      // Noticeably higher contrast than the original pass, which was
-      // essentially invisible at normal camera distance.
-      for (let i = 0; i < 46; i++) {
-        const x = Math.random() * size, y = Math.random() * size;
-        const r = 20 + Math.random() * 85;
-        const darker = Math.random() > 0.35;
-        const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
-        const tint = darker ? 'rgba(75,72,62,ALPHA)' : 'rgba(165,160,142,ALPHA)';
-        grad.addColorStop(0, tint.replace('ALPHA', String(0.22 + Math.random() * 0.28)));
-        grad.addColorStop(1, tint.replace('ALPHA', '0'));
-        ctx.fillStyle = grad;
-        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
-      }
-
-      // Runoff streaks from parapet drains.
-      for (let i = 0; i < 8; i++) {
-        const x = Math.random() * size;
-        const w = 5 + Math.random() * 10;
-        const grad = ctx.createLinearGradient(x, 0, x, size);
-        grad.addColorStop(0, 'rgba(65,63,55,0.32)');
-        grad.addColorStop(1, 'rgba(65,63,55,0)');
-        ctx.fillStyle = grad;
-        ctx.fillRect(x - w / 2, 0, w, size * (0.4 + Math.random() * 0.6));
-      }
-
-      // Fine speckle grain — reads as aggregate/texture up close, subtle
-      // from a distance.
-      const grain = ctx.createImageData(size, size);
-      for (let i = 0; i < grain.data.length; i += 4) {
-        const v = Math.random() > 0.5 ? 255 : 0;
-        grain.data[i] = grain.data[i + 1] = grain.data[i + 2] = v;
-        grain.data[i + 3] = Math.random() < 0.06 ? 18 : 0;
-      }
-      ctx.putImageData(grain, 0, 0);
-
-      const tex = new THREE.CanvasTexture(canvas);
-      tex.colorSpace = THREE.SRGBColorSpace;
-      tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.RepeatWrapping;
-      tex.repeat.set(3, 3);
-      return tex;
-    })();
-
-    // Facade weathering — subtle vertical monsoon-runoff staining and patchy
-    // discoloration, so the walls read as an aged real building instead of
-    // a flat single-tone extrusion.
-    const facadeTexture = (() => {
-      const size = 512;
-      const canvas = document.createElement('canvas');
-      canvas.width = size; canvas.height = size;
-      const ctx = canvas.getContext('2d')!;
-      ctx.fillStyle = '#E8D2A6';
-      ctx.fillRect(0, 0, size, size);
-      for (let i = 0; i < 10; i++) {
-        const x = Math.random() * size;
-        const w = 8 + Math.random() * 18;
-        const grad = ctx.createLinearGradient(x, 0, x, size);
-        grad.addColorStop(0, 'rgba(120,108,80,0.22)');
-        grad.addColorStop(0.6, 'rgba(120,108,80,0.1)');
-        grad.addColorStop(1, 'rgba(120,108,80,0)');
-        ctx.fillStyle = grad;
-        ctx.fillRect(x - w / 2, 0, w, size);
-      }
-      for (let i = 0; i < 18; i++) {
-        const x = Math.random() * size, y = Math.random() * size;
-        const r = 15 + Math.random() * 45;
-        const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
-        grad.addColorStop(0, 'rgba(140,128,100,0.15)');
-        grad.addColorStop(1, 'rgba(140,128,100,0)');
-        ctx.fillStyle = grad;
-        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
-      }
-      const tex = new THREE.CanvasTexture(canvas);
-      tex.colorSpace = THREE.SRGBColorSpace;
-      tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.RepeatWrapping;
-      tex.repeat.set(6, 1);
-      return tex;
-    })();
-
-    // Main building — warm beige/cream walls, weathered concrete roof deck
-    // (matches an actual RCC terrace, not a painted/tiled surface), both as
-    // real PBR materials so they pick up specular/ambient response instead
-    // of the flat, shadeless look Lambert gives.
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(20000, 20000),
+      new THREE.MeshStandardMaterial({ color: '#d6ddda', roughness: 1 }));
+    ground.rotation.x = -Math.PI / 2; ground.position.y = -0.15;
+    ground.name = 'context-ground';
+    ground.receiveShadow = true; scene.add(ground);
+    const roofMaterial = new THREE.MeshStandardMaterial({ map: roofSettings?.roofMaterial === 'coating' ? null : concreteTexture(), color: roofSettings?.roofMaterial === 'coating' ? '#a3afb0' : '#ffffff', roughness: 0.88 });
+    const wallMaterial = new THREE.MeshStandardMaterial({ map: concreteTexture(3), color: '#adb0ab', roughness: 0.95 });
     const shape = new THREE.Shape();
     normPoints.forEach((p, i) => { i === 0 ? shape.moveTo(p.x, p.z) : shape.lineTo(p.x, p.z); });
     shape.closePath();
     const bg = new THREE.ExtrudeGeometry(shape, { depth: WALL_H, bevelEnabled: false });
     bg.rotateX(Math.PI / 2); bg.translate(0, WALL_H, 0);
-    const building = new THREE.Mesh(bg, new THREE.MeshStandardMaterial({ color: '#ffffff', map: facadeTexture, roughness: 0.8, metalness: 0 }));
+    const building = new THREE.Mesh(bg, [roofMaterial, wallMaterial]);
     building.castShadow = true; building.receiveShadow = true;
     scene.add(building);
-    const rg = new THREE.ShapeGeometry(shape);
-    rg.rotateX(Math.PI / 2); rg.translate(0, WALL_H, 0);
-    const roofMesh = new THREE.Mesh(rg, new THREE.MeshStandardMaterial({
-      color: '#ffffff', map: roofStainTexture, side: THREE.DoubleSide, roughness: 0.9, roughnessMap: noiseTexture, metalness: 0,
-    }));
-    roofMesh.receiveShadow = true; roofMesh.name = 'roof';
-    scene.add(roofMesh);
-
-    // Soft contact shadow — a dark radial-alpha blob sitting just above the
-    // paver/grass, roughly under the building footprint. Approximates the
-    // ambient-occlusion darkening real buildings show at their base, which
-    // the sun's cast shadow alone doesn't give (especially near solar noon,
-    // when the real shadow falls almost straight down and reads as barely
-    // there). Same fading-alpha-texture technique as the paver courtyard.
-    {
-      const xs = normPoints.map(p => p.x), zs = normPoints.map(p => p.z);
-      const footW = Math.max(...xs) - Math.min(...xs), footD = Math.max(...zs) - Math.min(...zs);
-      const cx = (Math.max(...xs) + Math.min(...xs)) / 2, cz = (Math.max(...zs) + Math.min(...zs)) / 2;
-      const shadowTex = (() => {
-        const size = 256;
-        const canvas = document.createElement('canvas');
-        canvas.width = size; canvas.height = size;
-        const ctx = canvas.getContext('2d')!;
-        const grad = ctx.createRadialGradient(size / 2, size / 2, size * 0.42, size / 2, size / 2, size * 0.5);
-        grad.addColorStop(0, 'rgba(0,0,0,0.55)');
-        grad.addColorStop(1, 'rgba(0,0,0,0)');
-        ctx.fillStyle = grad;
-        ctx.fillRect(0, 0, size, size);
-        return new THREE.CanvasTexture(canvas);
-      })();
-      // Tighter to the footprint (1.12x, was 1.35x) with a harder inner
-      // edge (0.42 vs 0.28) so the dark band hugs the base of the walls
-      // instead of spreading into a vague halo — the building was reading
-      // as floating without a clear ground-contact line.
-      const shadowBlob = new THREE.Mesh(
-        new THREE.PlaneGeometry(footW * 1.12, footD * 1.12),
-        new THREE.MeshBasicMaterial({ map: shadowTex, transparent: true, depthWrite: false })
-      );
-      shadowBlob.rotation.x = -Math.PI / 2;
-      shadowBlob.position.set(cx, -0.01, cz);
-      scene.add(shadowBlob);
-    }
-
-    // Windows — one row per floor, spread up the FULL height of the building.
-    // (Previously used a single fixed sill height capped near the ground —
-    // fine for a short building, but a tall one just got one clump of
-    // windows near the base instead of a row per storey.)
-    if (WALL_H > 2.5) {
-      // Dark blue-gray reflective glass — NOT near-black: with no
-      // environment map in this scene to reflect, a very dark/low-roughness
-      // material has nothing to bounce light off and reads as flat black
-      // squares. Keeping the base color a lighter slate blue-gray means the
-      // hemisphere/sun light still visibly lights the surface directly,
-      // while roughness/metalness/clearcoat still give it a glassy sheen.
-      const winMat = new THREE.MeshPhysicalMaterial({
-        color: '#3a5568', roughness: 0.22, metalness: 0.3,
-        transparent: true, opacity: 0.92, clearcoat: 0.8, clearcoatRoughness: 0.15, side: THREE.DoubleSide,
-      });
-      const frameMat2 = new THREE.MeshStandardMaterial({ color: '#FAF7F0', roughness: 0.7, metalness: 0 });
-      // Wider than tall — real windows, not the near-square placeholder.
-      const winW = 1.5, winH = 0.95;
-      const floorH = 3.2; // typical floor-to-floor height (m)
-      const nFloors = Math.max(1, Math.round(WALL_H / floorH));
-      const actualFloorH = WALL_H / nFloors; // spread evenly across the real height
-      const sillYs: number[] = [];
-      for (let f = 0; f < nFloors; f++) {
-        const rowCenter = f * actualFloorH + actualFloorH * 0.45;
-        if (rowCenter + winH / 2 < WALL_H - 0.3) sillYs.push(rowCenter); // stay clear of the parapet
-      }
-
-      for (let i = 0; i < normPoints.length; i++) {
-        const a = normPoints[i], b = normPoints[(i + 1) % normPoints.length];
-        const dx = b.x - a.x, dz = b.z - a.z, len = Math.hypot(dx, dz);
-        if (len < winW * 2.2) continue; // too short a segment for a window to read well
-        const wallAngle = -Math.atan2(dz, dx);
-        // Wider spacing than before — fewer, more deliberately-placed
-        // windows instead of a dense punched-hole strip.
-        const nWindows = Math.max(1, Math.floor(len / 5.5));
-        const spacing = len / (nWindows + 1);
-        for (let w = 1; w <= nWindows; w++) {
-          const t = (spacing * w) / len;
-          const wx = a.x + dx * t, wz = a.z + dz * t;
-          sillYs.forEach(rowY => {
-            const frame = new THREE.Mesh(new THREE.BoxGeometry(winW + 0.15, winH + 0.15, 0.08), frameMat2);
-            frame.position.z = 0.04; // proud of the wall face — a real reveal, not a flat decal
-            const glass = new THREE.Mesh(new THREE.PlaneGeometry(winW, winH), winMat);
-            glass.position.z = -0.02; // recessed behind the frame's outer face
-            const group = new THREE.Group();
-            group.add(frame); group.add(glass);
-            group.position.set(wx, rowY + winH / 2, wz);
-            group.rotation.y = wallAngle;
-            scene.add(group);
-          });
-        }
-      }
-    }
-
-    const PH = 1.0;
-    const pm = new THREE.MeshStandardMaterial({ color: '#D8CCB8', roughness: 0.85, metalness: 0 });
+    // The extrusion cap is the roof: a second coplanar face causes striped depth artifacts.
+    building.name = 'roof'; building.userData.isBuildingMass = true;
+    const PH = parapetHeightM;
+    const pm = new THREE.MeshStandardMaterial({ color: '#aeb3ae', roughness: 0.95, metalness: 0 });
     // Thin coping cap along the parapet top — a slightly lighter, overhanging
     // slab (real parapets almost always have one) so the roofline reads as a
     // finished edge with some depth instead of a plain extruded box.
-    const copingMat = new THREE.MeshStandardMaterial({ color: '#EDE6D8', roughness: 0.6, metalness: 0 });
-    const copingOverhang = 0.05, copingH = 0.06;
+    const copingMat = new THREE.MeshStandardMaterial({ color: '#c2c6bf', roughness: 0.85, metalness: 0 });
+    const copingOverhang = 0.05, copingH = Math.min(0.06, PH);
     for (let i = 0; i < normPoints.length; i++) {
+      if (PH <= 0) continue;
       const a = normPoints[i], b = normPoints[(i + 1) % normPoints.length];
       const dx = b.x - a.x, dz = b.z - a.z, len = Math.hypot(dx, dz);
       const rotY = -Math.atan2(dz, dx);
-      const par = new THREE.Mesh(new THREE.BoxGeometry(len, PH, 0.3), pm);
-      par.position.set((a.x + b.x) / 2, WALL_H + PH / 2, (a.z + b.z) / 2);
+      const bodyH = Math.max(0.001, PH - copingH);
+      const par = new THREE.Mesh(new THREE.BoxGeometry(len, bodyH, 0.3), pm);
+      par.position.set((a.x + b.x) / 2, WALL_H + bodyH / 2, (a.z + b.z) / 2);
       par.rotation.y = rotY; par.castShadow = true;
       par.userData.isBuildingMass = true; // shading analysis raycasts against this
       scene.add(par);
 
       const coping = new THREE.Mesh(new THREE.BoxGeometry(len + copingOverhang * 2, copingH, 0.3 + copingOverhang * 2), copingMat);
-      coping.position.set((a.x + b.x) / 2, WALL_H + PH + copingH / 2, (a.z + b.z) / 2);
-      coping.rotation.y = rotY; coping.castShadow = true; coping.receiveShadow = true;
+      coping.position.set((a.x + b.x) / 2, WALL_H + PH - copingH / 2, (a.z + b.z) / 2);
+      coping.rotation.y = rotY; coping.castShadow = true; coping.receiveShadow = true; coping.userData.isBuildingMass = true;
       scene.add(coping);
     }
     const pg = new THREE.Group(); pg.name = 'panels'; scene.add(pg);
@@ -1425,12 +1216,15 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
     const animate = () => {
       if (isDisposed) return;
       frameRef.current = requestAnimationFrame(animate);
-      controls.update();
+      const moved = controls.update();
       // Guard against rendering into a 0×0 or already-detached canvas — this
       // is what causes "drawImage... width or height of 0" when navigating
       // away right as an in-flight frame was mid-execution during teardown.
       if (renderer.domElement.width === 0 || renderer.domElement.height === 0) return;
-      renderer.render(scene, camera);
+      if (!document.hidden && (moved || needsRender.current)) {
+        renderer.render(scene, camera);
+        needsRender.current = false;
+      }
     };
     animate();
 
@@ -1438,9 +1232,11 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
       if (!mount) return;
       const w = mount.clientWidth, h = mount.clientHeight;
       if (w === 0 || h === 0) return; // still not laid out — nothing to size to yet
-      camera.aspect = w / h;
+      if (camera instanceof THREE.PerspectiveCamera) camera.aspect = w / h;
+      else { camera.left=-camera.top*w/h; camera.right=camera.top*w/h; }
       camera.updateProjectionMatrix();
       renderer.setSize(w, h);
+      needsRender.current = true;
     };
     window.addEventListener('resize', onResize);
     // Catches layout settling that isn't a window resize at all — e.g. this
@@ -1453,16 +1249,28 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
       cancelAnimationFrame(frameRef.current);
       window.removeEventListener('resize', onResize);
       ro.disconnect();
-      controls.dispose(); renderer.dispose();
+      controls.dispose();
+      disposeSceneObjects(scene);
+      environment.dispose();
+      renderer.dispose();
       if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement);
     };
-  }, [roofPoints, roofDims, roofPolyMeters, wallHeightM]);
+  }, [roofPoints, roofDims, roofPolyMeters, wallHeightM, parapetHeightM, topView]);
+
+  useEffect(() => {
+    const roof = sceneRef.current?.getObjectByName('roof') as THREE.Mesh | undefined;
+    if (!roof || !Array.isArray(roof.material)) return;
+    const material = roof.material[0] as THREE.MeshStandardMaterial;
+    material.map?.dispose();
+    material.map = roofSettings?.roofMaterial === 'coating' ? null : concreteTexture();
+    material.color.set(roofSettings?.roofMaterial === 'coating' ? '#a3afb0' : '#ffffff');
+    material.needsUpdate = true; needsRender.current = true;
+  }, [roofSettings?.roofMaterial, roofDims, wallHeightM, parapetHeightM, topView]);
 
   useEffect(() => {
     const sun = sunRef.current, sphere = sunSphereRef.current, scene = sceneRef.current;
     if (!sun || !sphere || !scene || !roofDims) return;
-    const doy = Math.floor((month - 1) * 30.4) + 15;
-    const { azimuth, elevation } = sunPosition(lat, hour, doy);
+    const { azimuth, elevation } = sunPosition(hour);
     const azR = azimuth * Math.PI / 180, elR = elevation * Math.PI / 180;
     // Sun distance/height must scale with building height too — otherwise a
     // fixed-height sun appears to "sink" as the roof grows taller toward it.
@@ -1470,13 +1278,13 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
     const x = d * Math.cos(elR) * Math.sin(azR);
     const y = wallHeightM + d * Math.sin(elR); // measured from ROOF level, not ground
     const z = -d * Math.cos(elR) * Math.cos(azR);
-    sun.position.set(x, Math.max(wallHeightM + 2, y), z);
+    sun.position.set(x, y, z);
+    sun.intensity = elevation > 0 ? 1.5 : 0;
+    sun.castShadow = elevation > 0;
     sphere.position.set(x, Math.max(wallHeightM + 2, y), z);
     sphere.visible = elevation > 0;
-    sun.intensity = 0.3 + (elevation / 90) * 1.3;
-    const t = Math.max(0, elevation / 60);
-    scene.background = new THREE.Color().lerpColors(new THREE.Color('#FF9A56'), new THREE.Color('#aed4e8'), t);
-  }, [hour, month, lat, roofDims, wallHeightM]);
+    scene.background = new THREE.Color('#e5e9ea');
+  }, [hour, sunPosition, roofDims, wallHeightM, parapetHeightM, topView]);
 
   useEffect(() => {
     if (!animating) return;
@@ -1484,11 +1292,12 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
     return () => clearInterval(iv);
   }, [animating]);
 
-  // Rebuild panel meshes (real Waaree 580 dims)
+  // Rebuild panel meshes from each module's saved physical dimensions.
   useEffect(() => {
     const pg = panelMeshGroup.current;
     if (!pg || !roofDims) return;
-    while (pg.children.length) pg.remove(pg.children[0]);
+    disposeSceneObjects(pg);
+    pg.clear();
     const WALL_H = wallHeightM;
     const pw = PANEL_W_M, ph = PANEL_H_M;
 
@@ -1499,48 +1308,18 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
     // Galvanized-steel racking hardware — lighter and more reflective than
     // the frame, matching the dull-silver look of real ballasted rails/legs.
     const legMat = new THREE.MeshStandardMaterial({ color: '#8b9096', roughness: 0.5, metalness: 0.7 });
-    const ballastMat = new THREE.MeshStandardMaterial({ color: '#d4b83a', roughness: 0.85, metalness: 0.05 });
+    const ballastMat = new THREE.MeshStandardMaterial({ color: '#b7bcb9', roughness: 0.85, metalness: 0.05 });
 
     // Procedurally-drawn PV cell texture — deep blue-black cells separated
     // by thin silver busbar/grid lines, built once per rebuild (not per
     // panel) and reused across every panel's face material via `repeat`.
     // No external asset dependency, matches the reference images' module
     // face without needing a hosted texture file.
-    const pvTexture = (() => {
-      const size = 256;
-      const canvas = document.createElement('canvas');
-      canvas.width = size; canvas.height = size;
-      const ctx = canvas.getContext('2d')!;
-      // Deeper, more saturated navy — the previous gradient washed out to a
-      // grayish blue once lit (roughness 0.2 with no env map means the sky
-      // hemisphere light's diffuse contribution brightens a lighter base
-      // color quite a bit). Starting darker/more saturated keeps it reading
-      // as premium navy instead of muted gray-blue once lit.
-      const grad = ctx.createLinearGradient(0, 0, size, size);
-      grad.addColorStop(0, '#040d1f');
-      grad.addColorStop(1, '#0a1a38');
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, size, size);
-      ctx.strokeStyle = 'rgba(225, 235, 245, 0.85)';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(1, 1, size - 2, size - 2);
-      // Busbar lines within a single cell tile — 3 thin fingers, matching
-      // the fine silver grid visible on real monocrystalline cells. Higher
-      // contrast/opacity than before so the grid reads crisp, not faint.
-      ctx.strokeStyle = 'rgba(215, 228, 240, 0.75)';
-      ctx.lineWidth = 1.25;
-      for (let i = 1; i < 4; i++) {
-        const p = (i / 4) * size;
-        ctx.beginPath(); ctx.moveTo(p, 0); ctx.lineTo(p, size); ctx.stroke();
-      }
-      const tex = new THREE.CanvasTexture(canvas);
-      tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.RepeatWrapping;
-      tex.colorSpace = THREE.SRGBColorSpace; // otherwise the texture renders far too dark under sRGB output
-      tex.repeat.set(6, 10); // 6x10 cell grid — a standard 60-cell module layout
-      return tex;
-    })();
+    const pvTexture = moduleTexture();
 
     panels.forEach((panel, panelIdx) => {
+      const { widthM: pw, depthM: ph } = dimensions(panel);
+      if (!(pw >= 0.1 && ph >= 0.1 && Number.isFinite(pw) && Number.isFinite(ph))) return;
       const tiltRad = panel.tilt * Math.PI / 180;
       // panel.azimuth is a standard compass bearing (0=N, 90=E, 180=S, 270=W —
       // the same convention dirFromAz() and sunPosition() use). Three.js's
@@ -1564,21 +1343,22 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
       assembly.userData.panelId = panel.id;
 
       const pGroup = new THREE.Group();
-      pGroup.rotation.x = -tiltRad;
+      pGroup.rotation.x = tiltRad;
       pGroup.position.y = MOUNT_H + Math.sin(tiltRad) * ph / 2;
 
-      const frame = new THREE.Mesh(new THREE.BoxGeometry(pw + 0.05, 0.06, ph + 0.05),
+      const frame = new THREE.Mesh(new THREE.BoxGeometry(pw, 0.035, ph),
         isSel ? new THREE.MeshStandardMaterial({ color: '#22C55E', roughness: 0.4, metalness: 0.6 }) : frameMat);
       pGroup.add(frame);
       // Tint over the PV texture for selection/shading/string states —
       // white leaves the texture's natural deep blue-black + silver grid
       // untouched, matching the reference images' glass-like module face.
       const tintColor = isSel ? '#22C55E' : (isShaded ? shadeColor : (showStrings ? stringColor : '#ffffff'));
-      const surf = new THREE.Mesh(new THREE.BoxGeometry(pw, 0.04, ph), new THREE.MeshPhysicalMaterial({
-        map: pvTexture, color: tintColor, roughness: 0.2, metalness: 0.1,
+      const surf = new THREE.Mesh(new THREE.BoxGeometry(pw - 0.025, 0.004, ph - 0.025), new THREE.MeshPhysicalMaterial({
+        map: pvTexture, color: tintColor, roughness: 0.35, metalness: 0.05,
         clearcoat: 0.6, clearcoatRoughness: 0.15,
       }));
-      surf.position.y = 0.05; surf.castShadow = true; surf.userData.panelId = panel.id;
+      surf.name = 'pv-face';
+      surf.position.y = 0.0195; surf.castShadow = true; surf.userData.panelId = panel.id;
       pGroup.add(surf);
       assembly.add(pGroup);
       pg.add(assembly);
@@ -1592,12 +1372,16 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
     // rail exactly one module wide on 2 legs — same visual language as a
     // full row, just narrower, so short/interrupted runs never look like a
     // different (denser, individually-legged) structure next to full rows.
-    const buildRack = (rackGroup: THREE.Group, lxs: number[], rowLz: number, tiltRad: number) => {
-      const backH = MOUNT_H + Math.sin(tiltRad) * ph, frontH = MOUNT_H;
+    const buildRack = (rackGroup: THREE.Group, lxs: number[], rowLz: number, tiltRad: number, pw = PANEL_W_M, ph = PANEL_H_M) => {
+      if (!(pw >= 0.1 && ph >= 0.1 && Number.isFinite(pw) && Number.isFinite(ph))) return;
+      const inset = ph * 0.18;
+      const centerH = MOUNT_H + Math.sin(tiltRad) * ph / 2;
+      const frontH = centerH - Math.sin(tiltRad) * (ph / 2 - inset) - 0.045;
+      const backH = centerH + Math.sin(tiltRad) * (ph / 2 - inset) - 0.045;
       const rowMinLx = Math.min(...lxs) - pw / 2, rowMaxLx = Math.max(...lxs) + pw / 2;
       const rowWidth = rowMaxLx - rowMinLx, rowCenterLx = (rowMinLx + rowMaxLx) / 2;
-      const frontZ = rowLz + ph / 2 - 0.08, backZ = rowLz - ph / 2 + 0.08;
-
+      const frontZ = rowLz + (ph / 2 - inset) * Math.cos(tiltRad);
+      const backZ = rowLz - (ph / 2 - inset) * Math.cos(tiltRad);
       const frontRail = new THREE.Mesh(new THREE.BoxGeometry(rowWidth, 0.05, 0.08), legMat);
       frontRail.position.set(rowCenterLx, frontH, frontZ); frontRail.castShadow = true;
       rackGroup.add(frontRail);
@@ -1609,13 +1393,13 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
       // run ends — far fewer supports than one set per panel.
       const sortedLx = [...lxs].sort((a, b) => a - b);
       const legXs = [rowMinLx];
-      for (let i = 0; i < sortedLx.length - 1; i++) legXs.push((sortedLx[i] + sortedLx[i + 1]) / 2);
+      for (let i = 1; i < sortedLx.length - 1; i += 2) legXs.push((sortedLx[i] + sortedLx[i + 1]) / 2);
       legXs.push(rowMaxLx);
 
       legXs.forEach(lx => {
-        const frontLeg = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, frontH), legMat);
+        const frontLeg = new THREE.Mesh(new THREE.BoxGeometry(0.08, frontH, 0.08), legMat);
         frontLeg.position.set(lx, frontH / 2, frontZ); frontLeg.castShadow = true; rackGroup.add(frontLeg);
-        const backLeg = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, backH), legMat);
+        const backLeg = new THREE.Mesh(new THREE.BoxGeometry(0.08, backH, 0.08), legMat);
         backLeg.position.set(lx, backH / 2, backZ); backLeg.castShadow = true; rackGroup.add(backLeg);
 
         // Diagonal rafter, parallel to the panel plane — the truss brace
@@ -1624,8 +1408,17 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
         const braceLen = Math.hypot(backH - frontH, backZ - frontZ);
         const brace = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.05, braceLen), legMat);
         brace.position.set(lx, (frontH + backH) / 2, (frontZ + backZ) / 2);
-        brace.rotation.x = -tiltRad; brace.castShadow = true;
+        brace.rotation.x = tiltRad; brace.castShadow = true;
         rackGroup.add(brace);
+        if (MOUNT_H > 1) {
+          const a = new THREE.Vector3(lx, frontH * 0.55, frontZ);
+          const b = new THREE.Vector3(lx, backH - 0.1, backZ);
+          const delta = b.clone().sub(a);
+          const diagonal = new THREE.Mesh(new THREE.BoxGeometry(0.055, delta.length(), 0.055), legMat);
+          diagonal.position.copy(a).add(b).multiplyScalar(0.5);
+          diagonal.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), delta.normalize());
+          diagonal.castShadow = true; rackGroup.add(diagonal);
+        }
 
         // Ballast blocks — weighted concrete feet, matching real roof-mount
         // racking hardware that doesn't penetrate the roof.
@@ -1655,13 +1448,13 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
       // the SAME builder above, so it still reads as the same rack style
       // rather than a different, denser stand.
       const sameTiltAzimuth = row.length > 1 && row.every(p =>
-        Math.abs(p.tilt - anchor.tilt) < 0.5 && Math.abs(((p.azimuth - anchor.azimuth + 540) % 360) - 180) < 0.5);
+        dimensions(p).widthM === dimensions(anchor).widthM && dimensions(p).depthM === dimensions(anchor).depthM && Math.abs(p.tilt - anchor.tilt) < 0.5 && Math.abs(((p.azimuth - anchor.azimuth + 540) % 360) - 180) < 0.5);
       if (!sameTiltAzimuth) {
         row.forEach(p => {
           const g = new THREE.Group();
           g.position.set(p.x, wallHeightM, p.z);
           g.rotation.y = (180 - p.azimuth) * Math.PI / 180;
-          buildRack(g, [0], 0, p.tilt * Math.PI / 180);
+          buildRack(g, [0], 0, p.tilt * Math.PI / 180, dimensions(p).widthM, dimensions(p).depthM);
           pg.add(g);
         });
         return;
@@ -1675,8 +1468,7 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
       // sent the rack's local frame off at the wrong angle, detaching the
       // whole rail/leg structure from the roof for anything but an
       // axis-aligned, due-south layout.
-      const last = row[row.length - 1];
-      const aziRad = Math.atan2(-(last.z - anchor.z), last.x - anchor.x);
+      const aziRad = (180 - anchor.azimuth) * Math.PI / 180;
 
       // Undo each panel's world position back into the row's own local
       // (unrotated, anchor-relative) frame — the exact inverse of how
@@ -1715,171 +1507,31 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
         rackGroup.position.set(anchor.x, wallHeightM, anchor.z);
         rackGroup.rotation.y = aziRad;
         const rowLz = segLocal.reduce((s, l) => s + l.z, 0) / segLocal.length;
-        buildRack(rackGroup, segLocal.map(l => l.x), rowLz, tiltRad);
+        buildRack(rackGroup, segLocal.map(l => l.x), rowLz, tiltRad, dimensions(anchor).widthM, dimensions(anchor).depthM);
         pg.add(rackGroup);
       });
     });
-  }, [panels, roofDims, selectedIds, wallHeightM, stringSize, showStrings, shadingResults, highlightShading, physicalOrderMap]);
+  }, [panels, roofDims, selectedIds, wallHeightM, stringSize, showStrings, shadingResults, highlightShading, physicalOrderMap, MOUNT_H, dimensions, parapetHeightM, topView]);
 
   // Rebuild obstacle meshes (skylights, AC units, water tanks, staircase
   // heads) — raised blocks sitting on the roof at their real footprint.
   useEffect(() => {
     const og = obstacleMeshGroup.current;
     if (!og || !roofDims) return;
-    while (og.children.length) og.remove(og.children[0]);
+    disposeSceneObjects(og);
+    og.clear();
     const WALL_H = wallHeightM;
 
-    const heightFor = (label: string): { h: number; color: string } => {
-      const l = label.toLowerCase();
-      if (l.includes('water')) return { h: 1.4, color: '#7C93A6' };   // tall cylindrical tank
-      if (l.includes('ac') || l.includes('hvac')) return { h: 0.7, color: '#94A3B8' };
-      if (l.includes('sky')) return { h: 0.15, color: '#BFDBFE' };     // low, glass-like
-      if (l.includes('stair')) return { h: 2.4, color: '#C8B8A0' };    // full stair headroom
-      if (l.includes('vent')) return { h: 0.9, color: '#9CA3AF' };
-      return { h: 0.8, color: '#A8A29E' };
-    };
-
-    // Shared light-gray matte "louvered vent" texture for AC units and roof
-    // vents — built once per effect run rather than per obstacle, reused
-    // across every AC/vent instance via RepeatWrapping.
-    const ventTexture = (() => {
-      const size = 64;
-      const canvas = document.createElement('canvas');
-      canvas.width = size; canvas.height = size;
-      const ctx = canvas.getContext('2d')!;
-      ctx.fillStyle = '#D6DBE1';
-      ctx.fillRect(0, 0, size, size);
-      ctx.strokeStyle = 'rgba(71,85,105,0.5)';
-      ctx.lineWidth = 2;
-      for (let y = 5; y < size; y += 7) {
-        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(size, y); ctx.stroke();
-      }
-      const tex = new THREE.CanvasTexture(canvas);
-      tex.colorSpace = THREE.SRGBColorSpace;
-      tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.RepeatWrapping;
-      return tex;
-    })();
-
-    // Deterministic per-obstacle pick (stable across rerenders, varies by
-    // obstacle id) — used to give each water-tank cluster a 2-4 tank count
-    // instead of every cluster looking identical.
-    const seededPick = (id: string, from: number, to: number) => {
-      let hash = 0;
-      for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) | 0;
-      return from + (Math.abs(hash) % (to - from + 1));
-    };
-
     obstacles.forEach(o => {
-      const { h, color } = heightFor(o.label);
-      const l = o.label.toLowerCase();
-      const isWaterTank = l.includes('water');
-      const isStaircase = l.includes('stair');
-      const isVentLike = l.includes('ac') || l.includes('hvac') || l.includes('vent');
-      const isSel = o.id === selectedObstacleId;
-      const group = new THREE.Group();
-      group.position.set(o.x, WALL_H, o.z);
-      group.rotation.y = o.rotDeg * Math.PI / 180;
-      group.userData.obstacleId = o.id;
-
-      const mat = isVentLike && !isSel
-        ? new THREE.MeshStandardMaterial({ map: ventTexture, color: '#ffffff', roughness: 0.9, metalness: 0 })
-        : new THREE.MeshLambertMaterial({ color: isSel ? '#22C55E' : color });
-      const edgeColor = isSel ? '#16A34A' : '#334155';
-
-      if (isWaterTank) {
-        // A cluster of 2-4 cylindrical tanks instead of a single box/
-        // enclosure — light gray/white with a touch of metalness, a
-        // slightly wider rim disc, and a domed cap so each tank reads as a
-        // real overhead water tank rather than a generic block.
-        const tankCount = seededPick(o.id, 2, 4);
-        const tankMat = new THREE.MeshStandardMaterial({ color: isSel ? '#22C55E' : '#E8EBEF', roughness: 0.45, metalness: 0.15 });
-        const rimMat = new THREE.MeshStandardMaterial({ color: isSel ? '#16A34A' : '#C7CDD4', roughness: 0.4, metalness: 0.25 });
-        const spacing = Math.max(o.w, o.d) / tankCount;
-        const diameter = Math.min(spacing * 0.82, Math.min(o.w, o.d) * 0.9);
-        const radius = Math.max(diameter / 2, 0.15);
-        const tankH = Math.max(h * 0.75, 0.4);
-        const alongWidth = o.w >= o.d;
-
-        for (let i = 0; i < tankCount; i++) {
-          const offset = (i - (tankCount - 1) / 2) * spacing;
-          const tx = alongWidth ? offset : 0;
-          const tz = alongWidth ? 0 : offset;
-
-          const bodyGeo = new THREE.CylinderGeometry(radius, radius, tankH, 20);
-          const body = new THREE.Mesh(bodyGeo, tankMat);
-          body.position.set(tx, tankH / 2, tz);
-          body.castShadow = true; body.receiveShadow = true;
-          body.userData.obstacleId = o.id;
-          group.add(body);
-
-          const rim = new THREE.Mesh(new THREE.CylinderGeometry(radius * 1.08, radius * 1.08, tankH * 0.08, 20), rimMat);
-          rim.position.set(tx, tankH - tankH * 0.04, tz);
-          rim.castShadow = true;
-          rim.userData.obstacleId = o.id;
-          group.add(rim);
-
-          const cap = new THREE.Mesh(new THREE.SphereGeometry(radius * 0.9, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2), rimMat);
-          cap.position.set(tx, tankH, tz);
-          cap.castShadow = true;
-          cap.userData.obstacleId = o.id;
-          group.add(cap);
-
-          const edges = new THREE.LineSegments(new THREE.EdgesGeometry(bodyGeo), new THREE.LineBasicMaterial({ color: edgeColor }));
-          edges.position.copy(body.position);
-          edges.userData.obstacleId = o.id;
-          group.add(edges);
-        }
-      } else if (isStaircase) {
-        // Boxy stair-access structure: main volume, a shallow sloped roof
-        // cap with a small eave overhang, and a darker inset door panel on
-        // the front face — reads as a rooftop stair headroom structure,
-        // not a plain cube.
-        const body = new THREE.Mesh(new THREE.BoxGeometry(o.w, h, o.d), mat);
-        body.position.y = h / 2;
-        body.castShadow = true; body.receiveShadow = true;
-        body.userData.obstacleId = o.id;
-        group.add(body);
-        const bodyEdges = new THREE.LineSegments(new THREE.EdgesGeometry(body.geometry), new THREE.LineBasicMaterial({ color: edgeColor }));
-        bodyEdges.position.copy(body.position);
-        bodyEdges.userData.obstacleId = o.id;
-        group.add(bodyEdges);
-
-        const overhang = 0.15;
-        const capMat = new THREE.MeshStandardMaterial({ color: isSel ? '#16A34A' : '#8B8378', roughness: 0.85, metalness: 0 });
-        const cap = new THREE.Mesh(new THREE.BoxGeometry(o.w + overhang * 2, 0.1, o.d + overhang * 2), capMat);
-        cap.position.y = h + 0.1;
-        cap.rotation.x = THREE.MathUtils.degToRad(6);
-        cap.castShadow = true; cap.receiveShadow = true;
-        cap.userData.obstacleId = o.id;
-        group.add(cap);
-
-        const doorW = Math.min(0.9, o.w * 0.45), doorH = Math.min(h * 0.85, 2.0);
-        const doorMat = new THREE.MeshStandardMaterial({ color: '#3F3B36', roughness: 0.6, metalness: 0 });
-        const door = new THREE.Mesh(new THREE.PlaneGeometry(doorW, doorH), doorMat);
-        door.position.set(0, doorH / 2, o.d / 2 + 0.005);
-        door.userData.obstacleId = o.id;
-        group.add(door);
-      } else {
-        const mesh = new THREE.Mesh(new THREE.BoxGeometry(o.w, h, o.d), mat);
-        mesh.position.y = h / 2;
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
-        mesh.userData.obstacleId = o.id;
-        group.add(mesh);
-
-        // Thin outline so obstacles read clearly against the roof (green when selected)
-        const edges = new THREE.LineSegments(
-          new THREE.EdgesGeometry(mesh.geometry),
-          new THREE.LineBasicMaterial({ color: edgeColor })
-        );
-        edges.position.copy(mesh.position);
-        edges.userData.obstacleId = o.id;
-        group.add(edges);
-      }
-
+      const h=o.heightM ?? defaultObstacleHeight(o.label);
+      if (![o.w,o.d,h].every(v=>Number.isFinite(v)&&v>0)) return;
+      const group=obstacleModel(o.label,o.w,o.d,h,o.id===selectedObstacleId);
+      group.position.set(o.x,WALL_H,o.z);
+      group.rotation.y=o.rotDeg*Math.PI/180;
+      group.traverse(obj=>{obj.userData.obstacleId=o.id;});
       og.add(group);
     });
-  }, [obstacles, roofDims, wallHeightM, selectedObstacleId]);
+  }, [obstacles, roofDims, wallHeightM, selectedObstacleId, parapetHeightM, topView]);
 
   // Real satellite ground imagery — a flat plane sized to the same
   // real-world ground coverage the fetched Static Maps image represents
@@ -1893,40 +1545,41 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
   useEffect(() => {
     const sg = satelliteMeshGroup.current;
     if (!sg) return;
-    while (sg.children.length) sg.remove(sg.children[0]);
+    sg.visible = showSatellite;
+    const ground = sceneRef.current?.getObjectByName('context-ground');
+    if (ground) ground.visible = true;
+    while (sg.children.length) {
+      const child = sg.children[0]; sg.remove(child); disposeSceneObjects(child);
+    }
     const geoCenter = roofCenterLatLng ?? mapConfig.center;
     if (!satelliteImageUrl || !geoCenter) return;
-
-    const groundMpp = metersPerPixel(geoCenter.lat, SATELLITE_ZOOM);
-    const imageSizeM = 640 * groundMpp;
-
-    const loader = new THREE.TextureLoader();
-    loader.load(satelliteImageUrl, (tex) => {
+    let cancelled = false;
+    const imageSizeM = 640 * metersPerPixel(geoCenter.lat, satelliteZoom);
+    new THREE.TextureLoader().load(satelliteImageUrl, tex => {
+      if (cancelled) { tex.dispose(); return; }
       tex.colorSpace = THREE.SRGBColorSpace;
-      const mesh = new THREE.Mesh(
-        new THREE.PlaneGeometry(imageSizeM, imageSizeM),
-        new THREE.MeshStandardMaterial({ map: tex, roughness: 0.95, metalness: 0 })
-      );
-      mesh.rotation.x = -Math.PI / 2;
-      // Sits between the paver (-0.04) and the contact-shadow blob (-0.01)
-      // so the shadow still darkens visibly on top of it. A 0.02 gap from
-      // the paver — matching the paver/far-grass precedent below — instead
-      // of the original 0.01, which wasn't enough separation to reliably
-      // win the depth test against the paver plane at typical camera
-      // distance (the paver kept showing through).
-      mesh.position.y = -0.02;
-      mesh.receiveShadow = true;
-      sg.add(mesh);
-    }, undefined, (err) => {
-      console.error('[satellite] texture load error', err);
+      tex.anisotropy = rendererRef.current?.capabilities.getMaxAnisotropy() ?? 1;
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(imageSizeM, imageSizeM),
+        new THREE.MeshBasicMaterial({ map: tex, toneMapped: false, fog: false }));
+      mesh.rotation.x = -Math.PI / 2; mesh.position.y = -0.08;
+      mesh.name = 'satellite-context'; sg.add(mesh);
+      needsRender.current = true;
+      if (ground) ground.visible = !showSatellite;
+      const shadows = new THREE.Mesh(new THREE.PlaneGeometry(imageSizeM, imageSizeM),
+        new THREE.ShadowMaterial({ opacity: 0.25, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1 }));
+      shadows.rotation.x = -Math.PI / 2; shadows.position.y = -0.04;
+      shadows.receiveShadow = true; sg.add(shadows);
     });
-  }, [satelliteImageUrl, roofCenterLatLng?.lat, roofCenterLatLng?.lng, mapConfig.center?.lat, mapConfig.center?.lng]);
+    return () => { cancelled = true; };
+  }, [satelliteImageUrl, satelliteZoom, showSatellite, roofDims, wallHeightM, parapetHeightM, roofSettings?.roofMaterial, roofCenterLatLng, mapConfig.center, topView]);
+
 
   // Render the zone rectangle (live while dragging, persists until Fill/Clear)
   useEffect(() => {
     const zg = zoneMeshGroup.current;
     if (!zg || !roofDims) return;
-    while (zg.children.length) zg.remove(zg.children[0]);
+    disposeSceneObjects(zg);
+    zg.clear();
     if (!zoneRect) return;
     const WALL_H = wallHeightM;
     const minX = Math.min(zoneRect.x1, zoneRect.x2), maxX = Math.max(zoneRect.x1, zoneRect.x2);
@@ -1952,7 +1605,7 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
       new THREE.LineBasicMaterial({ color: '#2563EB', linewidth: 2 })
     );
     zg.add(outline);
-  }, [zoneRect, roofDims, wallHeightM]);
+  }, [zoneRect, roofDims, wallHeightM, parapetHeightM, topView]);
 
   // ── Interaction ──
   useEffect(() => {
@@ -1964,6 +1617,7 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
     let boxStart: { x: number; y: number } | null = null;
     let dragKind: 'panel' | 'obstacle' | null = null;
     let dragLast: { x: number; z: number } | null = null;
+    let draggedObstacle: {id:string; mesh:THREE.Object3D; x:number; z:number} | null = null;
     let zoneDragStart: { x: number; z: number } | null = null;
 
     const getMouse = (e: MouseEvent) => {
@@ -2002,11 +1656,13 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
       return o?.userData.obstacleId || null;
     };
 
-    const onDown = (e: MouseEvent) => {
+    const onDown = (e: PointerEvent) => {
       if (e.button !== 0) return;
       const m = modeRef.current;
       getMouse(e);
-      if (m === 'orbit') return;
+      if (readOnly || m === 'orbit' || m === 'pan') return;
+      if (e.pointerType === 'touch' && !e.isPrimary) return;
+      dom.setPointerCapture(e.pointerId);
 
       if (m === 'zone') {
         controls.enabled = false;
@@ -2030,6 +1686,8 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
         if (hitObsId) {
           setSelectedObstacleId(hitObsId);
           setSelectedIds([]);
+          const mesh=obstacleMeshGroup.current?.children.find(o=>o.userData.obstacleId===hitObsId);
+          if (mesh) draggedObstacle={id:hitObsId,mesh,x:mesh.position.x,z:mesh.position.z};
           dragKind = 'obstacle'; controls.enabled = false; dragLast = roofIntersect();
           return;
         }
@@ -2051,7 +1709,7 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
         setBoxSel({ x1: sx, y1: sy, x2: sx, y2: sy });
       }
     };
-    const onMove = (e: MouseEvent) => {
+    const onMove = (e: PointerEvent) => {
       const m = modeRef.current;
       getMouse(e);
       if (m === 'drag' && dragKind && dragLast) {
@@ -2063,8 +1721,12 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
             setPanels(prev => prev.map(p => sel.includes(p.id) ? { ...p, x: p.x + dx, z: p.z + dz } : p));
             rotateSnapshotRef.current = null; // positions moved — any cached rotation snapshot is now stale
           } else if (dragKind === 'obstacle') {
-            const id = selectedObstacleIdRef.current;
-            if (id) setObstacles(prev => prev.map(o => o.id === id ? { ...o, x: o.x + dx, z: o.z + dz } : o));
+            if (draggedObstacle) {
+              const mesh=obstacleMeshGroup.current?.children.find(o=>o.userData.obstacleId===draggedObstacle!.id);
+              draggedObstacle.x+=dx; draggedObstacle.z+=dz;
+              if (mesh) { mesh.position.x=draggedObstacle.x; mesh.position.z=draggedObstacle.z; }
+              needsRender.current=true;
+            }
           }
           dragLast = cur;
         }
@@ -2078,9 +1740,17 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
         if (cur) setZoneRect({ x1: zoneDragStart.x, z1: zoneDragStart.z, x2: cur.x, z2: cur.z });
       }
     };
-    const onUp = (e: MouseEvent) => {
+    const onUp = (e: PointerEvent) => {
+      if (dom.hasPointerCapture(e.pointerId)) dom.releasePointerCapture(e.pointerId);
       const m = modeRef.current;
-      if (m === 'drag') { if (dragKind === 'panel') pruneOutOfBoundsPanels(); dragKind = null; dragLast = null; controls.enabled = true; }
+      if (m === 'drag') {
+        if (dragKind === 'panel') prunePanelsRef.current();
+        if (draggedObstacle) {
+          const final=draggedObstacle;
+          setObstacles(prev=>prev.map(o=>o.id===final.id?{...o,x:final.x,z:final.z}:o));
+        }
+        draggedObstacle=null; dragKind = null; dragLast = null; controls.enabled = true;
+      }
       if (m === 'zone') { zoneDragStart = null; controls.enabled = true; }
       if (m === 'select' && boxStart) {
         const { rect } = getMouse(e);
@@ -2101,21 +1771,39 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
       }
     };
 
-    dom.addEventListener('mousedown', onDown);
-    dom.addEventListener('mousemove', onMove);
-    dom.addEventListener('mouseup', onUp);
-    return () => {
-      dom.removeEventListener('mousedown', onDown);
-      dom.removeEventListener('mousemove', onMove);
-      dom.removeEventListener('mouseup', onUp);
+    const onCancel = () => {
+      if (draggedObstacle) {
+        const original=obstaclesRef.current.find(o=>o.id===draggedObstacle!.id);
+        const mesh=obstacleMeshGroup.current?.children.find(o=>o.userData.obstacleId===draggedObstacle!.id);
+        if (original && mesh) {mesh.position.x=original.x;mesh.position.z=original.z;needsRender.current=true;}
+        draggedObstacle=null;
+      }
+      dragKind = null; dragLast = null; boxStart = null; zoneDragStart = null;
+      setBoxSel(null); controls.enabled = true; prunePanelsRef.current();
     };
-  }, [roofDims, wallHeightM, pruneOutOfBoundsPanels]);
+    dom.addEventListener('pointerdown', onDown);
+    dom.addEventListener('pointermove', onMove);
+    dom.addEventListener('pointerup', onUp);
+    dom.addEventListener('pointercancel', onCancel);
+    return () => {
+      dom.removeEventListener('pointerdown', onDown);
+      dom.removeEventListener('pointermove', onMove);
+      dom.removeEventListener('pointerup', onUp);
+      dom.removeEventListener('pointercancel', onCancel);
+    };
+  }, [roofDims, wallHeightM, readOnly, parapetHeightM, topView]);
 
   useEffect(() => {
-    if (controlsRef.current) controlsRef.current.enabled = (mode === 'orbit');
-  }, [mode]);
+    const controls = controlsRef.current;
+    if (!controls) return;
+    controls.enabled = true;
+    controls.enableRotate = !topView && (mode === 'orbit' || readOnly);
+    controls.mouseButtons.LEFT = mode === 'pan' || (topView && mode === 'orbit') ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE;
+    controls.touches.ONE = mode === 'pan' || (topView && mode === 'orbit') ? THREE.TOUCH.PAN : THREE.TOUCH.ROTATE;
+    controls.enablePan = true;
+  }, [mode, readOnly, roofDims, wallHeightM, parapetHeightM, topView]);
 
-  const kwp = (panels.length * PANEL_POWER) / 1000;
+  const kwp = totalPower / 1000;
   // Panels are already generated in row-major order (row by row, left to
   // right) by Auto-Fill/Zone-Fill/Manual Grid, so array index order already
   // tracks physical adjacency reasonably well — good enough to group into
@@ -2136,8 +1824,7 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
   // Live, numeric verification instead of eyeballing shadows in a screenshot —
   // the decorative cone marker doesn't actually indicate true north, so this
   // is the only reliable way to confirm which way panels really face.
-  const liveDoy = Math.floor((month - 1) * 30.4) + 15;
-  const liveSun = sunPosition(lat, hour, liveDoy);
+  const liveSun = sunPosition(hour);
   const panelFacingAz = panels[0]?.azimuth ?? globalAzimuth;
 
   if (!roofDims) {
@@ -2150,95 +1837,98 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
     );
   }
 
-  const btn = (bg: string, color = '#fff'): React.CSSProperties => ({ width: '100%', padding: '9px 0', borderRadius: 8, border: 'none', background: bg, color, fontSize: 12, fontWeight: 600, cursor: 'pointer' });
 
+  const btn = (bg: string, color = '#fff'): React.CSSProperties => ({ width: '100%', padding: '9px 0', borderRadius: 5, border: 'none', background: bg, color, fontSize: 12, fontWeight: 600, cursor: 'pointer' });
+  const zoomCamera = (factor: number) => {
+    const camera = cameraRef.current, controls = controlsRef.current;
+    if (!camera || !controls) return;
+    if (camera instanceof THREE.OrthographicCamera) {
+      camera.zoom=Math.max(.1,Math.min(30,camera.zoom/factor));
+      camera.updateProjectionMatrix(); needsRender.current=true; return;
+    }
+    const offset = camera.position.clone().sub(controls.target);
+    offset.setLength(Math.min(controls.maxDistance, Math.max(controls.minDistance, offset.length() * factor)));
+    camera.position.copy(controls.target).add(offset); controls.update();
+  };
+  const frameCamera = (top = false) => {
+    if (top !== topView) { setTopView(top); return; }
+    const camera = cameraRef.current, controls = controlsRef.current;
+    if (!camera || !controls) return;
+    const span = Math.max(roofDims.widthM, roofDims.heightM, wallHeightM);
+    const distance = camera instanceof THREE.PerspectiveCamera
+      ? span * 0.75 / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) / Math.min(1, camera.aspect)
+      : span * 2;
+    camera.zoom=1; camera.updateProjectionMatrix();
+    controls.target.set(0, wallHeightM, 0);
+    camera.position.copy(controls.target).add(new THREE.Vector3(top ? 0 : .5, top ? 1 : .6, top ? 0 : .9).normalize().multiplyScalar(distance));
+    controls.update();
+  };
+  const iconButton = (label: string, icon: React.ReactNode, action: () => void, active?: boolean) => <button type="button" title={label} aria-label={label} aria-pressed={active} onClick={action}>{icon}</button>;
+  const sections = [
+    { id: 'panels', name: 'Panels', icon: <PanelTop size={18}/> },
+    { id: 'obstacles', name: 'Obstacles', icon: <Box size={18}/> },
+    { id: 'building', name: 'Building', icon: <Home size={18}/> },
+    { id: 'electrical', name: 'Electrical', icon: <Cable size={18}/> },
+    { id: 'analysis', name: 'Analysis', icon: <Sun size={18}/> },
+  ];
   return (
-    <div style={{ position: 'absolute', inset: 0, zIndex: 10, background: 'var(--design-bg)', display: 'flex', flexDirection: 'column' }}>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', background: 'var(--design-panel)', borderBottom: '1px solid var(--design-border)', flexShrink: 0 }}>
-        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--design-text)' }}>{readOnly ? (project.clientName && project.clientName !== 'New Client' ? project.clientName : 'Solar Design') : '3D Solar Designer'}</span>
-        <span style={{ fontSize: 11, color: 'var(--design-muted)', background: 'var(--design-panel-elevated)', border: '1px solid var(--design-border)', borderRadius: 4, padding: '2px 8px' }}>{panels.length} panels</span>
-        <span style={{ fontSize: 11, color: 'var(--design-primary)', background: 'var(--design-info-bg)', border: '1px solid var(--design-info-border)', borderRadius: 4, padding: '2px 8px' }}>{kwp.toFixed(2)} kWp</span>
-        {!readOnly && <span style={{ fontSize: 11, color: 'var(--design-muted)', background: 'var(--design-panel-elevated)', border: '1px solid var(--design-border)', borderRadius: 4, padding: '2px 8px' }}>Roof {roofDims.widthM.toFixed(1)} × {roofDims.heightM.toFixed(1)} m</span>}
-        {panels.length > 0 && (
-          <span style={{ fontSize: 11, color: 'var(--design-navy)', background: 'var(--design-info-bg)', border: '1px solid var(--design-info-border)', borderRadius: 4, padding: '2px 8px' }} title="Which way the panels physically face, computed from the design — not a guess from shadows">
-            🧭 Panels face {Math.round(panelFacingAz)}° ({dirFromAz(panelFacingAz)})
-          </span>
-        )}
-        <span style={{ fontSize: 11, color: 'var(--design-warning-text)', background: 'var(--design-warning-bg)', border: '1px solid var(--design-warning-border)', borderRadius: 4, padding: '2px 8px' }} title="Live sun position for the current hour/month sliders below">
-          ☀ Sun {Math.round(liveSun.azimuth)}° ({dirFromAz(liveSun.azimuth)}) · {Math.round(liveSun.elevation)}° up
-        </span>
-        {!readOnly && obstacles.length > 0 && (
-          <span style={{ fontSize: 11, color: 'var(--design-obstacle-text)', background: 'var(--design-obstacle-bg)', border: '1px solid var(--design-obstacle-border)', borderRadius: 4, padding: '2px 8px' }}>⛔ {obstacles.length} obstacle{obstacles.length > 1 ? 's' : ''} avoided</span>
-        )}
-        {!readOnly && selCount > 0 && <span style={{ fontSize: 11, color: 'var(--design-navy)', background: 'var(--design-info-bg)', border: '1px solid var(--design-info-border)', borderRadius: 4, padding: '2px 8px' }}>{selCount} selected</span>}
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-          {readOnly ? (
-            <>
-              <span style={{ fontSize: 10, color: 'var(--design-muted-2)' }}>Drag to orbit · scroll to zoom</span>
-            </>
-          ) : (
-            <>
-              <button
-                onClick={() => setAdvancedMode(a => !a)}
-                title={advancedMode ? 'Switch to the simplified view' : 'Show manual grid, per-panel editing, sun path & more'}
-                style={{ padding: '5px 12px', borderRadius: 5, border: '1px solid var(--design-border)', background: advancedMode ? 'var(--design-text)' : 'var(--design-input-bg)', color: advancedMode ? '#fff' : 'var(--design-text-secondary)', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}
-              >
-                {advancedMode ? '⚙ Advanced' : '⚡ Simple'}
-              </button>
-              <div style={{ display: 'flex', gap: 3, background: 'var(--design-panel-elevated)', padding: 3, borderRadius: 8, border: '1px solid var(--design-border)' }}>
-                {([['orbit', '🔄 Orbit'], ['zone', '📐 Zone'], ['select', '⬚ Select'], ['drag', '✋ Move']] as const).map(([m, label]) => (
-                  <button key={m} onClick={() => setMode(m)} style={{ padding: '5px 12px', borderRadius: 6, border: 'none', background: mode === m ? TX.navy : 'transparent', color: mode === m ? '#fff' : 'var(--design-muted)', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>{label}</button>
-                ))}
-              </div>
-              <button onClick={onClose} style={{ padding: '5px 14px', borderRadius: 5, border: 'none', background: 'var(--design-primary)', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>← Back to 2D</button>
-            </>
-          )}
+    <div className="design-studio">
+      <header className="design-studio-header">
+        {!readOnly && iconButton('Back to 2D', <ArrowLeft size={18}/>, onClose)}
+        <div className="design-studio-title"><strong>{project.clientName && project.clientName !== 'New Client' ? project.clientName : 'Solar Designer'}</strong><span>{panels.length} panels · {kwp.toFixed(2)} kWp</span></div>
+        <div className="design-studio-actions">
+          {!readOnly && <button aria-label="Save design" title="Save design" disabled={saveStatus === 'saving'} onClick={async () => {
+            setSaveError('');
+            try {
+              await useDesignStore.getState().saveToSupabase();
+              if (useDesignStore.getState().saveStatus !== 'saved') setSaveError('Could not save. Please try again.');
+            } catch { setSaveError('Could not save. Please try again.'); }
+          }}><Save size={17}/></button>}
+          {iconButton('Export client view', <Download size={17}/>, exportClientView)}
+          {iconButton('Properties', <SlidersHorizontal size={17}/>, () => setInspectorOpen(v => !v), inspectorOpen)}
         </div>
-      </div>
-
-      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-        <div ref={mountRef} style={{ flex: 1, position: 'relative', cursor: mode === 'drag' ? 'move' : (mode === 'select' || mode === 'zone') ? 'crosshair' : 'grab' }}>
-          {boxSel && (
-            <div style={{ position: 'absolute', border: '1.5px solid var(--design-primary)', background: 'rgba(37,99,235,.1)', left: Math.min(boxSel.x1, boxSel.x2), top: Math.min(boxSel.y1, boxSel.y2), width: Math.abs(boxSel.x2 - boxSel.x1), height: Math.abs(boxSel.y2 - boxSel.y1), pointerEvents: 'none', borderRadius: 2 }} />
-          )}
+      </header>
+      <div className="design-studio-body">
+        {!readOnly && <nav className="design-studio-rail" aria-label="3D design tools">
+          {sections.map(section => <button key={section.id} title={section.name} aria-label={section.name} aria-pressed={toolPanel === section.id} onClick={() => { setToolPanel(section.id); setInspectorOpen(true); }} >{section.icon}<span>{section.name}</span></button>)}
+        </nav>}
+        <div className="design-studio-viewport">
+          <div ref={mountRef} className="design-studio-canvas" style={{cursor: mode === 'drag' ? 'move' : (mode === 'orbit' || mode === 'pan') ? 'grab' : 'crosshair'}}>
+            {boxSel && <div style={{ position: 'absolute', border: '1.5px solid var(--design-primary)', background: 'rgba(37,99,235,.1)', left: Math.min(boxSel.x1, boxSel.x2), top: Math.min(boxSel.y1, boxSel.y2), width: Math.abs(boxSel.x2-boxSel.x1), height: Math.abs(boxSel.y2-boxSel.y1), pointerEvents: 'none' }}/>}
+          </div>
+          {!readOnly && <div className="design-studio-modes" role="toolbar" aria-label="Interaction mode">
+            {iconButton('Orbit', <Orbit size={18}/>, () => setMode('orbit'), mode === 'orbit')}
+            {iconButton('Pan camera', <Hand size={18}/>, () => setMode('pan'), mode === 'pan')}
+            {iconButton('Select panels or obstacle', <MousePointer2 size={18}/>, () => setMode('select'), mode === 'select')}
+            {iconButton('Move selection', <Move size={18}/>, () => setMode('drag'), mode === 'drag')}
+            {iconButton('Select fill area', <Scan size={18}/>, () => { setMode('zone'); setToolPanel('panels'); setInspectorOpen(true); }, mode === 'zone')}
+          </div>}
+          <div className="design-studio-camera" role="toolbar" aria-label="Camera">
+            {readOnly && iconButton('Pan camera', <Move size={18}/>, () => setMode(v => v === 'pan' ? 'orbit' : 'pan'), mode === 'pan')}
+            {iconButton('Zoom in', <ZoomIn size={18}/>, () => zoomCamera(.8))}
+            {iconButton('Zoom out', <ZoomOut size={18}/>, () => zoomCamera(1.25))}
+            {iconButton('Fit roof', <Maximize size={18}/>, () => frameCamera())}
+            {iconButton('Satellite context', <MapIcon size={18}/>, () => setShowSatellite(v => !v), showSatellite)}
+            {iconButton('Top view', <Layers size={18}/>, () => frameCamera(true))}
+            {iconButton('Perspective view', <Box size={18}/>, () => frameCamera())}
+          </div>
         </div>
-
-        <div style={{ width: 280, background: 'var(--design-panel)', borderLeft: '1px solid var(--design-border)', padding: 16, overflowY: 'auto', flexShrink: 0 }}>
-          {readOnly ? (
-            <>
-              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--design-navy)', marginBottom: 4 }}>
-                {project.clientName && project.clientName !== 'New Client' ? project.clientName : 'Proposed Solar System'}
-              </div>
-              {project.address && project.address !== 'Enter address...' && (
-                <div style={{ fontSize: 11, color: 'var(--design-muted)', marginBottom: 14 }}>{project.address}</div>
-              )}
-              <div style={{ background: 'var(--design-info-bg)', border: '1px solid var(--design-info-border)', borderRadius: 8, padding: 14, marginBottom: 16 }}>
-                <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--design-navy)', marginBottom: 6 }}>{kwp.toFixed(2)} kWp</div>
-                <div style={{ fontSize: 11, color: 'var(--design-text-secondary)', lineHeight: 1.6 }}>
-                  {panels.length} panels<br/>
-                  Facing {dirFromAz(panelFacingAz)}<br/>
-                  Estimated ~{(kwp * 1332 / 1000).toFixed(1)} MWh/year
-                </div>
-              </div>
-              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-text-secondary)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 12 }}>☀ See the Sun Move</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                <button onClick={() => setAnimating(a => !a)} style={{ flex: 1, padding: '8px 0', borderRadius: 7, border: 'none', background: animating ? 'var(--design-danger-solid)' : 'var(--design-primary)', color: '#fff', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>{animating ? '⏸ Pause' : '▶ Play Day'}</button>
-                <span style={{ fontSize: 13, color: 'var(--design-navy)', fontWeight: 700, fontFamily: 'monospace' }}>{Math.floor(hour)}:{String(Math.round((hour % 1) * 60)).padStart(2, '0')}</span>
-              </div>
-              <input type="range" min={6} max={19} step={0.25} value={hour} onChange={e => { setHour(Number(e.target.value)); setAnimating(false); }} style={{ width: '100%', accentColor: '#0EA5E9', marginBottom: 4 }} />
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: 'var(--design-muted-2)', marginBottom: 10 }}><span>6AM</span><span>Noon</span><span>7PM</span></div>
-              <Slider label="Month" value={month} min={1} max={12} color="#0EA5E9" suffix={` ${monthNames[month - 1]}`} onChange={setMonth} />
-              <div style={{ marginTop: 16, fontSize: 9.5, color: 'var(--design-muted-2)', textAlign: 'center', lineHeight: 1.5 }}>
-                Drag to orbit around the building · scroll to zoom · this is a live 3D model of your actual rooftop
-              </div>
-            </>
-          ) : (
-          <>
-          {/* ── Always visible: the one thing every vendor needs ── */}
-          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-navy)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>⚡ Design My Roof</div>
+        <aside className="design-studio-inspector" data-open={inspectorOpen} aria-label="Design properties">
+          <header><strong>{readOnly ? 'System overview' : sections.find(s => s.id === toolPanel)?.name}</strong>{iconButton('Close properties', <X size={16}/>, () => setInspectorOpen(false))}</header>
+          <div className="design-studio-properties">
+          {readOnly ? <><h3>{kwp.toFixed(2)} kWp</h3><p>{panels.length} panels</p><p>{project.address}</p><p>Facing {dirFromAz(panelFacingAz)}</p></> : <>
+          {toolPanel === 'panels' && <>
+            <details><summary>Module specification</summary>
+              <p>{equipment.panelModel || 'No module selected'}</p>
+              <NumberField label="Module width (mm)" value={equipment.panelWidth} min={100} max={10000} onChange={v => useDesignStore.getState().updateEquipment({ panelWidth: v })}/>
+              <NumberField label="Module length (mm)" value={equipment.panelHeight} min={100} max={10000} onChange={v => useDesignStore.getState().updateEquipment({ panelHeight: v })}/>
+              <NumberField label="Module power (W)" value={equipment.panelPower} min={1} max={5000} onChange={v => useDesignStore.getState().updateEquipment({ panelPower: v })}/>
+              <label><input type="checkbox" checked={!!equipment.specificationsConfirmed} onChange={e => useDesignStore.getState().updateEquipment({ specificationsConfirmed: e.target.checked })}/> Specifications checked against manufacturer data</label>
+              <p>Changes apply to new modules. Existing modules retain their saved specifications.</p>
+            </details>          {/* ── Always visible: the one thing every vendor needs ── */}
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-navy)', letterSpacing: 0, textTransform: 'uppercase', marginBottom: 8 }}>Design My Roof</div>
           <div style={{ marginBottom: 8 }}>
-            <label style={{ fontSize: 10, color: 'var(--design-muted)', display: 'block', marginBottom: 4 }}>Target System Size (kW) — or set it high to fill the whole roof</label>
+            <label style={{ fontSize: 10, color: 'var(--design-muted)', display: 'block', marginBottom: 4 }}>Target capacity (kW)</label>
             <input type="number" min={1} max={5000} value={targetKw}
               onChange={e => setTargetKw(Math.max(1, Number(e.target.value)))}
               style={{ width: '100%', padding: '8px', background: 'var(--design-input-bg)', border: '1px solid var(--design-border)', borderRadius: 5, color: 'var(--design-text)', fontSize: 14, fontWeight: 700, textAlign: 'center', boxSizing: 'border-box' }} />
@@ -2246,94 +1936,52 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
 
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, padding: '8px 10px', background: forceTrueSouth ? 'var(--design-info-bg)' : 'var(--design-input-bg)', border: `1px solid ${forceTrueSouth ? 'var(--design-info-border)' : 'var(--design-border)'}`, borderRadius: 6, cursor: 'pointer' }}>
             <input type="checkbox" checked={forceTrueSouth} onChange={e => setForceTrueSouth(e.target.checked)} style={{ accentColor: 'var(--design-primary)' }} />
-            <span style={{ fontSize: 11, color: 'var(--design-navy)', fontWeight: 600 }}>☀ Force true south</span>
+            <span style={{ fontSize: 11, color: 'var(--design-navy)', fontWeight: 600 }}>Force true south</span>
           </label>
-          <div style={{ fontSize: 9.5, color: 'var(--design-muted-2)', marginBottom: 10, lineHeight: 1.4 }}>
-            Off (default): rows align to the roof's longest edge for the tightest fit — usually south-facing, but not always, depending on the building's shape. On: rows always run due south, even if that means slightly less efficient use of odd corners. Re-run Design My Roof / Perfect Align after toggling.
-          </div>
 
-          <button onClick={() => autoFillToTarget()} style={{ ...btn('var(--design-navy)'), marginBottom: 6, fontSize: 14, padding: '13px 0' }}>⚡ Design My Roof</button>
-          <div style={{ fontSize: 10, color: 'var(--design-muted-2)', marginBottom: panels.length > 0 ? 10 : 16, lineHeight: 1.4 }}>
-            Panels face the optimal direction automatically and route around anything marked below — you don't need to set anything else.
-          </div>
+
+          <button onClick={() => autoFillToTarget()} style={{ ...btn('var(--design-navy)'), marginBottom: 6, fontSize: 14, padding: '13px 0' }}>Design My Roof</button>
+
 
           {panels.length > 0 && (
             <div style={{ background: 'var(--design-info-bg)', border: '1px solid var(--design-info-border)', borderRadius: 8, padding: 12, marginBottom: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--design-navy)', marginBottom: 4 }}>✓ {panels.length} panels · {kwp.toFixed(2)} kWp</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--design-navy)', marginBottom: 4 }}>{panels.length} panels · {kwp.toFixed(2)} kWp</div>
               <div style={{ fontSize: 11, color: 'var(--design-text-secondary)', lineHeight: 1.5, marginBottom: 10 }}>
-                Estimated ~{(kwp * 1332 / 1000).toFixed(1)} MWh/year — roughly {Math.round(kwp * 1332 / 1200)} average Indian homes' worth of power.
+                DC nameplate capacity. Energy yield has not been calculated.
               </div>
-              <button onClick={alignAllToBuilding} style={{ ...btn('var(--design-navy)'), fontSize: 11.5, marginBottom: 6 }}>🧭 Perfect Align (fix crossing/overhang)</button>
-              <div style={{ fontSize: 9.5, color: 'var(--design-muted)', marginBottom: 10, lineHeight: 1.4 }}>
-                Rebuilds the same panel count freshly aligned to the roof edge — use this instead of manually rotating if things look crossed or hang past the edge.
-              </div>
-              <button onClick={exportClientView} style={{ ...btn('var(--design-primary)'), fontSize: 11.5, marginBottom: 6 }}>📸 Export Client View</button>
-              <div style={{ fontSize: 9.5, color: 'var(--design-muted)', marginBottom: 10, lineHeight: 1.4 }}>
-                Orbit to a good angle first, then export — saves a PNG with the client's name, address & system size captioned on it, ready for WhatsApp or the quote PDF.
-              </div>
-              <button onClick={generateQuote} style={{ ...btn('var(--design-primary)'), fontSize: 11.5 }}>📄 Generate Quote</button>
-              <div style={{ fontSize: 9.5, color: 'var(--design-muted)', marginTop: 6, lineHeight: 1.4 }}>
-                Opens the quote generator pre-filled with this system's size, panel count & estimated generation.
-              </div>
+              <button disabled={!equipmentValid || !equipment.specificationsConfirmed} onClick={alignAllToBuilding} style={{ ...btn('var(--design-navy)'), fontSize: 11.5, marginBottom: 6 }}>Align to roof</button>
+
+              <button onClick={exportClientView} style={{ ...btn('var(--design-primary)'), fontSize: 11.5, marginBottom: 6 }}>Export Client View</button>
+
+              <button onClick={generateQuote} style={{ ...btn('var(--design-primary)'), fontSize: 11.5 }}>Generate Quote</button>
+
             </div>
           )}
 
           {/* ── Always visible: fill just one area of the roof (Solar Ladder-style) ── */}
-          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-primary)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>📐 Fill a Specific Area</div>
-          <div style={{ fontSize: 10, color: 'var(--design-muted-2)', marginBottom: 8, lineHeight: 1.4 }}>
-            Switch to <strong>📐 Zone</strong> above, then drag a box over just the section of roof you want — around a chimney, on one wing of an L-shaped building, whatever you like.
-          </div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-primary)', letterSpacing: 0, textTransform: 'uppercase', marginBottom: 8 }}>Fill a Specific Area</div>
+
           {zoneRect ? (
             <div style={{ background: 'var(--design-info-bg)', border: '1px solid var(--design-info-border)', borderRadius: 8, padding: 12, marginBottom: 16 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-navy)', marginBottom: 8 }}>
-                ● Area selected: {Math.abs(zoneRect.x2 - zoneRect.x1).toFixed(1)} × {Math.abs(zoneRect.z2 - zoneRect.z1).toFixed(1)} m
+                Area selected: {Math.abs(zoneRect.x2 - zoneRect.x1).toFixed(1)} × {Math.abs(zoneRect.z2 - zoneRect.z1).toFixed(1)} m
               </div>
               <label style={{ fontSize: 10, color: 'var(--design-muted)', display: 'block', marginBottom: 4 }}>Panels for this area (kW)</label>
               <input type="number" min={0.5} max={500} step={0.5} value={zoneTargetKw}
                 onChange={e => setZoneTargetKw(Math.max(0.5, Number(e.target.value)))}
                 style={{ width: '100%', padding: '7px', background: 'var(--design-input-bg)', border: '1px solid var(--design-border)', borderRadius: 5, color: 'var(--design-text)', fontSize: 13, fontWeight: 700, textAlign: 'center', boxSizing: 'border-box', marginBottom: 8 }} />
               <div style={{ display: 'flex', gap: 6 }}>
-                <button onClick={fillZone} style={{ ...btn('var(--design-primary)'), fontSize: 12 }}>⚡ Fill This Area</button>
-                <button onClick={clearZone} style={{ ...btn('var(--design-input-bg)', 'var(--design-muted)'), border: '1px solid var(--design-border)', flexShrink: 0, width: 'auto', padding: '9px 14px' }}>✕</button>
+                <button disabled={!equipmentValid || !equipment.specificationsConfirmed} onClick={fillZone} style={{ ...btn('var(--design-primary)'), fontSize: 12 }}>Fill This Area</button>
+                <button onClick={clearZone} title="Clear area" aria-label="Clear area" style={{ ...btn('var(--design-input-bg)', 'var(--design-muted)'), border: '1px solid var(--design-border)', flexShrink: 0, width: 'auto', padding: '9px 14px' }}><X size={14}/></button>
               </div>
             </div>
           ) : (
             <div style={{ background: 'var(--design-panel-elevated)', border: '1px solid var(--design-border)', borderRadius: 8, padding: 10, marginBottom: 16, fontSize: 10.5, color: 'var(--design-muted)', textAlign: 'center', lineHeight: 1.5 }}>
-              No area selected yet — drag on the roof in 📐 Zone mode to pick one.
+              No area selected.
             </div>
           )}
 
-          {/* ── Always visible: obstacle marking, needed for accuracy by everyone ── */}
-          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-obstacle-text)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>⛔ Mark Roof Obstacles</div>
-          <div style={{ fontSize: 10, color: 'var(--design-muted-2)', marginBottom: 8, lineHeight: 1.4 }}>Tap what's actually on the roof — water tanks, AC units, staircases — so panels avoid them.</div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 10 }}>
-            {(['AC Unit', 'Water Tank', 'Skylight', 'Staircase', 'Vent'] as const).map(label => (
-              <button key={label} onClick={() => addObstacleAtCenter(label)}
-                style={{ padding: '7px 4px', borderRadius: 6, border: '1px solid var(--design-obstacle-border)', background: 'var(--design-obstacle-bg)', color: 'var(--design-obstacle-text)', fontSize: 10.5, fontWeight: 600, cursor: 'pointer' }}>
-                + {label}
-              </button>
-            ))}
-          </div>
-          {selectedObstacle ? (
-            <div style={{ background: 'var(--design-obstacle-bg)', border: '1px solid var(--design-obstacle-border)', borderRadius: 8, padding: 12, marginBottom: 16 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-obstacle-text)', marginBottom: 10 }}>● {selectedObstacle.label} selected</div>
-              <Slider label="Width" value={Number(selectedObstacle.w.toFixed(2))} min={0.3} max={5} color="var(--design-obstacle-text)" suffix=" m" onChange={v => updateObstacle(selectedObstacle.id, { w: v })} />
-              <Slider label="Depth" value={Number(selectedObstacle.d.toFixed(2))} min={0.3} max={5} color="var(--design-obstacle-text)" suffix=" m" onChange={v => updateObstacle(selectedObstacle.id, { d: v })} />
-              <Slider label="Rotation" value={Math.round(selectedObstacle.rotDeg)} min={0} max={360} color="var(--design-primary)" suffix="°" onChange={v => updateObstacle(selectedObstacle.id, { rotDeg: v })} />
-              <div style={{ fontSize: 10, color: 'var(--design-obstacle-text)', marginBottom: 8, lineHeight: 1.4 }}>Use <strong>✋ Move</strong> to drag it into position, then hit <strong>⚡ Design My Roof</strong> again.</div>
-              <button onClick={() => deleteObstacle(selectedObstacle.id)} style={btn('var(--design-danger-solid)')}>🗑 Delete Obstacle</button>
-            </div>
-          ) : (
-            <div style={{ background: 'var(--design-panel-elevated)', border: '1px solid var(--design-border)', borderRadius: 8, padding: 10, marginBottom: 16, fontSize: 10.5, color: 'var(--design-muted)', textAlign: 'center', lineHeight: 1.5 }}>
-              Tap a type above to place it, then <strong>✋ Move</strong> to position it or click it directly to select, resize & rotate.
-            </div>
-          )}
-          {/* ── Advanced-only: manual grids, per-panel editing, sun path, height ── */}
-          {advancedMode && (
-            <>
-              <div style={{ borderTop: '1px dashed var(--design-border)', margin: '4px 0 16px' }} />
-
-              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-text-secondary)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 12 }}>Manual Grid</div>
+<details><summary>Manual grid</summary>              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-text-secondary)', letterSpacing: 0, textTransform: 'uppercase', marginBottom: 12 }}>Manual Grid</div>
               <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
                 <div style={{ flex: 1 }}>
                   <label style={{ fontSize: 10, color: 'var(--design-muted)', display: 'block', marginBottom: 4 }}>Rows</label>
@@ -2346,21 +1994,84 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
                 </div>
               </div>
               <div style={{ fontSize: 10, color: 'var(--design-muted)', marginBottom: 8 }}>= {rows * cols} panels · {((rows * cols * PANEL_POWER) / 1000).toFixed(2)} kWp · aligned to roof</div>
-              <button onClick={generateGrid} style={{ ...btn('var(--design-primary)'), marginBottom: 6 }}>⊞ Add {rows}×{cols} Grid</button>
-              <button onClick={clearPanels} style={{ ...btn('var(--design-input-bg)', 'var(--design-muted)'), border: '1px solid var(--design-border)', marginBottom: 16 }}>✕ Clear All</button>
+              <button disabled={!equipmentValid || !equipment.specificationsConfirmed} onClick={generateGrid} style={{ ...btn('var(--design-primary)'), marginBottom: 6 }}>Add {rows}×{cols} Grid</button>
+              <button onClick={clearPanels} style={{ ...btn('var(--design-input-bg)', 'var(--design-muted)'), border: '1px solid var(--design-border)', marginBottom: 16 }}>Clear All</button>
 
-              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-text-secondary)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>Building Height</div>
+</details><details open={selCount > 0}><summary>Panel settings</summary><Slider label="Mounting height" value={MOUNT_H} min={0.3} max={4} color="var(--design-primary)" suffix=" m" onChange={setMountHeight}/>              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-text-secondary)', letterSpacing: 0, textTransform: 'uppercase', marginBottom: 8 }}>Selection</div>
+              <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                <button onClick={selectAll} style={{ ...btn('var(--design-panel-elevated)', 'var(--design-text-secondary)'), border: '1px solid var(--design-border)', padding: '7px 0', fontSize: 11 }}>Select All</button>
+                <button onClick={() => setSelectedIds([])} style={{ ...btn('var(--design-panel-elevated)', 'var(--design-text-secondary)'), border: '1px solid var(--design-border)', padding: '7px 0', fontSize: 11 }}>Deselect</button>
+              </div>
+              {selCount > 0 && (
+                <div style={{ background: 'var(--design-info-bg)', border: '1px solid var(--design-info-border)', borderRadius: 8, padding: 12, marginBottom: 14 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-navy)', marginBottom: 10 }}>{selCount} panel{selCount > 1 ? 's' : ''} selected</div>
+                  <Slider label="Tilt" value={selTilt} min={0} max={45} color="#0EA5E9" suffix="°" onChange={v => updateSelected('tilt', v)} />
+                  <Slider label="Rotate Array" value={Math.round(selAz)} min={0} max={360} color="var(--design-primary)" suffix={`° ${dirFromAz(selAz)}`} onChange={v => updateSelected('azimuth', v)} onDragStart={captureRotateSnapshot} onDragEnd={pruneOutOfBoundsPanels} />
+
+                  <button onClick={deleteSelected} style={btn('var(--design-danger-solid)')}>Delete Selected</button>
+                </div>
+              )}
+              {selCount === 0 && (
+                <div style={{ background: 'var(--design-panel-elevated)', border: '1px solid var(--design-border)', borderRadius: 8, padding: 12, marginBottom: 14, fontSize: 11, color: 'var(--design-muted)', textAlign: 'center', lineHeight: 1.5 }}>
+                  No panels selected.
+                </div>
+              )}
+
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-text-secondary)', letterSpacing: 0, textTransform: 'uppercase', marginBottom: 10 }}>Default Tilt / Azimuth</div>
+              <Slider label="Tilt" value={globalTilt} min={0} max={45} color="#0EA5E9" suffix="°" onChange={setGlobalTilt} />
+              <Slider label="Azimuth" value={globalAzimuth} min={0} max={360} color="var(--design-primary)" suffix={`° ${dirFromAz(globalAzimuth)}`} onChange={setGlobalAzimuth} />
+              <button onClick={applyGlobalToAll} style={{ ...btn('var(--design-primary)'), marginBottom: 6 }}>Apply to All Panels</button>
+              <button onClick={() => { setGlobalTilt(15); setGlobalAzimuth(optimalAzimuth); }} style={btn('var(--design-navy)')}>Optimal ({optimalAzimuth === 180 ? 'S' : 'N'}, 15°)</button>
+
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-text-secondary)', letterSpacing: 0, textTransform: 'uppercase', marginBottom: 8 }}>Row Spacing</div>
+              <Slider label="Gap Between Rows" value={Number(rowGapM.toFixed(1))} min={0.3} max={3} color="#0EA5E9" suffix=" m" onChange={setRowGapM} />
+
+              <div style={{ height: 8 }} />
+
+</details></>}
+          {toolPanel === 'obstacles' && <>          {/* ── Always visible: obstacle marking, needed for accuracy by everyone ── */}
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-obstacle-text)', letterSpacing: 0, textTransform: 'uppercase', marginBottom: 8 }}>Mark Roof Obstacles</div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 10 }}>
+            {(['AC Unit', 'Water Tank', 'Skylight', 'Staircase', 'Vent'] as const).map(label => (
+              <button key={label} onClick={() => addObstacleAtCenter(label)}
+                style={{ padding: '7px 4px', borderRadius: 6, border: '1px solid var(--design-obstacle-border)', background: 'var(--design-obstacle-bg)', color: 'var(--design-obstacle-text)', fontSize: 10.5, fontWeight: 600, cursor: 'pointer' }}>
+                + {label}
+              </button>
+            ))}
+          </div>
+          {selectedObstacle ? (
+            <div style={{ background: 'var(--design-obstacle-bg)', border: '1px solid var(--design-obstacle-border)', borderRadius: 8, padding: 12, marginBottom: 16 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-obstacle-text)', marginBottom: 10 }}>{selectedObstacle.label} selected</div>
+              <NumberField label="Obstacle height (m)" value={selectedObstacle.heightM ?? defaultObstacleHeight(selectedObstacle.label)} min={0.1} max={30} onChange={v => updateObstacle(selectedObstacle.id, { heightM: v })}/>
+              <Slider label="Width" value={Number(selectedObstacle.w.toFixed(2))} min={0.3} max={5} color="var(--design-obstacle-text)" suffix=" m" onChange={v => updateObstacle(selectedObstacle.id, { w: v })} />
+              <Slider label="Depth" value={Number(selectedObstacle.d.toFixed(2))} min={0.3} max={5} color="var(--design-obstacle-text)" suffix=" m" onChange={v => updateObstacle(selectedObstacle.id, { d: v })} />
+              <Slider label="Rotation" value={Math.round(selectedObstacle.rotDeg)} min={0} max={360} color="var(--design-primary)" suffix="°" onChange={v => updateObstacle(selectedObstacle.id, { rotDeg: v })} />
+
+              <button onClick={() => deleteObstacle(selectedObstacle.id)} style={btn('var(--design-danger-solid)')}>Delete Obstacle</button>
+            </div>
+          ) : (
+            <div style={{ background: 'var(--design-panel-elevated)', border: '1px solid var(--design-border)', borderRadius: 8, padding: 10, marginBottom: 16, fontSize: 10.5, color: 'var(--design-muted)', textAlign: 'center', lineHeight: 1.5 }}>
+              No obstacle selected.
+            </div>
+          )}
+
+            <div className="design-obstacle-list">{obstacles.map(o => <button key={o.id} aria-pressed={selectedObstacleId === o.id} onClick={() => { setSelectedObstacleId(o.id); setMode('drag'); }}><Box size={14}/>{o.label}<span>{o.w.toFixed(1)} × {o.d.toFixed(1)} m</span></button>)}</div>
+          </>}
+          {toolPanel === 'building' && <>
+            <fieldset className="design-accuracy-fields"><legend>Site inputs</legend>
+              <label>Roof surface<select aria-label="Roof surface" value={currentRoof?.slope === 0 ? 'flat' : 'unsupported'} onChange={() => useDesignStore.getState().updateRoof(roofId, { slope: 0 })}><option value="flat">Flat terrace</option><option value="unsupported" disabled>Sloped roof: analysis unsupported</option></select></label>
+              <NumberField label="Parapet height (m)" value={parapetHeightM} min={0} max={5} onChange={v => useDesignStore.getState().updateRoof(roofId, { design3D: { ...roofSettings, parapetHeightM: v } })}/>
+              <NumberField label="Roof setback (m)" value={setbackM} min={0} max={10} onChange={v => useDesignStore.getState().updateRoof(roofId, { design3D: { ...roofSettings, setbackM: v } })}/>
+              <label>Roof finish<select aria-label="Roof finish" value={roofSettings?.roofMaterial ?? 'concrete'} onChange={e => useDesignStore.getState().updateRoof(roofId, { design3D: { ...roofSettings, roofMaterial: e.target.value as 'concrete' | 'coating' } })}><option value="concrete">Concrete</option><option value="coating">Waterproof coating</option></select></label>
+              <label><input type="checkbox" checked={!!roofSettings?.measurementsConfirmed} onChange={e => useDesignStore.getState().updateRoof(roofId, { design3D: { ...roofSettings, measurementsConfirmed: e.target.checked } })}/> Site dimensions and heights checked</label>
+              <p>Satellite tracing is not a site survey. Support members are illustrative.</p>
+            </fieldset>              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-text-secondary)', letterSpacing: 0, textTransform: 'uppercase', marginBottom: 8 }}>Building Height</div>
               <Slider label="Height" value={wallHeightM} min={2} max={30} color="#0EA5E9" suffix="m" onChange={setWallHeightM} />
               <div style={{ height: 8 }} />
 
-              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-text-secondary)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>Row Spacing</div>
-              <Slider label="Gap Between Rows" value={Number(rowGapM.toFixed(1))} min={0.3} max={3} color="#0EA5E9" suffix=" m" onChange={setRowGapM} />
-              <div style={{ fontSize: 10, color: 'var(--design-muted-2)', marginBottom: 10, lineHeight: 1.4 }}>
-                Bigger gap = less chance one row's shadow falls on the row behind it, especially in winter when the sun sits lower. Smaller gap = more panels fit, but more shading risk. Re-run <strong>Design My Roof</strong> or <strong>Perfect Align</strong> after changing this.
-              </div>
-              <div style={{ height: 8 }} />
-
-              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-text-secondary)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>🔌 Electrical Strings</div>
+<Slider label="Mounting height" value={MOUNT_H} min={0.3} max={4} color="var(--design-primary)" suffix=" m" onChange={setMountHeight}/><p>Roof {roofDims.widthM.toFixed(1)} × {roofDims.heightM.toFixed(1)} m</p></>}
+          {toolPanel === 'electrical' && <>              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-text-secondary)', letterSpacing: 0, textTransform: 'uppercase', marginBottom: 8 }}>Electrical Strings</div>
               <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginBottom: 8 }}>
                 <div style={{ flex: 1 }}>
                   <label style={{ fontSize: 10, color: 'var(--design-muted)', display: 'block', marginBottom: 4 }}>Panels per string</label>
@@ -2369,7 +2080,7 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
                     style={{ width: '100%', padding: '6px 8px', background: 'var(--design-input-bg)', border: '1px solid var(--design-border)', borderRadius: 5, color: 'var(--design-text)', fontSize: 13, textAlign: 'center', boxSizing: 'border-box' }} />
                 </div>
                 <button onClick={() => setShowStrings(s => !s)} style={{ padding: '7px 12px', borderRadius: 6, border: `1px solid ${showStrings ? 'var(--design-primary)' : 'var(--design-border)'}`, background: showStrings ? 'var(--design-info-bg)' : 'var(--design-input-bg)', color: showStrings ? 'var(--design-navy)' : 'var(--design-muted)', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
-                  {showStrings ? '🎨 Colors On' : '⚪ Show Colors'}
+                  {showStrings ? 'Colors On' : 'Show Colors'}
                 </button>
               </div>
               {panels.length > 0 ? (
@@ -2385,17 +2096,21 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
               ) : (
                 <div style={{ fontSize: 10, color: 'var(--design-muted-2)', marginBottom: 10 }}>No panels yet — design the roof first.</div>
               )}
-              <div style={{ fontSize: 9.5, color: 'var(--design-muted-2)', marginBottom: 10, lineHeight: 1.4 }}>
-                Groups panels by real physical position — separate roof wings are clustered independently and never mixed into the same string, with panels ordered row-by-row, left to right within each cluster.
-              </div>
 
-              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-text-secondary)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>☀ Shading Analysis</div>
-              <button onClick={runShadingAnalysis} disabled={runningShading || panels.length === 0} style={{ ...btn(runningShading ? 'var(--design-muted-2)' : 'var(--design-navy)'), marginBottom: 8, cursor: runningShading ? 'not-allowed' : 'pointer' }}>
-                {runningShading ? '⟳ Checking every panel…' : '☀ Run Shading Analysis'}
+
+</>}
+          {toolPanel === 'analysis' && <>
+            <fieldset className="design-accuracy-fields"><legend>Analysis inputs</legend>
+              {dataIssues.map(issue => <p key={issue} role="note">{issue}</p>)}
+              <label>Period<select aria-label="Analysis period" value={analysisPeriod} onChange={e => setAnalysisPeriod(e.target.value as 'instant' | 'day')}><option value="instant">Selected time</option><option value="day">Selected day (30-minute samples)</option></select></label>
+              <p>Active roof only. 9 surface samples per module. Equal-weight geometric shading, not energy loss. Obstacles use their entered obstruction envelopes; decorative steps, railings and equipment details are illustrative. Unmodelled neighbours, trees and mounting hardware are excluded.</p>
+              {unlitCount > 0 && <p>{unlitCount} modules have no front-side direct sun in this period.</p>}
+              {runningShading && <button onClick={() => { shadingController.current?.abort(); setRunningShading(false); }}>Cancel analysis</button>}
+            </fieldset>              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-text-secondary)', letterSpacing: 0, textTransform: 'uppercase', marginBottom: 8 }}>Shading Analysis</div>
+              <button onClick={runShadingAnalysis} disabled={runningShading || panels.length === 0 || analysisBlocked} style={{ ...btn(runningShading ? 'var(--design-muted-2)' : 'var(--design-navy)'), marginBottom: 8, cursor: runningShading ? 'not-allowed' : 'pointer' }}>
+                {runningShading ? `Checking ${analysisProgress}%` : 'Run Shading Analysis'}
               </button>
-              <div style={{ fontSize: 9.5, color: 'var(--design-muted-2)', marginBottom: 10, lineHeight: 1.4 }}>
-                Checks each panel against neighboring panels, marked obstacles & the parapet across 20 sampled times of year — a real geometric check, not a guess. Re-run after moving panels or changing tilt/height.
-              </div>
+
 
               {shadingSummary && (
                 <div style={{ background: shadingSummary.shadedCount > 0 ? 'var(--design-warning-bg)' : 'var(--design-success-bg)', border: `1px solid ${shadingSummary.shadedCount > 0 ? 'var(--design-warning-border)' : 'var(--design-success-border)'}`, borderRadius: 8, padding: 12, marginBottom: 10 }}>
@@ -2403,11 +2118,11 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
                     <>
                       <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--design-warning-text)', marginBottom: 4 }}>⚠ {shadingSummary.shadedCount} of {shadingSummary.totalPanels} panels affected</div>
                       <div style={{ fontSize: 11, color: 'var(--design-warning-text)', lineHeight: 1.5 }}>
-                        Estimated annual loss: ~{shadingSummary.estLossKwh.toFixed(0)} kWh/year ({(shadingSummary.avgLossAcrossShaded * 100).toFixed(0)}% average loss on affected panels)
+                        Sampled shading: {(shadingSummary.avgLossAcrossShaded * 100).toFixed(0)}% on affected panels
                       </div>
                     </>
                   ) : (
-                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--design-success-text)' }}>✓ No meaningful shading detected on this layout</div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--design-success-text)' }}>No meaningful shading detected on this layout</div>
                   )}
                   <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, cursor: 'pointer' }}>
                     <input type="checkbox" checked={highlightShading} onChange={e => setHighlightShading(e.target.checked)} />
@@ -2416,61 +2131,33 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
                 </div>
               )}
 
-              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-text-secondary)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>Selection</div>
-              <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-                <button onClick={selectAll} style={{ ...btn('var(--design-panel-elevated)', 'var(--design-text-secondary)'), border: '1px solid var(--design-border)', padding: '7px 0', fontSize: 11 }}>Select All</button>
-                <button onClick={() => setSelectedIds([])} style={{ ...btn('var(--design-panel-elevated)', 'var(--design-text-secondary)'), border: '1px solid var(--design-border)', padding: '7px 0', fontSize: 11 }}>Deselect</button>
-              </div>
-              {selCount > 0 && (
-                <div style={{ background: 'var(--design-info-bg)', border: '1px solid var(--design-info-border)', borderRadius: 8, padding: 12, marginBottom: 14 }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-navy)', marginBottom: 10 }}>● {selCount} panel{selCount > 1 ? 's' : ''} selected</div>
-                  <Slider label="Tilt" value={selTilt} min={0} max={45} color="#0EA5E9" suffix="°" onChange={v => updateSelected('tilt', v)} />
-                  <Slider label="Rotate Array" value={Math.round(selAz)} min={0} max={360} color="var(--design-primary)" suffix={`° ${dirFromAz(selAz)}`} onChange={v => updateSelected('azimuth', v)} onDragStart={captureRotateSnapshot} onDragEnd={pruneOutOfBoundsPanels} />
-                  <div style={{ fontSize: 10, color: 'var(--design-muted)', marginBottom: 8, lineHeight: 1.4 }}>Rotate spins the whole array to match the building angle — rows stay intact.</div>
-                  <button onClick={deleteSelected} style={btn('var(--design-danger-solid)')}>🗑 Delete Selected</button>
-                </div>
-              )}
-              {selCount === 0 && (
-                <div style={{ background: 'var(--design-panel-elevated)', border: '1px solid var(--design-border)', borderRadius: 8, padding: 12, marginBottom: 14, fontSize: 11, color: 'var(--design-muted)', textAlign: 'center', lineHeight: 1.5 }}>
-                  Use <strong>⬚ Select</strong> to box the array, then <strong>Rotate Array</strong> to align it, or <strong>✋ Move</strong> to reposition.
-                </div>
-              )}
-
-              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-text-secondary)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 10 }}>Default Tilt / Azimuth</div>
-              <Slider label="Tilt" value={globalTilt} min={0} max={45} color="#0EA5E9" suffix="°" onChange={setGlobalTilt} />
-              <Slider label="Azimuth" value={globalAzimuth} min={0} max={360} color="var(--design-primary)" suffix={`° ${dirFromAz(globalAzimuth)}`} onChange={setGlobalAzimuth} />
-              <button onClick={applyGlobalToAll} style={{ ...btn('var(--design-primary)'), marginBottom: 6 }}>Apply to All Panels</button>
-              <button onClick={() => { setGlobalTilt(15); setGlobalAzimuth(optimalAzimuth); }} style={btn('var(--design-navy)')}>☀ Optimal ({optimalAzimuth === 180 ? 'S' : 'N'}, 15°)</button>
-
-              <div style={{ marginTop: 20, borderTop: '1px solid var(--design-border)', paddingTop: 14 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--design-text-secondary)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 12 }}>☀ Sun & Shadows</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                  <button onClick={() => setAnimating(a => !a)} style={{ flex: 1, padding: '8px 0', borderRadius: 7, border: 'none', background: animating ? 'var(--design-danger-solid)' : 'var(--design-primary)', color: '#fff', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>{animating ? '⏸ Pause' : '▶ Play Day'}</button>
-                  <span style={{ fontSize: 13, color: 'var(--design-navy)', fontWeight: 700, fontFamily: 'monospace' }}>{Math.floor(hour)}:{String(Math.round((hour % 1) * 60)).padStart(2, '0')}</span>
-                </div>
-                <input type="range" min={6} max={19} step={0.25} value={hour} onChange={e => { setHour(Number(e.target.value)); setAnimating(false); }} style={{ width: '100%', accentColor: '#0EA5E9', marginBottom: 4 }} />
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: 'var(--design-muted-2)', marginBottom: 10 }}><span>6AM</span><span>Noon</span><span>7PM</span></div>
-                <Slider label="Month" value={month} min={1} max={12} color="#0EA5E9" suffix={` ${monthNames[month - 1]}`} onChange={setMonth} />
-              </div>
-            </>
-          )}
-          </>
-          )}
-        </div>
+<p>Sun azimuth {Math.round(liveSun.azimuth)}° · Elevation {Math.round(liveSun.elevation)}°</p></>}
+          </>}
+          </div>
+        </aside>
       </div>
+      {(designNotice || invalidPanelIds.size > 0) && <div className="design-validation-message" role="alert"><span>{designNotice || `${invalidPanelIds.size} invalid panel placements. Export and analysis are blocked.`}</span><button aria-label="Dismiss message" onClick={() => setDesignNotice('')}><X size={14}/></button></div>}
+      <footer className="design-studio-sun">
+        {iconButton(animating ? 'Pause sun' : 'Play sun', animating ? <Pause size={16}/> : <Play size={16}/>, () => setAnimating(v => !v))}
+        <label htmlFor="design-sun-hour">{Math.floor(hour)}:{String(Math.round(hour % 1 * 60)).padStart(2, '0')}</label>
+        <input id="design-sun-hour" aria-label="Sun time" type="range" min={0} max={23.75} step={.25} value={hour} onChange={e => {setHour(Number(e.target.value));setAnimating(false);}}/>
+        <input aria-label="Analysis date" type="date" value={analysisDate} onChange={e => { if (e.target.value) setAnalysisDate(e.target.value); }}/><span className="design-timezone">IST (UTC+05:30)</span>
+        <span role="status">{saveError || (readOnly ? 'Client view' : saveStatus === 'saved' ? 'Saved' : saveStatus === 'saving' ? 'Saving...' : 'Unsaved changes')}</span>
+      </footer>
     </div>
   );
 }
 
 function Slider({ label, value, min, max, color, suffix, onChange, onDragStart, onDragEnd }: { label: string; value: number; min: number; max: number; color: string; suffix: string; onChange: (v: number) => void; onDragStart?: () => void; onDragEnd?: () => void }) {
+  const id = useId();
   return (
     <div style={{ marginBottom: 12 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-        <span style={{ fontSize: 11, color: 'var(--design-muted)' }}>{label}</span>
+        <label htmlFor={id} style={{ fontSize: 11, color: 'var(--design-muted)' }}>{label}</label>
         <span style={{ fontSize: 11, color, fontWeight: 700 }}>{value}{suffix}</span>
       </div>
       <input
-        type="range" min={min} max={max} value={value}
+        id={id} type="range" min={min} max={max} step={Number.isInteger(min) ? 1 : 0.1} value={value}
         onChange={e => onChange(Number(e.target.value))}
         onPointerDown={onDragStart}
         onPointerUp={onDragEnd}
@@ -2478,4 +2165,14 @@ function Slider({ label, value, min, max, color, suffix, onChange, onDragStart, 
       />
     </div>
   );
+}
+function NumberField({ label, value, min, max, onChange }: { label: string; value: number; min: number; max: number; onChange: (n: number) => void }) {
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => setDraft(String(value)), [value]);
+  const commit = () => {
+    const number = Number(draft);
+    if (draft.trim() && Number.isFinite(number) && number >= min && number <= max) onChange(number);
+    else setDraft(String(value));
+  };
+  return <label className="design-number-field">{label}<input type="number" min={min} max={max} step="any" value={draft} onChange={e => setDraft(e.target.value)} onBlur={commit} onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}/></label>;
 }

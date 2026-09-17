@@ -62,7 +62,8 @@ export function useDesignProjectLoader(isClientView: boolean) {
       }
       (async () => {
         try {
-          const res = await fetch(`/api/public-design?projectId=${encodeURIComponent(pid)}`);
+          const query = new URLSearchParams({ projectId: pid, shareToken: searchParams.get('shareToken') || '' });
+          const res = await fetch(`/api/public-design?${query}`, { cache: 'no-store' });
           const data = await res.json();
           if (!res.ok) {
             setErrorMessage(data?.error || 'Failed to load this design.');

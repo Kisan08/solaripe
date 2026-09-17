@@ -75,7 +75,7 @@ export function DesignTopBar({
   return (
     <div
       style={{
-        display: 'flex', alignItems: 'center', gap: 10, height: 52, padding: '0 14px',
+        display: 'flex', alignItems: 'center', gap: 10, minHeight: 52, padding: '8px 14px', flexWrap: 'wrap',
         background: C.panel, borderBottom: `1px solid ${C.border}`, flexShrink: 0,
         boxShadow: '0 1px 3px rgba(0,0,0,.12)', zIndex: 40, minWidth: 0,
       }}
@@ -88,7 +88,7 @@ export function DesignTopBar({
           .design-topbar-project-name { display: none; }
         }
         @media (max-width: 1180px) {
-          .design-topbar-edit-group-2d { display: none; }
+          .design-topbar-edit-group-2d { flex-wrap: wrap; }
         }
       `}</style>
 

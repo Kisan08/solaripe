@@ -5,6 +5,7 @@ import {
   Point, ProjectInfo, Equipment, HistoryEntry, MapConfig,
 } from '../types';
 import { saveDesign, loadDesign, type SavedDesign } from '../lib/designs';
+import { normalizeEquipmentDimensions } from '../utils/moduleDimensions';
 
 const MAX_HISTORY = 50;
 
@@ -330,6 +331,7 @@ export const useDesignStore = create<DesignStore>()(
     updateProject: (patch) => set((s) => { Object.assign(s.project, patch); }),
 
     equipment: {
+      dimensionUnit: 'mm',
       panelModel: 'Waaree WS-580 TOPCon',
       panelPower: 580,
       panelWidth: 1134,
@@ -337,7 +339,11 @@ export const useDesignStore = create<DesignStore>()(
       inverter: 'Waaree String 10kW',
       mountingType: 'Ballast / Flush',
     },
-    updateEquipment: (patch) => set((s) => { Object.assign(s.equipment, patch); }),
+    updateEquipment: (patch) => set((s) => {
+      Object.assign(s.equipment, normalizeEquipmentDimensions(s.equipment), patch, { dimensionUnit: 'mm' });
+      if (['panelModel', 'panelPower', 'panelWidth', 'panelHeight'].some(key => key in patch)) s.equipment.specificationsConfirmed = false;
+      s.saveStatus = 'unsaved';
+    }),
 
     mapConfig: {
       center: { lat: 19.2403, lng: 73.1305 },
@@ -372,7 +378,7 @@ export const useDesignStore = create<DesignStore>()(
       set({ saveStatus: 'saving' });
       const { error } = await saveDesign({
         projectId, roofs, obstacles, panels, walkways,
-        projectInfo: project, equipment, mapConfig,
+        projectInfo: project, equipment: normalizeEquipmentDimensions(equipment), mapConfig,
         wallHeightM, // NEW — was previously local-only state, never saved
       });
       set({ saveStatus: error ? 'unsaved' : 'saved' });
@@ -399,7 +405,7 @@ export const useDesignStore = create<DesignStore>()(
           panels: design.panels,
           walkways: design.walkways,
           project: { ...get().project, ...design.project_info },
-          equipment: { ...get().equipment, ...design.equipment },
+          equipment: normalizeEquipmentDimensions({ ...get().equipment, ...design.equipment, dimensionUnit: design.equipment?.dimensionUnit }),
           mapConfig: { ...get().mapConfig, ...design.map_config },
           wallHeightM: design.wall_height_m ?? 4, // NEW — fall back to default for designs saved before this field existed
           saveStatus: 'saved',

@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { fetchSatelliteImage } from '@/lib/satelliteImage';
+import { createServerSupabaseClient } from '@/lib/supabase/server';
+import { verifyDesignToken } from '@/lib/security/designShareToken';
 
 // Server boundary for lib/satelliteImage.ts: serves a cached satellite
 // image for a project's location if one exists, otherwise fetches fresh
@@ -38,12 +40,21 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
 
   const projectId = searchParams.get('projectId');
+  const scope = verifyDesignToken(searchParams.get('shareToken'), projectId || '', process.env.DESIGN_SHARE_SECRET);
+  if (!scope) {
+    const db = await createServerSupabaseClient();
+    const { data: { user } } = await db.auth.getUser();
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const { data: project, error } = await db.from('projects').select('id').eq('id', projectId || '').eq('tenant_id', user.id).maybeSingle();
+    if (error || !project) return NextResponse.json({ error: 'Project not found' }, { status: 404 });
+  }
   const lat = Number(searchParams.get('lat'));
   const lng = Number(searchParams.get('lng'));
   const zoom = Number(searchParams.get('zoom') ?? '20');
-  const refresh = searchParams.get('refresh') === 'true';
+  const refresh = !scope && searchParams.get('refresh') === 'true';
 
-  if (!projectId || !Number.isFinite(lat) || !Number.isFinite(lng)) {
+  if (!projectId || !searchParams.has('lat') || !searchParams.has('lng') || !Number.isFinite(lat) || !Number.isFinite(lng)
+    || Math.abs(lat) > 90 || Math.abs(lng) > 180 || !Number.isInteger(zoom) || zoom < 0 || zoom > 22) {
     console.log(`[satellite-image] missing projectId/lat/lng — falling back, ${Date.now() - startedAt}ms`);
     return NextResponse.json(fallbackResponse());
   }
@@ -65,13 +76,11 @@ export async function GET(request: NextRequest) {
       if (selectErr) console.warn('[satellite-image] cache read failed, doing a live fetch', selectErr.message);
 
       if (cached?.image_data_url) {
-        console.log(`[satellite-image] cache hit project=${projectId} lat=${latR} lng=${lngR}, ${Date.now() - startedAt}ms`);
         return NextResponse.json<SatelliteImageResponse>({ dataUrl: cached.image_data_url, cached: true, fallback: false });
       }
     }
 
     const result = await fetchSatelliteImage({ lat: latR, lng: lngR, zoom });
-    console.log(`[satellite-image] fresh fetch project=${projectId} lat=${latR} lng=${lngR} success=${!!result}, ${Date.now() - startedAt}ms`);
 
     if (!result) {
       return NextResponse.json(fallbackResponse());

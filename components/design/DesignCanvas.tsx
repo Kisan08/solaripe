@@ -4,6 +4,7 @@ import { Stage, Layer, Line, Rect, Circle, Text, Group, Transformer } from 'reac
 import Konva from 'konva';
 import { useDesignStore, metersPerPixel } from '../../store/designStore';
 import { Point, RoofPolygon, Obstacle, SolarPanel } from '../../types';
+import { reanchorRoof } from './designAccuracy';
 import {
   generateId, polygonArea, pxToM2, snapPoint,
   pointInPolygon, polygonCentroid, sceneMetersPerPixel,
@@ -19,9 +20,6 @@ const GRID_SIZE = 20;
 function safeSize(v: number, min = 0.5): number {
   return typeof v === 'number' && isFinite(v) && v > 0 ? Math.max(v, min) : min;
 }
-// Real Waaree 580W footprint (meters) — converted to scene px at trace-time scale
-const PANEL_W_M = 1.134;
-const PANEL_H_M = 2.278;
 
 // Realistic default footprints (meters) used when the obstacle tool is used
 // as a quick click (no meaningful drag) — a rooftop AC unit, water tank,
@@ -68,6 +66,8 @@ const RoofShape = React.memo(({ roof, isSelected, onClick, onVertexDrag }: {
   onVertexDrag: (vertexIdx: number, pt: Point) => void;
 }) => {
   const flat = roof.points.flatMap(p => [p.x, p.y]);
+  const scale = useDesignStore(s => s.scale);
+  const handleScale = Math.max(0.01, scale);
   const centroid = useMemo(() => polygonCentroid(roof.points), [roof.points]);
   // Show the STORED area (computed with the scale captured at trace time)
   const areaM2 = roof.area || 0;
@@ -79,7 +79,7 @@ const RoofShape = React.memo(({ roof, isSelected, onClick, onVertexDrag }: {
         closed
         fill={roof.color + Math.round(roof.opacity * 255).toString(16).padStart(2, '0')}
         stroke={isSelected ? '#3B82F6' : '#93C5FD'}
-        strokeWidth={isSelected ? 2 : 1}
+        strokeWidth={(isSelected ? 2.5 : 1.5) / handleScale}
         onClick={onClick}
         onTap={onClick}
         hitStrokeWidth={8}
@@ -97,12 +97,14 @@ const RoofShape = React.memo(({ roof, isSelected, onClick, onVertexDrag }: {
         <Circle
           key={i}
           x={pt.x} y={pt.y}
-          radius={isSelected ? 7 : 5}
-          fill={isSelected ? '#2563EB' : '#3B82F6'}
-          stroke="#fff"
-          strokeWidth={2}
+          radius={(isSelected ? 9 : 8) / handleScale}
+          fill="#FACC15"
+          stroke="#422006"
+          strokeWidth={2 / handleScale}
+          shadowColor="#ffffff"
+          shadowBlur={3 / handleScale}
           draggable
-          hitStrokeWidth={12}
+          hitStrokeWidth={24 / handleScale}
           onDragMove={e => onVertexDrag(i, { x: e.target.x(), y: e.target.y() })}
           onMouseEnter={() => { document.body.style.cursor = 'grab'; }}
           onMouseLeave={() => { document.body.style.cursor = 'default'; }}
@@ -202,6 +204,7 @@ PanelShape.displayName = 'PanelShape';
 function DrawingPreview({ points, mousePos, tool }: {
   points: Point[]; mousePos: Point | null; tool: string;
 }) {
+  const scale = Math.max(0.01, useDesignStore(s => s.scale));
   if (points.length === 0) return null;
   const preview = mousePos ? [...points, mousePos] : points;
   const flat = preview.flatMap(p => [p.x, p.y]);
@@ -212,14 +215,16 @@ function DrawingPreview({ points, mousePos, tool }: {
         points={flat}
         closed={false}
         stroke="#3B82F6"
-        strokeWidth={1.5}
-        dash={[6, 3]}
+        strokeWidth={2 / scale}
+        dash={[6 / scale, 3 / scale]}
         listening={false}
       />
       {points.map((pt, i) => (
-        <Circle key={i} x={pt.x} y={pt.y} radius={4}
-          fill="#3B82F6" stroke="#fff" strokeWidth={1} listening={false} />
+        <Circle key={i} x={pt.x} y={pt.y} radius={(i === 0 ? 10 : 8) / scale}
+          fill="#FACC15" stroke="#422006" strokeWidth={2 / scale} listening={false} />
       ))}
+      {mousePos && <Circle x={mousePos.x} y={mousePos.y} radius={6 / scale}
+        stroke="#FACC15" strokeWidth={2 / scale} listening={false} />}
     </Group>
   );
 }
@@ -302,6 +307,10 @@ export function DesignCanvas({ width, height, mapElement }: DesignCanvasProps) {
   // Mouse wheel zoom
   const handleWheel = useCallback((e: Konva.KonvaEventObject<WheelEvent>) => {
     e.evt.preventDefault();
+    if (window._mapInstance) {
+      window._mapInstance.setZoom(window._mapInstance.getZoom() + (e.evt.deltaY < 0 ? .15 : -.15));
+      return;
+    }
     const stage = stageRef.current;
     if (!stage) return;
     const oldScale = scale;
@@ -329,6 +338,11 @@ export function DesignCanvas({ width, height, mapElement }: DesignCanvasProps) {
     const pos = stage.getPointerPosition()!;
 
     if (isPanning && lastPanPos.current) {
+      if (window._mapInstance) {
+        window._mapInstance.panBy(lastPanPos.current.x-pos.x, lastPanPos.current.y-pos.y);
+        lastPanPos.current=pos;
+        return;
+      }
       setOffset({
         x: offset.x + pos.x - lastPanPos.current.x,
         y: offset.y + pos.y - lastPanPos.current.y,
@@ -368,21 +382,25 @@ export function DesignCanvas({ width, height, mapElement }: DesignCanvasProps) {
       // water tank, staircase head, etc.) instead of a fixed 2×2m square.
       setObstacleStart(pt);
     } else if (activeTool === 'panel') {
-      // Real Waaree footprint converted to scene px at the CURRENT scale
-      const ppm = 1 / sceneMetersPerPixel();
+      const targetRoof = roofs.find(r => pointInPolygon(pt, r.points));
+      if (!targetRoof || !equipment.specificationsConfirmed ||
+          ![equipment.panelWidth, equipment.panelHeight, equipment.panelPower].every(v => Number.isFinite(v) && v > 0)) return;
+      const ppm = 1 / (targetRoof.traceMpp ?? sceneMetersPerPixel());
+      const widthM = equipment.panelWidth / 1000, heightM = equipment.panelHeight / 1000;
       const panel: SolarPanel = {
         id: generateId(),
         type: 'panel',
         x: pt.x, y: pt.y,
-        width: PANEL_W_M * ppm, height: PANEL_H_M * ppm,
+        width: widthM * ppm, height: heightM * ppm,
+        moduleWidthM: widthM, moduleHeightM: heightM,
         rotation: 0,
         orientation: 'portrait',
-        manufacturer: 'Waaree',
+        manufacturer: '',
         model: equipment.panelModel,
         power: equipment.panelPower,
         tilt: 15,
         stringNumber: 1,
-        roofId: '',
+        roofId: targetRoof.id,
       };
       addPanel(panel);
     } else if (activeTool === 'select') {
@@ -393,7 +411,7 @@ export function DesignCanvas({ width, height, mapElement }: DesignCanvasProps) {
       }
     }
   }, [activeTool, offset, scale, getSnapped, addDrawingPoint, addObstacle, addPanel,
-    clearSelection, setSelectedIds, equipment]);
+    clearSelection, setSelectedIds, equipment, roofs]);
 
   const handleMouseUp = useCallback(() => {
     setIsPanning(false);
@@ -617,7 +635,11 @@ export function DesignCanvas({ width, height, mapElement }: DesignCanvasProps) {
               onVertexDrag={(vi, pt) => {
                 const newPts = roof.points.map((p, i) => i === vi ? pt : p);
                 // Recompute area with the scale captured when this roof was traced
-                updateRoof(roof.id, { points: newPts, area: pxToM2(polygonArea(newPts), roof.traceMpp) });
+                updateRoof(roof.id, {
+                  points: newPts, area: pxToM2(polygonArea(newPts), roof.traceMpp),
+                  centroidLatLng: reanchorRoof(roof.points, newPts, roof.centroidLatLng, roof.traceMpp),
+                  design3D: {...roof.design3D, measurementsConfirmed: false},
+                });
               }}
             />
           ))}

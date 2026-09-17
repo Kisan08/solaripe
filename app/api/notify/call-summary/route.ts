@@ -1,10 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { sendOwnerWhatsApp, formatCallSummaryMessage } from "@/lib/whatsappNotify";
+import { sendWhatsAppTo, formatCallSummaryMessage } from "@/lib/whatsappNotify";
+import { createServerSupabaseClient } from '@/lib/supabase/server';
 
 // Fires a WhatsApp message to the business owner (never the lead) the
 // moment a call finishes. Also directly callable for manual testing —
 // see the testing checklist in the task this was built from.
 export async function POST(req: NextRequest) {
+  const db = await createServerSupabaseClient();
+  const { data: { user } } = await db.auth.getUser();
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const { data: settings, error } = await db.from('settings').select('owner_phone').eq('tenant_id', user.id).maybeSingle();
+  if (error || !settings?.owner_phone) return NextResponse.json({ error: 'Configure your notification phone number first.' }, { status: 400 });
   const body = await req.json().catch(() => null) as {
     leadName?: string;
     leadPhone?: string;
@@ -23,7 +29,7 @@ export async function POST(req: NextRequest) {
     notes: body.notes ?? null,
   });
 
-  const result = await sendOwnerWhatsApp(message);
+  const result = await sendWhatsAppTo(settings.owner_phone, message);
 
   // A notification failure is never a reason to fail the calling flow that
   // triggered it — always 200, with the actual outcome in the body so a

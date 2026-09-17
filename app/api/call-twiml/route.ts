@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { validTwilioRequest } from '@/lib/security/twilioRequest';
 import { company } from "@/lib/company.config";
 import { getOrCreateSession } from "@/lib/calling/stateManager";
 import { buildGatherTwiml, buildHangupTwiml } from "@/lib/calling/twiml";
@@ -11,6 +12,7 @@ import { buildGatherTwiml, buildHangupTwiml } from "@/lib/calling/twiml";
 // matches a simple yes/no pattern; anything else falls through to the
 // full AI flow in call-response/route.ts.
 async function handle(req: NextRequest) {
+  if (!await validTwilioRequest(req)) return new NextResponse('Forbidden', { status: 403 });
   const { searchParams } = new URL(req.url);
   const clientId = searchParams.get("clientId") || "";
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || company.website;

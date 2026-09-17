@@ -49,3 +49,8 @@ yarn-error.log*
 next-env.d.ts
 
 .vercel
+
+# local pre-edit safety-net zips and Playwright verification screenshots —
+# working files for this machine, not part of the deployed app or its history.
+/backups/
+/artifacts/

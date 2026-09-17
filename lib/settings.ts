@@ -77,7 +77,7 @@ export const defaultSettings: AppSettings = {
   yield_kwh: 1332,
   gst_rate: 8.9,
   twilio_number: '+19154403891',
-  owner_phone: company.phone,
+  owner_phone: '',
   logo_url: null,
   cover_image_url: null,
   primary_color: '#0F1E3D',

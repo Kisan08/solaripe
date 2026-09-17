@@ -1,4 +1,7 @@
 'use client';
+
+import { requestDesignShare } from '@/lib/requestDesignShare';
+import { designQuoteLink } from '@/lib/designQuoteLink';
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { useSearchParams, usePathname } from 'next/navigation';
 import {
@@ -298,12 +301,22 @@ export default function DesignPageContent() {
   // Pushes the actual design numbers into the quote generator via URL params
   // it already reads (yearly_units, panel_count, roof_area, system_size,
   // name, address) — this is what "AI Design Banner" on that page expects.
-  const generateQuote = useCallback(() => {
+  const generateQuote = useCallback(async () => {
     if (panelCount === 0) {
       alert('Design at least a few panels first — the quote needs a system size to work from.');
       return;
     }
+    const projectId = useDesignStore.getState().projectId;
+    if (!projectId) { alert('Save this design to a project first.'); return; }
+    let shareToken = '';
+    try {
+      await useDesignStore.getState().saveToSupabase();
+      if (useDesignStore.getState().saveStatus !== 'saved') throw new Error('Design could not be saved.');
+    } catch (error) { alert(error instanceof Error ? error.message : 'Could not save design.'); return; }
+    try { shareToken = await requestDesignShare(projectId); }
+    catch { alert('The design is saved. Your quote will open without a design link because secure sharing is unavailable.'); }
     const params = new URLSearchParams({
+      projectId, shareToken,
       name: project.clientName && project.clientName !== 'New Client' ? project.clientName : '',
       address: project.address && project.address !== 'Enter address...' ? project.address : '',
       system_size: dcKwp.toFixed(2),
@@ -327,12 +340,18 @@ export default function DesignPageContent() {
       alert('Design at least a few panels first, then save, before sharing a client link.');
       return;
     }
-    const params = new URLSearchParams(searchParams.toString());
-    params.set('client', '1');
-    const url = `${window.location.origin}${pathname}?${params.toString()}`;
+    const projectId = useDesignStore.getState().projectId;
+    if (!projectId) { alert('Save this design to a project first.'); return; }
+    let url: string;
+    try {
+      await useDesignStore.getState().saveToSupabase();
+      if (useDesignStore.getState().saveStatus !== 'saved') throw new Error('Design could not be saved.');
+      const token = await requestDesignShare(projectId);
+      url = designQuoteLink(process.env.NEXT_PUBLIC_SITE_URL || window.location.origin, projectId, token);
+    } catch (error) { alert(error instanceof Error ? error.message : 'Could not share design.'); return; }
     try {
       await navigator.clipboard.writeText(url);
-      alert('Client link copied! Make sure you\'ve saved the design first — this link loads whatever is currently saved.');
+      alert('Design saved. Client link copied; it expires in 30 days. Anyone with this link can view the saved design.');
     } catch {
       prompt('Copy this link:', url);
     }
@@ -345,12 +364,10 @@ export default function DesignPageContent() {
   // Sidebar/BottomNav entirely for this state (see app-shell.tsx), so this
   // no longer needs a position:fixed/z-9999 escape hatch to visually cover
   // them — it's a normal full-height block in normal document flow.
-  // Always dark here regardless of the saved preference — there's no
-  // toggle control in this read-only view, and dark is the better default
-  // for a client-facing 3D presentation.
+  // Use the light proposal palette and contain the absolute 3D viewport.
   if (isClientView) {
     return (
-      <div className="solaripe-design-workspace" data-theme="dark" style={{ height: '100vh', width: '100%', background: 'var(--design-bg)', fontFamily: 'Inter, system-ui, sans-serif' }}>
+      <div className="solaripe-design-workspace" data-theme="light" style={{ position: 'relative', height: '100dvh', width: '100%', overflow: 'hidden', background: 'var(--design-bg)', fontFamily: 'Inter, system-ui, sans-serif' }}>
         <DesignThemeStyles />
         {bestRoof ? (
           <SolarDesign3D roofPoints={bestRoof.points} onClose={() => {}} lat={currentLocation.lat} roofCenterLatLng={roofCenterLatLng} readOnly />
@@ -390,9 +407,18 @@ export default function DesignPageContent() {
             onToggleGrid={toggleGrid}
             snapEnabled={snapEnabled}
             onToggleSnap={toggleSnap}
-            onZoomIn={zoomIn}
-            onZoomOut={zoomOut}
-            onFit={fitToScreen}
+              onZoomIn={() => window._mapInstance ? window._mapInstance.setZoom(window._mapInstance.getZoom()+.25) : zoomIn()}
+              onZoomOut={() => window._mapInstance ? window._mapInstance.setZoom(window._mapInstance.getZoom()-.25) : zoomOut()}
+            onFit={() => {
+              const map=window._mapInstance, roof=roofs[0];
+              if (!map) { fitToScreen(); return; }
+              if (!roof?.centroidLatLng || !roof.traceMpp) return;
+              const spanX=(Math.max(...roof.points.map(p=>p.x))-Math.min(...roof.points.map(p=>p.x)))*roof.traceMpp;
+              const spanY=(Math.max(...roof.points.map(p=>p.y))-Math.min(...roof.points.map(p=>p.y)))*roof.traceMpp;
+              const resolution=Math.max(spanX/Math.max(1,dimensions.width*.7),spanY/Math.max(1,dimensions.height*.7),.01);
+              map.setCenter(roof.centroidLatLng);
+              map.setZoom(Math.max(1,Math.min(22,Math.log2(metersPerPixel(roof.centroidLatLng.lat,0)/resolution))));
+            }}
             view3D={view3D}
             onToggleView3D={() => setView3D(v => !v)}
             dcKwp={dcKwp}

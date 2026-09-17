@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { validTwilioRequest } from '@/lib/security/twilioRequest';
 import { company } from "@/lib/company.config";
 import { getOrCreateSession, saveSession } from "@/lib/calling/stateManager";
 import { fetchClientContext, applyCrmUpdates } from "@/lib/calling/crmContext";
@@ -31,6 +32,7 @@ function mapEndStatus(intent: string): "interested" | "not_interested" | "call_b
 }
 
 export async function POST(req: NextRequest) {
+  if (!await validTwilioRequest(req)) return new NextResponse('Forbidden', { status: 403 });
   try {
     return await handleTurn(req);
   } catch (err) {

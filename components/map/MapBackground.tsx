@@ -1,6 +1,7 @@
 'use client';
 import React, { useEffect, useRef, useState, useImperativeHandle, forwardRef } from 'react';
 import { useDesignStore } from '../../store/designStore';
+import { roofMapTransform } from '../../utils/roofMapTransform';
 
 declare global {
   interface Window {
@@ -114,16 +115,21 @@ export const MapBackground = forwardRef<MapBackgroundRef, MapBackgroundProps>(({
         const c = map.getCenter();
         const z = map.getZoom();
         if (!c || z == null) return;
-        useDesignStore.getState().updateMapConfig({
-          center: { lat: c.lat(), lng: c.lng() },
-          zoom: z, // may be fractional (e.g. 18.42) — do NOT round
-        });
+        const center = {lat:c.lat(),lng:c.lng()};
+        const state = useDesignStore.getState();
+        const transform = roofMapTransform(state.roofs[0], center, z, mapDivRef.current?.clientWidth ?? 0, mapDivRef.current?.clientHeight ?? 0);
+        useDesignStore.setState({mapConfig:{...state.mapConfig,center,zoom:z},...(transform ?? {})});
       };
 
       // zoom_changed fires immediately on zoom; idle catches pans settling.
       listeners.push(map.addListener('zoom_changed', syncMapConfig));
+      listeners.push(map.addListener('center_changed', syncMapConfig));
       listeners.push(map.addListener('idle', syncMapConfig));
       syncMapConfig(); // capture initial state
+      const unsubscribe = useDesignStore.subscribe((state, previous) => {
+        if (state.roofs[0] !== previous.roofs[0]) syncMapConfig();
+      });
+      listeners.push({remove:unsubscribe});
 
       // Google Maps never detects its own container resizing on its own —
       // it has no ResizeObserver internally, so its cached viewport/
@@ -143,6 +149,7 @@ export const MapBackground = forwardRef<MapBackgroundRef, MapBackgroundProps>(({
         const centerBeforeResize = map.getCenter();
         window.google.maps.event.trigger(map, 'resize');
         if (centerBeforeResize) map.setCenter(centerBeforeResize);
+        syncMapConfig();
       });
       roResizeObserver.observe(mapDivRef.current);
       listeners.push({ remove: () => roResizeObserver.disconnect() });

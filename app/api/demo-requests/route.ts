@@ -5,8 +5,16 @@
 // route can never be used to read back other submissions.
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { isRateLimited, clientIp } from "@/lib/security/rateLimit";
+
+const RATE_LIMIT = 5; // per IP
+const RATE_WINDOW_MS = 10 * 60_000; // 10 minutes
 
 export async function POST(req: NextRequest) {
+  if (isRateLimited(`demo-requests:${clientIp(req)}`, RATE_LIMIT, RATE_WINDOW_MS)) {
+    return NextResponse.json({ error: "Too many requests. Please try again later." }, { status: 429 });
+  }
+
   let body: {
     name?: string;
     companyName?: string;

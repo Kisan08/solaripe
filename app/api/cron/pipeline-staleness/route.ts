@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { sendWhatsAppTo, formatPipelineStalenessMessage } from "@/lib/whatsappNotify";
+import { bearerMatches } from "@/lib/security/bearerSecret";
 
 // Purely a manual-tracker nudge — there is no live government API this
 // polls. It only compares timestamps the tenant themselves set on the
@@ -14,8 +15,7 @@ import { sendWhatsAppTo, formatPipelineStalenessMessage } from "@/lib/whatsappNo
 // settings.owner_phone, so one tenant's stuck projects never leak into
 // another tenant's notification.
 export async function GET(req: NextRequest) {
-  const auth = req.headers.get("authorization");
-  if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
+  if (!bearerMatches(req.headers.get("authorization"), process.env.CRON_SECRET)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

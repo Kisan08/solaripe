@@ -16,6 +16,9 @@ import {
 } from '@/lib/media'
 import { saveLeadQuote, getLeadQuote } from '@/lib/data'
 import type { QuoteSnapshot } from '@/lib/quoteSnapshot'
+import { designQuoteLink, safeDesignQuoteLink } from '@/lib/designQuoteLink';
+import { QuoteDesignSection } from '@/components/quote/QuoteDesignSection';
+import { annotateDesignLinks } from '@/lib/designPdfLinks';
 
 export const dynamic = 'force-dynamic'
 export const fetchCache = 'force-no-store'
@@ -25,6 +28,7 @@ export const fetchCache = 'force-no-store'
 // cast back to this on hydrate — see the ?quoteId= branch in
 // QuotePageInner's load effect below.
 export interface QuoteForm {
+  designUrl?: string;
   proposalNo: string;
   date: string;
   validUntil: string;
@@ -680,6 +684,7 @@ function P1({ f, c, s, showSiteDetails }: { f: QuoteForm; c: Calc; s: AppSetting
           "Our Partner Brands" heading + logos, nothing else under them —
           matches the reference exactly (no "Authorized Partner" caption
           or similar text below the row). */}
+      <QuoteDesignSection url={f.designUrl}/>
       {s.show_partner_logos && (
         <div style={{ textAlign: "center" }}>
           <div style={{ fontSize: FONT_S, color: "#7a8aa8", fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", marginBottom: 12 }}>
@@ -1373,6 +1378,8 @@ function QuotePageInner() {
     }
 
     const run = async () => {
+      const designUrl=designQuoteLink(process.env.NEXT_PUBLIC_SITE_URL || window.location.origin,searchParams.get('projectId') || '',searchParams.get('shareToken') || '');
+      if (designUrl) setF(prev=>({...prev,designUrl}));
       const s = await getSettings()
       setSettings(s)
       setF(prev => ({
@@ -1524,6 +1531,8 @@ function QuotePageInner() {
       );
 
       canvas.width = 1;
+      // html2canvas rasterizes links; restore clickable PDF annotations.
+      annotateDesignLinks(pdf,pages[i],pageWidth,finalHeight,y);
       canvas.height = 1;
     }
 
@@ -1727,6 +1736,7 @@ function QuotePageInner() {
           </button>
         </div>
 
+        {!hydrating && !pdfError && safeDesignQuoteLink(f.designUrl) && <div style={{background:'white',padding:'0 24px'}}><QuoteDesignSection url={f.designUrl}/></div>}
         <div className="relative flex-1">
           {pdfError ? (
             <div className="absolute inset-0 flex items-center justify-center p-6 text-center text-sm text-gray-600">

@@ -3,9 +3,11 @@
 // same reasoning).
 import { supabaseAdmin as supabase } from "@/lib/supabaseAdmin";
 import { NextRequest, NextResponse } from "next/server";
+import { validTwilioRequest } from '@/lib/security/twilioRequest';
 import { sendWhatsAppTo, formatCallSummaryMessage } from "@/lib/whatsappNotify";
 
 export async function POST(req: NextRequest) {
+  if (!await validTwilioRequest(req)) return new NextResponse('Forbidden', { status: 403 });
   const body = await req.text();
   const params = new URLSearchParams(body);
 

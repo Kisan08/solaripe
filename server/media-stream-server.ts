@@ -43,9 +43,10 @@
 // and point a test call's TwiML `url` at /api/call-stream-twiml instead of
 // /api/call-twiml.
 
-import { createServer } from "http";
+import { createServer, type IncomingMessage } from "http";
 import { WebSocketServer, WebSocket, type RawData } from "ws";
 import twilio from "twilio";
+import { validTwilioUpgrade } from '../lib/security/twilioRequest';
 import { streamGroqChat, type ChatMessage } from "../lib/calling/streamingGroq";
 import { streamElevenLabsTts } from "../lib/calling/streamingTts";
 import { applyCrmUpdates } from "../lib/calling/crmContext";
@@ -179,7 +180,10 @@ function appendToHistory(history: ChatMessage[], message: ChatMessage): void {
 }
 
 const httpServer = createServer();
-const wss = new WebSocketServer({ server: httpServer, path: "/media-stream" });
+const wss = new WebSocketServer({
+  server: httpServer, path: '/media-stream', maxPayload: 64 * 1024,
+  verifyClient: ({ req }: { req: IncomingMessage }) => validTwilioUpgrade(req.url, req.headers['x-twilio-signature']),
+});
 
 wss.on("connection", (twilioWs) => {
   console.log(`[${ts()}] [twilio] connected`);

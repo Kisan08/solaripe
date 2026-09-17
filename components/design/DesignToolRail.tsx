@@ -36,7 +36,7 @@ function RailIcon({ icon: Icon, label, shortcut, active, onClick }: {
       className={`design-rail-item${active ? ' design-rail-item-active' : ''}`}
       style={{
         width: '100%', height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center',
-        border: 'none', cursor: 'pointer', borderRadius: 10,
+        border: 'none', cursor: 'pointer', borderRadius: 5,
         background: active ? C.railActive : 'transparent',
         color: active ? '#fff' : C.muted, transition: 'background .15s',
       }}

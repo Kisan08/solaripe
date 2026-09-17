@@ -31,6 +31,7 @@ export interface RoofPolygon {
   opacity: number;
   area: number; // m²
   traceMpp?: number;
+  design3D?: RoofDesign3D;
   // The roof polygon's real-world centroid, captured ONCE at trace time —
   // NOT recomputed later against the live map/container state. The 2D
   // canvas's container width differs between the 2D drawing view and the
@@ -43,6 +44,26 @@ export interface RoofPolygon {
   centroidLatLng?: { lat: number; lng: number };
 }
 
+// Dimensions in metres in the roof's trace-centred, north-up frame.
+export interface RoofTerrace {
+  id: string;
+  name: string;
+  x: number;
+  z: number;
+  width: number;
+  depth: number;
+  heightM: number;
+}
+
+export interface RoofDesign3D {
+  setbackM?: number;
+  measurementsConfirmed?: boolean;
+  roofMaterial?: 'concrete' | 'coating';
+  parapetHeightM?: number;
+  mountingHeightM?: number;
+  terraces?: RoofTerrace[];
+}
+
 export interface Obstacle {
   id: string;
   type: 'obstacle';
@@ -52,6 +73,7 @@ export interface Obstacle {
   height: number;
   rotation: number;
   label: string;
+  heightM?: number;
 }
 
 export interface Walkway {
@@ -62,6 +84,8 @@ export interface Walkway {
 }
 
 export interface SolarPanel {
+  moduleWidthM?: number;
+  moduleHeightM?: number;
   id: string;
   type: 'panel';
   x: number;
@@ -91,6 +115,8 @@ export interface ProjectInfo {
 }
 
 export interface Equipment {
+  dimensionUnit?: 'mm';
+  specificationsConfirmed?: boolean;
   panelModel: string;
   panelPower: number;
   panelWidth: number;

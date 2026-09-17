@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { validTwilioRequest } from '@/lib/security/twilioRequest';
 
 // ⏸ PAUSED (not abandoned): blocked on ElevenLabs paid-plan access to the
 // library-voice API this pipeline needs for TTS. Intentionally left intact
@@ -27,6 +28,7 @@ function escapeXmlAttr(value: string): string {
 }
 
 async function handle(req: NextRequest) {
+  if (!await validTwilioRequest(req)) return new NextResponse('Forbidden', { status: 403 });
   const wsUrl = process.env.MEDIA_STREAM_WS_URL;
   const clientId = req.nextUrl.searchParams.get("clientId") || "";
 

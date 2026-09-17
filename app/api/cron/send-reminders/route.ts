@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
-import { createServerSupabaseClient } from "@/lib/supabase/server";
-import { isPlatformAdmin } from "@/lib/admin";
 import { sendWhatsAppTo, formatScheduledReminderMessage } from "@/lib/whatsappNotify";
+import { bearerMatches } from "@/lib/security/bearerSecret";
 
 // Precise-time WhatsApp reminders — distinct from the existing
 // cron/lead-reminders (a "due sometime today" digest to one hardcoded
@@ -31,23 +30,10 @@ const GRACE_PERIOD_MS = 15 * 60_000;
 // schedule has to come from an external scheduler hitting this URL
 // instead). That means, unlike the other two cron routes, this one is
 // reachable by anyone who knows the path — CRON_SECRET is what stands in
-// for Vercel's own cron-invocation guarantee. Accepted two ways since not
-// every external scheduler can set a custom header: the standard
-// `Authorization: Bearer <secret>` header, or a `?secret=<secret>` query
-// param for schedulers that only support a plain URL. Also accepts a
-// logged-in platform admin's normal session — no separate test button
-// needed; just hit this URL directly in the browser while logged in as
-// the admin account to trigger it manually.
+// for scheduler authentication. Only Authorization: Bearer is accepted;
+// URL secrets and platform-admin browser sessions cannot invoke this job.
 async function isAuthorized(req: NextRequest): Promise<boolean> {
-  const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const auth = req.headers.get("authorization");
-    if (auth === `Bearer ${secret}`) return true;
-    if (req.nextUrl.searchParams.get("secret") === secret) return true;
-  }
-  const supabase = await createServerSupabaseClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  return isPlatformAdmin(user?.id);
+  return bearerMatches(req.headers.get('authorization'), process.env.CRON_SECRET);
 }
 
 // Postgres `time` sometimes comes back as "HH:MM:SS" and sometimes

@@ -1,7 +1,8 @@
 "use client"
 
 import type React from "react"
-import { usePathname } from "next/navigation"
+import { Suspense } from "react"
+import { usePathname, useSearchParams } from "next/navigation"
 import { motion } from "framer-motion"
 import { Sidebar } from "@/components/sidebar"
 import { BottomNav } from "@/components/bottom-nav"
@@ -27,8 +28,21 @@ const STANDALONE_ROUTES = ["/", "/offline"]
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
+  if (pathname === "/design") {
+    return <Suspense fallback={<div className="min-h-screen bg-background" />}><DesignRouteShell>{children}</DesignRouteShell></Suspense>
+  }
+  return <ShellFrame>{children}</ShellFrame>
+}
+
+function DesignRouteShell({ children }: { children: React.ReactNode }) {
+  const searchParams = useSearchParams()
+  return <ShellFrame standalone={searchParams.get("client") === "1"}>{children}</ShellFrame>
+}
+
+function ShellFrame({ children, standalone = false }: { children: React.ReactNode; standalone?: boolean }) {
+  const pathname = usePathname()
   const isAuthRoute = AUTH_ROUTES.some((route) => pathname.startsWith(route))
-  const isStandalone = isAuthRoute || STANDALONE_ROUTES.includes(pathname)
+  const isStandalone = standalone || isAuthRoute || STANDALONE_ROUTES.includes(pathname)
 
   if (isStandalone) {
     return (
