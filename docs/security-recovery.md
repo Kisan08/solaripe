@@ -6,7 +6,7 @@ The user prioritizes recoverable access over vendor-held encryption keys. No row
 
 ## Production audit and target confirmation (2026-09-17)
 
-- User confirmed https://solaripe.vercel.app as the intended production website. Dashboard project ID: prj_bd2Ze50Q41QwpTz9zaANMasnkPYX, under kisan-vishwakarma-s-projects. Corrected the local .vercel/project.json project ID only; preserved the previous link in backups/vercel-project-link-before-20260917.json. No deployment performed.
+- The production website was https://solaripe.vercel.app on 2026-09-17; the main address is now https://www.amsuapp.in, and solaripe.vercel.app stays available as a secondary address. Dashboard project ID: prj_bd2Ze50Q41QwpTz9zaANMasnkPYX, under kisan-vishwakarma-s-projects. Corrected the local .vercel/project.json project ID only; preserved the previous link in backups/vercel-project-link-before-20260917.json. No deployment performed.
 - Supabase project rnyejnvsuzxytpraltju has a legacy ALL policy on public.designs with USING (true) and WITH CHECK (true) for anon/authenticated. Table grants must be checked before concluding public exploitability. The inspected projects SELECT rule uses auth.uid() = tenant_id; full tenant isolation remains unverified.
 - Supabase Free plan dashboard reports no included project backups. External backups and recovery have not been verified. Do not apply production migrations until a recovery plan is verified and changes approved.
 - Supabase Advisor flags public branding object listing, disabled leaked-password protection, mutable function search paths and executable SECURITY DEFINER functions. These require review, not blanket claims of exploitation.
@@ -16,7 +16,7 @@ The user prioritizes recoverable access over vendor-held encryption keys. No row
 
 ### Approved environment setup (2026-09-17)
 
-- Saved NEXT_PUBLIC_SITE_URL=https://solaripe.vercel.app as a Config variable scoped to Production only in the confirmed Vercel project. The dashboard confirmed success and states a new deployment is needed for the change to take effect. No redeploy was triggered; existing NEXT_PUBLIC_APP_URL and other variables were not altered.
+- Saved NEXT_PUBLIC_SITE_URL as a Config variable (then https://solaripe.vercel.app; it must now be https://www.amsuapp.in, followed by a redeploy) scoped to Production only in the confirmed Vercel project. The dashboard confirmed success and states a new deployment is needed for the change to take effect. No redeploy was triggered; existing NEXT_PUBLIC_APP_URL and other variables were not altered.
 - User completed DESIGN_SHARE_SECRET entry/save. Verified the Vercel list shows DESIGN_SHARE_SECRET as Secret, Production only, and a successful-save notice. Its value, length, entropy and recovery copy were not inspected. No deployment was triggered, so runtime availability remains unverified.
 - Production database policies, backups, migrations and deployment remain unchanged. Preview must use a separate signing secret and isolated test data before release validation.
 
@@ -36,7 +36,7 @@ The user prioritizes recoverable access over vendor-held encryption keys. No row
 2. Set NEXT_PUBLIC_APP_URL to the exact externally reachable HTTP(S) origin used by Twilio, including the current development tunnel origin. Match webhook URLs and verify a real test call after deployment. No unsigned development bypass is supported.
    Set MEDIA_STREAM_WS_URL to the exact public wss:// URL of the standalone voice server and verify its handshake. Missing/incorrect configuration fails closed. Signature validation is not rate limiting or replay prevention; those and provider usage limits remain operational follow-up work.
 3. Configure CRON_SECRET and update schedulers to send Authorization: Bearer, not a URL query parameter. Verify successful runs and alert on failures.
-4. Set NEXT_PUBLIC_SITE_URL to the deployed HTTPS website. A localhost URL is not usable by customers.
+4. Set NEXT_PUBLIC_SITE_URL to the main HTTPS website, https://www.amsuapp.in. A localhost URL is not usable by customers.
 5. Review and apply only migration 0021 after checking existing migration history and testing in staging. Do NOT replay historical 0004/0005: they contain TRUNCATE statements. This task has not applied 0021 to a live database.
 6. Build/deploy the service worker changes; confirm legacy caches disappear. Keep database/service-role/Twilio keys server-only and limit dashboard access with MFA and least privilege.
 

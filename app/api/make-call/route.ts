@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Client not found" }, { status: 404 });
     }
 
-    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://solaripe.vercel.app";
+    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://www.amsuapp.in";
 
     // Now defaults to the streaming voice pipeline (Deepgram STT + Groq
     // LLM + ElevenLabs TTS over a Twilio Media Stream, handled by
