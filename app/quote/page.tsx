@@ -93,20 +93,23 @@ const DEFAULT_SCHEDULE: PaymentMilestone[] = [
 // the same phrasing pattern from brand/model/wattage_or_spec/specs instead
 // of duplicating near-identical strings per call site. Deliberately does
 // NOT touch pricing — ratePerWp stays a manual input regardless.
+// With no product selected these name no brand and claim no certification: a
+// quote only states a make, certificate or degradation figure that the
+// selected product actually lists.
 function moduleSpecP2(p: Product | null): string {
-  if (!p) return "Waaree / Premier TOPCon Bifacial 580 Wp | BIS Compliant";
+  if (!p) return `${PANEL_WP} Wp solar PV module`;
   const base = [p.brand, p.model, p.wattage_or_spec].filter(Boolean).join(" ");
-  return `${base} | ${p.specs?.certification || "BIS Compliant"}`;
+  return [base, p.specs?.certification].filter(Boolean).join(" | ");
 }
 
 function moduleSpecP4(p: Product | null): string {
-  if (!p) return "Waaree / Premier TOPCon Bifacial 580 Wp | BIS | 0.45% degradation";
+  if (!p) return `${PANEL_WP} Wp solar PV module`;
   const base = [p.brand, p.model, p.wattage_or_spec].filter(Boolean).join(" ");
-  return `${base} | BIS | ${p.specs?.degradation || "0.45% degradation"}`;
+  return [base, p.specs?.certification, p.specs?.degradation].filter(Boolean).join(" | ");
 }
 
 function inverterBrandModel(p: Product | null): string {
-  return p ? [p.brand, p.model].filter(Boolean).join(" ") : "Waaree String";
+  return p ? [p.brand, p.model].filter(Boolean).join(" ") : "String inverter";
 }
 
 function inverterSpecP2(p: Product | null, capacityKw: number): string {
@@ -114,7 +117,7 @@ function inverterSpecP2(p: Product | null, capacityKw: number): string {
 }
 
 function inverterSpecP4(p: Product | null): string {
-  return `${inverterBrandModel(p)} | ${p?.specs?.connectivity || "Grid-tied"} | ${p?.specs?.monitoring || "Remote monitoring ready"}`;
+  return [inverterBrandModel(p), p?.specs?.connectivity || "Grid-tied", p?.specs?.monitoring].filter(Boolean).join(" | ");
 }
 
 function compute(f: QuoteForm, schedule: PaymentMilestone[] = DEFAULT_SCHEDULE) {
@@ -297,7 +300,9 @@ function PdfHeader({ s }: { s: AppSettings }) {
         </div>
       </div>
       <div style={{ textAlign: "right" }}>
-        <img src="/waaree_logo.png" alt="Waaree" style={{ height: 46, objectFit: "contain", display: "block" }} />
+        {s.show_partner_logos && (
+          <img src="/waaree_logo.png" alt="Waaree" style={{ height: 46, objectFit: "contain", display: "block" }} />
+        )}
       </div>
     </div>
   );
@@ -712,7 +717,7 @@ function P2({ f, c, s, panel, inverter }: { f: QuoteForm; c: Calc; s: AppSetting
   const opexRows = opexSavingsTable(f, c.gen, ppaTermYears);
   const opexTotal = opexTotalSavings(f, c.gen, ppaTermYears);
   const buybackRows = buybackTable(c.net, ppaTermYears);
-  const panelKpiSub = panel ? [panel.brand, panel.model].filter(Boolean).join(" ") : "Waaree 580 Wp TOPCon";
+  const panelKpiSub = panel ? [panel.brand, panel.model].filter(Boolean).join(" ") : `${PANEL_WP} Wp`;
   // Per-page running counter for SectionTitle's numbered badge — see that
   // component's comment. Advances in source order, so it naturally skips
   // numbers for whatever's conditionally absent (Battery/Hybrid, the
@@ -733,7 +738,7 @@ function P2({ f, c, s, panel, inverter }: { f: QuoteForm; c: Calc; s: AppSetting
           <tbody>
             {[
               ["Module", moduleSpecP2(panel), "Structure", "Hot-Dip Galvanized (HDG) | 15-yr warranty"],
-              ["Inverter", inverterSpecP2(inverter, f.systemCapacity), "DC Cable", "4 mm2 Tinned Cu | EN-50618 (Waasol)"],
+              ["Inverter", inverterSpecP2(inverter, f.systemCapacity), "DC Cable", "4 mm2 Tinned Cu | EN-50618"],
               ["Degradation", "0.45% YoY from Year 2", "Timeline", "60-70 days from PO & Advance"],
               ["Earthing", "Chemical Earth Pits per IS 3043", "Lightning Arrester", "Conventional LA per IEC-62305"],
             ].map((row, i) => (
@@ -1035,11 +1040,16 @@ function P3B({ projects }: { projects: TenantProject[] }) {
 const WARRANTY_COLORS = [BLUE2, "#7C3AED", GREEN, ACCENT];
 
 function P4({ s, panel, inverter, certifications }: { s: AppSettings; panel: Product | null; inverter: Product | null; certifications: Certification[] }) {
-  const warranty = s.default_warranty?.length ? s.default_warranty : defaultSettings.default_warranty;
-  const scope = s.default_scope ?? defaultSettings.default_scope;
+  // Warranties and scope are shown only if this company has entered them in
+  // Settings; nothing is assumed on its behalf. Section numbers follow what is shown.
+  const warranty = s.default_warranty ?? [];
+  const scope = s.default_scope ?? { included: [], excluded: [] };
+  const hasScope = scope.included.length > 0 || scope.excluded.length > 0;
+  let sectionNo = 0;
   return (
     <Card>
-      <SectionTitle number={1} title="Warranties" sub="OEM guaranteed" />
+      {warranty.length > 0 && (<>
+      <SectionTitle number={++sectionNo} title="Warranties" />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginBottom: 14 }}>
         {warranty.map((w, i) => {
           const color = WARRANTY_COLORS[i % WARRANTY_COLORS.length];
@@ -1057,6 +1067,7 @@ function P4({ s, panel, inverter, certifications }: { s: AppSettings; panel: Pro
           );
         })}
       </div>
+      </>)}
 
       {/* Phase 6: tenant certifications — deliberately a compact badge
           row (not full cards like Warranties above) since P4 is already
@@ -1078,7 +1089,8 @@ function P4({ s, panel, inverter, certifications }: { s: AppSettings; panel: Pro
         </div>
       )}
 
-      <SectionTitle number={2} title="Scope of Work" sub="Inclusions and exclusions" />
+      {hasScope && (<>
+      <SectionTitle number={++sectionNo} title="Scope of Work" sub="Inclusions and exclusions" />
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
         <div style={{ background: GREEN_L, borderRadius: 8, padding: "12px 14px" }}>
           <div style={{ fontWeight: 700, color: GREEN, fontSize: FONT, marginBottom: 8 }}>INCLUDED IN SCOPE</div>
@@ -1093,8 +1105,9 @@ function P4({ s, panel, inverter, certifications }: { s: AppSettings; panel: Pro
           ))}
         </div>
       </div>
+      </>)}
 
-      <SectionTitle number={3} title="Bill of Material" sub="Key components" />
+      <SectionTitle number={++sectionNo} title="Bill of Material" sub="Key components" />
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead>
           <tr>
@@ -1108,9 +1121,9 @@ function P4({ s, panel, inverter, certifications }: { s: AppSettings; panel: Pro
             ["1", "Solar PV Modules", moduleSpecP4(panel)],
             ["2", "String Inverter", inverterSpecP4(inverter)],
             ["3", "Mounting Structure", "Hot-Dip Galvanized (HDG) | SS-304 fasteners | 15-yr warranty"],
-            ["4", "DC Cables", "4 mm2 Tinned Cu UV-Protected | Waasol | EN-50618"],
-            ["5", "AC Cables", "Polycab/KEI | Al XLPE Armoured | Bimetallic Lugs"],
-            ["6", "ACDB / DCDB", "Schneider/L&T/ABB | MCCB | SPD-2 | OC and SC protection"],
+            ["4", "DC Cables", "4 mm2 Tinned Cu UV-Protected | EN-50618"],
+            ["5", "AC Cables", "Al XLPE Armoured | Bimetallic Lugs"],
+            ["6", "ACDB / DCDB", "MCCB | SPD-2 | OC and SC protection"],
             ["7", "Earthing", "Chemical Earth Pits 250 micron | 3m Dia 17.2mm | per IS 3043"],
             ["8", "Lightning Arrester", "Copper Bonded 5-Spike | IEC-62305 and IS 2309"],
             ["9", "Net Meter + LT/CT Box", "As per DISCOM spec | Fully included and managed"],
@@ -1203,7 +1216,7 @@ function P5({ f, s, testimonials, clientLogos }: { f: QuoteForm; s: AppSettings;
           defaulted off (see lib/settings.ts's show_client_logos comment). */}
       {clientLogos.length > 0 && (
         <Card>
-          <SectionTitle number={++n} title="Our Clients" sub="Trusted by leading developers" />
+          <SectionTitle number={++n} title="Our Clients" />
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 30, flexWrap: "wrap", padding: "20px 0" }}>
             {clientLogos.map(logo => (
               <img key={logo.id} src={logo.logo_url} alt={logo.name} style={{ height: 90, objectFit: "contain" }} />
@@ -1930,7 +1943,7 @@ function QuotePageInner() {
                 <label className="block text-xs font-medium text-gray-500 mb-1">Panel Model (optional)</label>
                 <select value={selectedPanelId} onChange={e => setSelectedPanelId(e.target.value)}
                   className="w-full px-3 py-2.5 text-base rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400">
-                  <option value="">Default (Waaree / Premier 580 Wp)</option>
+                  <option value="">Default ({PANEL_WP} Wp, no brand named)</option>
                   {panelOptions.map(p => (
                     <option key={p.id} value={p.id}>{p.brand} {p.model}{p.wattage_or_spec ? ` — ${p.wattage_or_spec}` : ""}</option>
                   ))}
@@ -1940,7 +1953,7 @@ function QuotePageInner() {
                 <label className="block text-xs font-medium text-gray-500 mb-1">Inverter Model (optional)</label>
                 <select value={selectedInverterId} onChange={e => setSelectedInverterId(e.target.value)}
                   className="w-full px-3 py-2.5 text-base rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400">
-                  <option value="">Default (Waaree String)</option>
+                  <option value="">Default (string inverter, no brand named)</option>
                   {inverterOptions.map(p => (
                     <option key={p.id} value={p.id}>{p.brand} {p.model}{p.wattage_or_spec ? ` — ${p.wattage_or_spec}` : ""}</option>
                   ))}

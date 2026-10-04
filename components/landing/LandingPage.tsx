@@ -27,18 +27,18 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 
 const TICKER_ITEMS = [
   "3D ROOFTOP DESIGN",
-  "AI QUOTE PDFS",
+  "QUOTE PDFS",
   "LEADS KANBAN + CRM",
   "GIGI VOICE AI",
   "HINDI + HINGLISH CALLING",
-  "WHITE-LABEL READY",
+  "YOUR LOGO ON EVERY QUOTE",
 ]
 
 const PROBLEMS = [
   {
     n: "01",
     title: "Leads live in WhatsApp",
-    body: "New enquiries arrive across five chats, three phones, and a notebook. Half of them never get a callback.",
+    body: "New enquiries arrive across five chats, three phones, and a notebook.",
   },
   {
     n: "02",
@@ -61,13 +61,13 @@ const FEATURES = [
   {
     icon: Box,
     title: "3D rooftop solar design",
-    body: "Design accurate, shadow-aware rooftop proposals in 3D — without sending a site engineer.",
+    body: "Trace the roof on a satellite map and lay out panels in 3D to show your client a design.",
     solid: false,
   },
   {
     icon: FileText,
-    title: "AI quote generator",
-    body: "Itemised, branded quotes generated in minutes, exported to a client-ready PDF in one click.",
+    title: "Quote generator",
+    body: "Itemised, branded quotes exported to a client-ready PDF in one click.",
     solid: true,
   },
   {
@@ -79,7 +79,7 @@ const FEATURES = [
   {
     icon: Phone,
     title: "AI-assisted calling",
-    body: "An AI agent that qualifies inbound leads, answers common questions, and books site visits in Hindi or Hinglish.",
+    body: "An AI agent calls the leads on your list in Hindi or Hinglish, asks for their city and electricity bill, and records the result in your CRM.",
     solid: false,
   },
   {
@@ -90,8 +90,8 @@ const FEATURES = [
   },
   {
     icon: BadgeCheck,
-    title: "White-label ready",
-    body: "Your brand, your domain, your proposals. Amsu runs quietly in the background as your own operating system.",
+    title: "Your branding on quotes",
+    body: "Add your logo, colours and company details to every proposal.",
     solid: true,
   },
 ]
@@ -102,7 +102,7 @@ const FEATURES = [
 // "Scale" is the public name of the plan the code calls "enterprise".
 const PLANS = [
   { name: "Starter", price: "₹999", plan: "starter", highlighted: false },
-  { name: "Growth", price: "₹2,500", plan: "growth", highlighted: true },
+  { name: "Growth", price: "₹2,500", plan: "growth", highlighted: false },
   { name: "Scale", price: "₹5,000", plan: "enterprise", highlighted: false },
 ] as const
 
@@ -371,11 +371,6 @@ export function LandingPage() {
                     : "border border-gray-200 bg-white"
                 }`}
               >
-                {plan.highlighted && (
-                  <span className="mb-3 inline-block rounded-full bg-white/15 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide">
-                    Most Popular
-                  </span>
-                )}
                 <div className={`text-sm font-semibold ${plan.highlighted ? "text-white/80" : "text-gray-500"}`}>
                   {plan.name}
                 </div>
@@ -417,7 +412,7 @@ export function LandingPage() {
             Stop losing deals to spreadsheet chaos.
           </h2>
           <p className="mt-4 max-w-xl text-pretty text-white/80">
-            See your own pipeline, quotes, and 3D designs running on Amsu — in a 30-minute demo tailored to your EPC.
+            Request a demo to see the pipeline, quotes, and 3D designs in Amsu.
           </p>
           <div className="mt-7 flex flex-col items-start gap-4 pb-20 sm:flex-row sm:items-center">
             <button
@@ -454,7 +449,7 @@ export function LandingPage() {
                   Elevate. Inspire. Empower.
                 </div>
                 <p className="mt-4 max-w-xs text-sm text-white/70">
-                  The white-label operating platform for solar EPC companies in India.
+                  The operating platform for solar EPC companies in India.
                 </p>
               </div>
               <div>
@@ -467,7 +462,6 @@ export function LandingPage() {
               <div>
                 <div className="text-xs font-semibold uppercase tracking-widest text-white/50">Company</div>
                 <ul className="mt-3 space-y-2 text-sm text-white/80">
-                  <li><a href="#problem" className="hover:text-white">About</a></li>
                   <li><button onClick={() => setShowDemoModal(true)} className="hover:text-white">Contact</button></li>
                   <li><Link href="/login" className="hover:text-white">Log in</Link></li>
                 </ul>

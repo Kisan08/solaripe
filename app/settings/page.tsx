@@ -13,7 +13,7 @@ const COLOR_FIELDS: { key: keyof AppSettings; label: string }[] = [
 
 const TOGGLE_FIELDS: { key: keyof AppSettings; label: string; help: string }[] = [
   { key: 'show_why_solar', label: '"Why Go Solar Now" strip', help: 'Generic savings/CO2 messaging on the cover page.' },
-  { key: 'show_partner_logos', label: 'Panel partner logos', help: 'Waaree / Adani / Premier logos on the cover page.' },
+  { key: 'show_partner_logos', label: 'Panel partner logos', help: 'Shows the Waaree, Adani and Premier logos on the cover and page headers. Turn on only if you are entitled to show them.' },
 ]
 
 const SECTIONS = [
@@ -35,7 +35,7 @@ const SECTIONS = [
     title: 'Quote Defaults',
     color: 'bg-green-600',
     fields: [
-      { key: 'panel_brand', label: 'Panel Brand', type: 'text', placeholder: 'Waaree' },
+      { key: 'panel_brand', label: 'Panel Brand', type: 'text', placeholder: 'Your panel brand' },
       { key: 'panel_wp', label: 'Panel Wp', type: 'number', placeholder: '580' },
       { key: 'default_rate', label: 'Default Rate (₹/Wp)', type: 'number', placeholder: '52' },
       { key: 'yield_kwh', label: 'Yield (kWh/kWp/yr)', type: 'number', placeholder: '1332' },
@@ -143,6 +143,11 @@ export default function SettingsPage() {
               <span className={`w-1.5 h-4 rounded ${color} inline-block`} />
               <h2 className="text-sm font-semibold text-gray-700">{title}</h2>
             </div>
+            {title === 'Quote Defaults' && (
+              <p className="px-5 pt-4 text-xs text-gray-500">
+                These starting numbers are examples so the quote tool works. Replace them with your own before you send a quote.
+              </p>
+            )}
             <div className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
               {fields.map(({ key, label, type, placeholder, indianPhone }) => (
                 <div key={key}>

@@ -74,7 +74,7 @@ export function DemoRequestModal({ onClose }: { onClose: () => void }) {
                 required
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="Rakesh Sharma"
+                placeholder="Your name"
                 className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-base text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50"
               />
             </div>
@@ -84,7 +84,7 @@ export function DemoRequestModal({ onClose }: { onClose: () => void }) {
                 required
                 value={companyName}
                 onChange={(e) => setCompanyName(e.target.value)}
-                placeholder="SuryaKiran Renewables"
+                placeholder="Your company name"
                 className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-base text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50"
               />
             </div>
@@ -114,7 +114,7 @@ export function DemoRequestModal({ onClose }: { onClose: () => void }) {
               <input
                 value={city}
                 onChange={(e) => setCity(e.target.value)}
-                placeholder="Pune, Maharashtra"
+                placeholder="City or region"
                 className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-base text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50"
               />
             </div>

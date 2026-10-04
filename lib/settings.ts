@@ -75,7 +75,7 @@ export const defaultSettings: AppSettings = {
   proprietor: '',
   address: '',
   website: '',
-  panel_brand: 'Waaree',
+  panel_brand: '',
   panel_wp: 580,
   default_rate: 52,
   yield_kwh: 1332,
@@ -88,31 +88,15 @@ export const defaultSettings: AppSettings = {
   secondary_color: '#1E88E5',
   accent_color: '#F5A623',
   show_why_solar: true,
-  show_partner_logos: true,
+  // Off until a company chooses to show brand logos it is entitled to show.
+  show_partner_logos: false,
   show_client_logos: false,
   tagline: 'Engineering · Procurement · Construction (EPC) – Solar Division',
   default_terms: 'By signing below, both parties agree to the Techno-Commercial Proposal terms. Payments as per milestone schedule. GST as applicable. Proposal valid for 30 days from date above.',
-  default_warranty: [
-    { item: 'Solar PV Modules', coverage: 'Manufacturing Defect', period: '12 Years' },
-    { item: 'Solar PV Modules', coverage: 'Linear Performance (80%)', period: '30 Years' },
-    { item: 'Inverter', coverage: 'Standard OEM', period: '5 Yrs (ext. 8)' },
-    { item: 'HDG Structure', coverage: 'Corrosion Warranty', period: '15 Years' },
-    { item: 'Balance of System', coverage: 'OEM Standard', period: '1 Year' },
-    { item: 'Workmanship', coverage: 'Installation Quality', period: '1 Year' },
-  ],
-  default_scope: {
-    included: [
-      'Solar modules, inverter, structure', 'DC and AC cables, connectors, trays',
-      'Earthing system and lightning arrester', 'Net meter with LT/CT box',
-      'DISCOM net metering approval', 'EAR and Marine insurance',
-      'Commissioning and monitoring setup', 'Remote monitoring (1 year free)',
-    ],
-    excluded: [
-      'Water supply at site', 'Internet for monitoring', 'Power during installation',
-      'Service lift / crane', 'Roof access ladder', 'Removal of existing system',
-      'Meter merging / load enhancement', 'Civil / waterproofing work',
-    ],
-  },
+  // Warranties and scope start empty: a quote only promises what the company
+  // itself has entered in Settings. Empty sections are left out of the quote.
+  default_warranty: [],
+  default_scope: { included: [], excluded: [] },
   default_payment_schedule: [
     { label: 'Advance on PO', percent: 30 },
     { label: 'Material Delivery', percent: 40 },
