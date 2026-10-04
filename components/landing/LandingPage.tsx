@@ -11,10 +11,10 @@ import {
   Phone,
   Mic,
   BadgeCheck,
-  Quote as QuoteIcon,
   Check,
 } from "lucide-react"
 import { DemoRequestModal } from "@/components/landing/DemoRequestModal"
+import { limitFor } from "@/lib/usage/rules"
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
@@ -96,72 +96,23 @@ const FEATURES = [
   },
 ]
 
-const TESTIMONIALS = [
-  {
-    quote: "We went from two-day quote turnarounds to under fifteen minutes. The PDF proposals look like we hired a design agency.",
-    name: "Arvind Menon",
-    title: "Director, SuryaKiran Renewables · Kochi",
-  },
-  {
-    quote: "For the first time in six years, I can see every open deal on one board. Our close rate is up 30% in a single quarter.",
-    name: "Priya Deshmukh",
-    title: "Founder, Helios Edge Solar · Pune",
-  },
-  {
-    quote: "Gigi books site visits while my team is up on the roof. And the Hindi calling agent qualifies leads better than any intern we trained.",
-    name: "Shalini Rao",
-    title: "Director, RajSun Power · Jaipur",
-  },
-]
-
+// Only what the product actually enforces today: the monthly AI-call and
+// WhatsApp allowances. The numbers are read from the same rules the server
+// uses (lib/usage/rules.ts), so this page cannot drift from what is enforced.
+// "Scale" is the public name of the plan the code calls "enterprise".
 const PLANS = [
-  {
-    name: "Starter",
-    price: "₹4,999",
-    period: "/month",
-    blurb: "For small EPC teams moving off spreadsheets.",
-    features: [
-      "Up to 100 leads / month",
-      "AI quote generator + PDF export",
-      "Leads Kanban + CRM",
-      "2 team seats",
-      "Email support",
-    ],
-    cta: "Start with Starter",
-    highlighted: false,
-  },
-  {
-    name: "Growth",
-    price: "₹9,999",
-    period: "/month",
-    blurb: "The full operating system for a growing EPC.",
-    features: [
-      "Everything in Starter",
-      "3D rooftop design tool",
-      "AI calling · 500 min (Hindi/Hinglish)",
-      "Gigi voice assistant",
-      "10 team seats",
-      "Priority support",
-    ],
-    cta: "Start with Growth",
-    highlighted: true,
-  },
-  {
-    name: "Scale",
-    price: "Custom",
-    period: "",
-    blurb: "For multi-branch EPCs and enterprise volume.",
-    features: [
-      "Unlimited leads & calling",
-      "White-label domain & branding",
-      "API access & integrations",
-      "Dedicated success manager",
-      "Custom SLA",
-    ],
-    cta: "Talk to sales",
-    highlighted: false,
-  },
-]
+  { name: "Starter", price: "₹999", plan: "starter", highlighted: false },
+  { name: "Growth", price: "₹2,500", plan: "growth", highlighted: true },
+  { name: "Scale", price: "₹5,000", plan: "enterprise", highlighted: false },
+] as const
+
+function planFeatures(plan: "starter" | "growth" | "enterprise") {
+  const n = (v: number) => v.toLocaleString("en-IN")
+  return [
+    `${n(limitFor("ai_call", plan))} AI calls per month`,
+    `${n(limitFor("whatsapp", plan))} WhatsApp messages per month`,
+  ]
+}
 
 function DashboardMockup() {
   return (
@@ -172,23 +123,13 @@ function DashboardMockup() {
       viewport={{ once: true, amount: 0.3 }}
       transition={{ duration: 0.7, ease: "easeOut" }}
     >
-      <div className="animate-bob absolute -top-6 right-2 z-10 hidden items-center gap-2 rounded-xl border border-gray-100 bg-white px-3.5 py-2.5 shadow-lg sm:flex md:right-6">
-        <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
-          <Check className="size-4" />
-        </span>
-        <div className="leading-tight">
-          <div className="text-xs font-semibold text-[#0F172A]">Quote accepted</div>
-          <div className="text-[11px] text-gray-500">₹4.2L · just now</div>
-        </div>
-      </div>
-
       <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl transition-transform duration-500 hover:-translate-y-1">
         <div className="flex items-center gap-2 border-b border-gray-100 bg-gray-50 px-4 py-2.5">
           <span className="size-2.5 rounded-full bg-gray-300" />
           <span className="size-2.5 rounded-full bg-gray-300" />
           <span className="size-2.5 rounded-full bg-gray-300" />
           <div className="ml-3 flex-1 rounded-md bg-white px-3 py-1 text-center text-[11px] text-gray-400">
-            app.amsu.io/dashboard
+            amsuapp.in
           </div>
         </div>
 
@@ -218,63 +159,44 @@ function DashboardMockup() {
           <div className="p-4">
             <div className="mb-3 flex items-center justify-between">
               <div>
-                <div className="text-[10px] font-medium uppercase tracking-wide text-gray-400">
-                  Tuesday, 14 July
-                </div>
-                <div className="text-sm font-bold text-[#0F172A]">
-                  Good morning, SuryaKiran Renewables
-                </div>
+                <div className="text-sm font-bold text-[#0F172A]">Dashboard</div>
               </div>
-              <span className="flex items-center gap-1.5 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
-                <span className="relative flex size-1.5">
-                  <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary opacity-75" />
-                  <span className="relative inline-flex size-1.5 rounded-full bg-primary" />
-                </span>
-                LIVE
+              <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-500">
+                Sample data
               </span>
             </div>
 
             <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-              {[
-                { label: "Active Leads", value: "128", change: "+12%" },
-                { label: "Quotes Sent", value: "46", change: "+8%" },
-                { label: "Deals Won", value: "₹18.4L", change: "+22%" },
-                { label: "Avg. Quote Time", value: "9 min", change: "-71%" },
-              ].map((s) => (
-                <div key={s.label} className="rounded-lg border border-gray-100 bg-white p-2">
-                  <div className="text-sm font-extrabold text-[#0F172A]">{s.value}</div>
-                  <div className="text-[9px] text-gray-400">
-                    {s.label} <span className="text-emerald-500">{s.change}</span>
-                  </div>
+              {["Active Leads", "Quotes Sent", "Deals Won", "Avg. Quote Time"].map((label) => (
+                <div key={label} className="rounded-lg border border-gray-100 bg-white p-2">
+                  <div className="text-sm font-extrabold text-gray-300">—</div>
+                  <div className="text-[9px] text-gray-400">{label}</div>
                 </div>
               ))}
             </div>
 
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               <div className="rounded-lg border border-gray-100 bg-white p-2">
-                <div className="mb-1 text-[9px] font-semibold uppercase text-gray-400">New</div>
+                <div className="mb-1 text-[9px] font-semibold uppercase text-gray-400">New Lead</div>
                 <div className="rounded-md bg-gray-50 p-1.5 text-[10px]">
-                  <div className="font-semibold text-[#0F172A]">Sharma Residence</div>
-                  <div className="text-gray-400">₹3.1L</div>
+                  <div className="font-semibold text-gray-400">Sample lead</div>
                 </div>
               </div>
               <div className="rounded-lg border border-gray-100 bg-white p-2">
-                <div className="mb-1 text-[9px] font-semibold uppercase text-gray-400">Qualified</div>
+                <div className="mb-1 text-[9px] font-semibold uppercase text-gray-400">Site Visit</div>
                 <div className="rounded-md bg-gray-50 p-1.5 text-[10px]">
-                  <div className="font-semibold text-[#0F172A]">Hotel Lakeview</div>
-                  <div className="text-gray-400">₹11.2L</div>
+                  <div className="font-semibold text-gray-400">Sample lead</div>
                 </div>
               </div>
               <div className="rounded-lg border border-gray-100 bg-white p-2">
                 <div className="mb-1 text-[9px] font-semibold uppercase text-gray-400">Won</div>
                 <div className="rounded-md bg-gray-50 p-1.5 text-[10px]">
-                  <div className="font-semibold text-[#0F172A]">Sunrise Mall</div>
-                  <div className="text-gray-400">₹38.4L</div>
+                  <div className="font-semibold text-gray-400">Sample lead</div>
                 </div>
               </div>
               <div className="rounded-lg border border-gray-100 bg-primary p-2 text-white">
-                <div className="mb-1 text-[9px] font-semibold uppercase text-white/70">AI Quote</div>
-                <div className="text-[10px] font-semibold">Rooftop 8.6 kW</div>
+                <div className="mb-1 text-[9px] font-semibold uppercase text-white/70">Quote</div>
+                <div className="text-[10px] font-semibold">Rooftop quote</div>
                 <div className="mt-1 rounded bg-white/15 px-1.5 py-1 text-center text-[9px] font-semibold">
                   Export PDF
                 </div>
@@ -284,18 +206,6 @@ function DashboardMockup() {
         </div>
       </div>
 
-      <div className="animate-bob-delayed absolute -bottom-5 left-2 z-10 hidden max-w-[220px] items-start gap-2 rounded-xl border border-gray-100 bg-white px-3 py-2.5 shadow-lg sm:flex md:left-6">
-        <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
-          <Mic className="size-3.5" />
-        </span>
-        <div className="leading-tight">
-          <div className="text-[11px] font-semibold text-[#0F172A]">Gigi added a lead</div>
-          <div className="text-[10px] text-gray-500">Rakesh · Udaipur · 5 kW</div>
-          <div className="mt-0.5 text-[10px] italic text-gray-400">
-            &ldquo;3 new leads added from today&apos;s calls.&rdquo;
-          </div>
-        </div>
-      </div>
     </motion.div>
   )
 }
@@ -319,7 +229,6 @@ export function LandingPage() {
           <nav className="hidden items-center gap-8 text-sm font-medium text-gray-600 md:flex">
             <a href="#problem" className="hover:text-[#0F172A]">Problem</a>
             <a href="#features" className="hover:text-[#0F172A]">Features</a>
-            <a href="#testimonials" className="hover:text-[#0F172A]">Testimonials</a>
             <a href="#pricing" className="hover:text-[#0F172A]">Pricing</a>
           </nav>
           <div className="flex items-center gap-5">
@@ -363,9 +272,6 @@ export function LandingPage() {
               Log in
             </Link>
           </div>
-          <p className="mt-8 text-[11px] font-semibold uppercase tracking-widest text-gray-400">
-            Trusted by 120+ solar EPCs across 14 states
-          </p>
         </div>
 
         <div className="mt-14">
@@ -444,45 +350,15 @@ export function LandingPage() {
         </div>
       </section>
 
-      {/* Testimonials */}
-      <section id="testimonials" className="px-5 py-20 md:px-8">
-        <div className="mx-auto max-w-6xl">
-          <SectionLabel>Customers</SectionLabel>
-          <h2 className="text-balance text-3xl font-extrabold tracking-tight text-[#0F172A] sm:text-4xl">
-            EPC teams that stopped chasing spreadsheets.
-          </h2>
-
-          <div className="mt-10 grid gap-4 md:grid-cols-3">
-            {TESTIMONIALS.map((t) => (
-              <div key={t.name} className="rounded-2xl border border-gray-100 bg-white p-6 card-shadow">
-                <QuoteIcon className="size-6 text-primary/30" fill="currentColor" />
-                <p className="mt-3 text-[15px] italic leading-relaxed text-gray-700">
-                  &ldquo;{t.quote}&rdquo;
-                </p>
-                <div className="mt-5 flex items-center gap-3 border-t border-gray-100 pt-4">
-                  <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary">
-                    {t.name.split(" ").map((w) => w[0]).join("")}
-                  </div>
-                  <div>
-                    <div className="text-sm font-bold text-[#0F172A]">{t.name}</div>
-                    <div className="text-xs text-gray-500">{t.title}</div>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
       {/* Pricing */}
-      <section id="pricing" className="bg-gray-50/60 px-5 py-20 md:px-8">
+      <section id="pricing" className="px-5 py-20 md:px-8">
         <div className="mx-auto max-w-6xl">
           <SectionLabel>Pricing</SectionLabel>
           <h2 className="text-balance text-3xl font-extrabold tracking-tight text-[#0F172A] sm:text-4xl">
-            Pays for itself with one recovered deal.
+            Plans and pricing.
           </h2>
           <p className="mt-4 max-w-xl text-pretty text-gray-500">
-            Per company, billed annually. No per-lead fees, no surprise add-ons.
+            Per company. No per-lead fees.
           </p>
 
           <div className="mt-10 grid gap-5 lg:grid-cols-3">
@@ -505,16 +381,11 @@ export function LandingPage() {
                 </div>
                 <div className="mt-1 flex items-baseline gap-1">
                   <span className="text-3xl font-extrabold">{plan.price}</span>
-                  {plan.period && (
-                    <span className={plan.highlighted ? "text-white/70" : "text-gray-400"}>{plan.period}</span>
-                  )}
+                  <span className={plan.highlighted ? "text-white/70" : "text-gray-400"}>/month</span>
                 </div>
-                <p className={`mt-2 text-sm ${plan.highlighted ? "text-white/80" : "text-gray-500"}`}>
-                  {plan.blurb}
-                </p>
 
                 <ul className="mt-5 space-y-2.5">
-                  {plan.features.map((f) => (
+                  {planFeatures(plan.plan).map((f) => (
                     <li key={f} className="flex items-start gap-2 text-sm">
                       <Check className={`mt-0.5 size-4 shrink-0 ${plan.highlighted ? "text-white" : "text-primary"}`} />
                       <span className={plan.highlighted ? "text-white/90" : "text-gray-600"}>{f}</span>
@@ -530,15 +401,11 @@ export function LandingPage() {
                       : "border border-primary text-primary"
                   }`}
                 >
-                  {plan.cta}
+                  Request a Demo
                 </button>
               </div>
             ))}
           </div>
-
-          <p className="mt-8 text-center text-[11px] font-semibold uppercase tracking-widest text-gray-400">
-            All plans include onboarding · GST invoice · Cancel anytime
-          </p>
         </div>
       </section>
 
@@ -560,9 +427,6 @@ export function LandingPage() {
               Request a Demo
               <ArrowRight className="size-4" />
             </button>
-            <span className="text-xs font-semibold uppercase tracking-widest text-white/60">
-              Setup in under a week
-            </span>
           </div>
 
           {/* Footer */}
@@ -598,7 +462,6 @@ export function LandingPage() {
                 <ul className="mt-3 space-y-2 text-sm text-white/80">
                   <li><a href="#features" className="hover:text-white">Features</a></li>
                   <li><a href="#pricing" className="hover:text-white">Pricing</a></li>
-                  <li><a href="#testimonials" className="hover:text-white">Testimonials</a></li>
                 </ul>
               </div>
               <div>
@@ -619,7 +482,7 @@ export function LandingPage() {
             </div>
 
             <div className="mt-10 flex flex-col gap-2 border-t border-white/15 pt-6 text-xs text-white/60 sm:flex-row sm:items-center sm:justify-between">
-              <span>© 2026 Amsu Technologies Pvt. Ltd. All rights reserved.</span>
+              <span>© {new Date().getFullYear()} Amsu</span>
               <span className="font-semibold uppercase tracking-widest">Made in India</span>
             </div>
           </div>
