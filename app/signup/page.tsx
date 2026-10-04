@@ -36,7 +36,7 @@ export default function SignupPage() {
                   type="text"
                   name="companyName"
                   required
-                  placeholder="Omkar Power Solutions"
+                  placeholder="Your company name"
                   className="w-full px-3 py-2.5 text-base rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 transition-all"
                 />
               </div>

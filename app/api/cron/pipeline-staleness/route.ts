@@ -80,7 +80,7 @@ export async function GET(req: NextRequest) {
         return { tenantId, sent: false, skipped: true, staleCount: staleProjects.length };
       }
       const message = formatPipelineStalenessMessage(staleProjects);
-      const result = await sendWhatsAppTo(phone, message);
+      const result = await sendWhatsAppTo(phone, message, tenantId);
       return { tenantId, sent: result.ok, error: result.error, staleCount: staleProjects.length };
     }),
   );

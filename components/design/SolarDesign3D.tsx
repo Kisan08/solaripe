@@ -294,6 +294,8 @@ export function SolarDesign3D({ roofPoints, onClose, lat = 19.24, readOnly = fal
       .then(data => {
         if (cancelled) return;
         setSatelliteImageUrl(!data.fallback && data.dataUrl ? data.dataUrl : null);
+        // Only the signed-in owner sees the limit notice, never a customer on a shared link.
+        if (!readOnly && data.limitReached && data.message) setSaveError(data.message);
       })
       .catch(() => { if (!cancelled) setSatelliteImageUrl(null); });
     return () => { cancelled = true; };

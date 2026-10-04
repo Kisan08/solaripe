@@ -6,7 +6,6 @@ import {
   PiggyBank, BatteryCharging, Clock, IndianRupee, FileText, Leaf, ShieldCheck,
   type LucideIcon,
 } from "lucide-react";
-import { company } from "@/lib/company.config";
 import { PhoneInput, digitsForPhoneInput } from "@/components/ui/phone-input";
 import { getSettings, defaultSettings, type AppSettings, type PaymentMilestone } from '@/lib/settings'
 import { fetchActiveProducts, type Product } from '@/lib/products'
@@ -707,6 +706,8 @@ function P1({ f, c, s, showSiteDetails }: { f: QuoteForm; c: Calc; s: AppSetting
    Switched to a fixed, moderate gap instead — predictable spacing that
    doesn't grow or shrink based on how much room happens to be left. */
 function P2({ f, c, s, panel, inverter }: { f: QuoteForm; c: Calc; s: AppSettings; panel: Product | null; inverter: Product | null }) {
+  // The company named in the proposal text is always this account's own.
+  const who = s.name || "the company";
   const ppaTermYears = parseInt(f.ppaTermYears, 10) || 10;
   const opexRows = opexSavingsTable(f, c.gen, ppaTermYears);
   const opexTotal = opexTotalSavings(f, c.gen, ppaTermYears);
@@ -847,7 +848,7 @@ function P2({ f, c, s, panel, inverter }: { f: QuoteForm; c: Calc; s: AppSetting
               <KpiCard icon={PiggyBank} label="Savings/Unit" value={`Rs.${(f.gridRate - f.ppaRate).toFixed(2)}`} sub="Per kWh saved" color={GREEN} bg="white" />
             </div>
             <div style={{ marginTop: 10, fontSize: FONT, color: "#555", lineHeight: 1.6 }}>
-              Under the OPEX model, {company.name} owns, operates and maintains the solar plant. You pay only for units generated at Rs. {f.ppaRate}/kWh — saving Rs. {(f.gridRate - f.ppaRate).toFixed(2)}/kWh vs current grid rate. Zero CAPEX investment required.
+              Under the OPEX model, {who} owns, operates and maintains the solar plant. You pay only for units generated at Rs. {f.ppaRate}/kWh — saving Rs. {(f.gridRate - f.ppaRate).toFixed(2)}/kWh vs current grid rate. Zero CAPEX investment required.
             </div>
           </div>
 
@@ -863,7 +864,7 @@ function P2({ f, c, s, panel, inverter }: { f: QuoteForm; c: Calc; s: AppSetting
                   <th style={{ padding: "9px 11px", border: "1px solid #d0d7e2", textAlign: "center", width: "6%" }}>Year</th>
                   <th style={{ padding: "9px 11px", border: "1px solid #d0d7e2", textAlign: "right" }}>Generation (kWh)</th>
                   <th style={{ padding: "9px 11px", border: "1px solid #d0d7e2", textAlign: "right" }}>Grid Rate (Rs.)</th>
-                  <th style={{ padding: "9px 11px", border: "1px solid #d0d7e2", textAlign: "right" }}>Amount Paid to OPS</th>
+                  <th style={{ padding: "9px 11px", border: "1px solid #d0d7e2", textAlign: "right" }}>Amount Paid to {s.short_name || who}</th>
                   <th style={{ padding: "9px 11px", border: "1px solid #d0d7e2", textAlign: "right" }}>Annual Savings</th>
                   <th style={{ padding: "9px 11px", border: "1px solid #d0d7e2", textAlign: "right" }}>Cumulative Savings</th>
                 </tr>
@@ -1113,7 +1114,7 @@ function P4({ s, panel, inverter, certifications }: { s: AppSettings; panel: Pro
             ["7", "Earthing", "Chemical Earth Pits 250 micron | 3m Dia 17.2mm | per IS 3043"],
             ["8", "Lightning Arrester", "Copper Bonded 5-Spike | IEC-62305 and IS 2309"],
             ["9", "Net Meter + LT/CT Box", "As per DISCOM spec | Fully included and managed"],
-            ["10", "DISCOM Approval", `End-to-end net metering by ${company.shortName || company.name}`],
+            ["10", "DISCOM Approval", `End-to-end net metering by ${s.short_name || s.name || "the company"}`],
           ].map(([sr, item, spec], i) => (
             <tr key={sr} style={{ background: i % 2 === 0 ? "#fff" : "#F5F9FF" }}>
               <td style={{ ...TD, textAlign: "center" }}>{sr}</td>
@@ -1174,7 +1175,7 @@ function P5({ f, s, testimonials, clientLogos }: { f: QuoteForm; s: AppSettings;
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         {[
-          { title: `FOR ${s.name.toUpperCase()}`, name: s.proprietor || company.proprietor, designation: "Proprietor" },
+          { title: `FOR ${s.name.toUpperCase()}`, name: s.proprietor || "___________________", designation: "Proprietor" },
           { title: `ACCEPTED BY - ${f.clientName?.toUpperCase() || "CLIENT"}`, name: f.clientName || "___________________", designation: "___________________" },
         ].map((sig, i) => (
           <div key={i} style={{ border: "1px solid #E7ECF5", borderRadius: 8, overflow: "hidden" }}>
@@ -1323,7 +1324,7 @@ function QuotePageInner() {
   const [featuredProjects, setFeaturedProjects] = useState<TenantProject[]>([])
 
   const [f, setF] = useState<QuoteForm>({
-    proposalNo: `OPS-${new Date().getFullYear()}-001`,
+    proposalNo: `QT-${new Date().getFullYear()}-001`,
     date: today,
     validUntil: valid.toISOString().split("T")[0],
     clientName: searchParams.get("name") ?? "",
@@ -1384,7 +1385,7 @@ function QuotePageInner() {
       setSettings(s)
       setF(prev => ({
         ...prev,
-        proposalNo: `${s.short_name || 'OPS'}-${new Date().getFullYear()}-001`,
+        proposalNo: `${s.short_name || s.name.split(/\s+/).map(w => w[0]).join('').slice(0, 4).toUpperCase() || 'QT'}-${new Date().getFullYear()}-001`,
         ratePerWp: s.default_rate,
       }))
     }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { validTwilioRequest } from '@/lib/security/twilioRequest';
-import { company } from "@/lib/company.config";
+import { fetchCompanyNameForClient } from "@/lib/calling/companyName";
+import { buildGatherGreeting } from "@/lib/calling/voiceScript";
 import { getOrCreateSession } from "@/lib/calling/stateManager";
 import { buildGatherTwiml, buildHangupTwiml } from "@/lib/calling/twiml";
 
@@ -15,7 +16,8 @@ async function handle(req: NextRequest) {
   if (!await validTwilioRequest(req)) return new NextResponse('Forbidden', { status: 403 });
   const { searchParams } = new URL(req.url);
   const clientId = searchParams.get("clientId") || "";
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || company.website;
+  // Always set once a Twilio request has passed its signature check above.
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
 
   try {
     // Twilio's real voice webhook POSTs CallSid as a form field. The GET
@@ -36,11 +38,10 @@ async function handle(req: NextRequest) {
     // rather than a permission-to-talk question — this is what
     // lib/calling/fastPath.ts's classifyOpeningResponse() classifies on
     // the very next turn, so the question has to actually be the thing
-    // being classified. Full company name (company.name, not
-    // .shortName) per the given script, still parameterized rather than
-    // hardcoded so this stays consistent if the company config ever
-    // changes.
-    const greeting = `Namaste! Main Kajal bol rahi hoon, ${company.name} se. Hum ghar aur society ke liye solar panel lagate hain, jisse aapka bijli ka bill kaafi kam ho jaata hai. Kya aapko solar lagvana hai?`;
+    // being classified. Names the company that owns this customer (its
+    // own settings name, never any other company's).
+    const companyName = await fetchCompanyNameForClient(clientId).catch(() => "");
+    const greeting = buildGatherGreeting(companyName);
 
     const actionUrl = `${baseUrl}/api/call-response?clientId=${clientId}`;
     return new NextResponse(buildGatherTwiml(greeting, actionUrl), {

@@ -147,7 +147,7 @@ export async function GET(req: NextRequest) {
       const message = formatScheduledReminderMessage({
         name: item.name, phone: item.phone, scheduledFor: item.scheduledFor,
       });
-      const result = await sendWhatsAppTo(phone, message);
+      const result = await sendWhatsAppTo(phone, message, item.tenantId);
       if (!result.ok) {
         console.error(`[cron/send-reminders] send failed for ${item.table} ${item.id}`, result.error);
         return { ...item, sent: false, skipped: false, error: result.error };

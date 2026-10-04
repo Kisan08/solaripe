@@ -1,4 +1,5 @@
 import twilio from "twilio";
+import { consumeUsage, refundUsage } from "@/lib/usage/consume";
 
 // Same TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN pattern as app/api/make-call/route.ts —
 // these WhatsApp self-notifications reuse the exact same Twilio account/creds
@@ -11,16 +12,18 @@ export interface WhatsAppSendResult {
   ok: boolean;
   sid?: string;
   error?: string;
+  // True when the account's monthly WhatsApp allowance is used up.
+  limitReached?: boolean;
 }
 
 
 // ADD this function to lib/whatsappNotify.ts, above sendWhatsApp():
 
 // Twilio's WhatsApp API requires the exact format "whatsapp:+<countrycode><number>",
-// e.g. "whatsapp:+917400261410". Numbers stored in Settings (typed by a
+// e.g. "whatsapp:+919876543210". Numbers stored in Settings (typed by a
 // tenant) or env vars can't be trusted to already be in that shape — a
-// tenant might type "7400261410", "07400261410", "+91 74002 61410", or
-// even already-correct "whatsapp:+917400261410". Normalize once, here, so
+// tenant might type "9876543210", "09876543210", "+91 98765 43210", or
+// even already-correct "whatsapp:+919876543210". Normalize once, here, so
 // every caller of sendWhatsApp is protected automatically instead of each
 // call site needing to remember to format correctly.
 //
@@ -42,15 +45,15 @@ function normalizeWhatsAppNumber(raw: string): string {
   n = n.replace(/[^\d+]/g, "");
 
   if (!n.startsWith("+")) {
-    // Bare 10-digit Indian mobile number, e.g. "7400261410"
+    // Bare 10-digit Indian mobile number, e.g. "9876543210"
     if (/^\d{10}$/.test(n)) {
       n = `+91${n}`;
     }
-    // Number with a leading 0, e.g. "07400261410"
+    // Number with a leading 0, e.g. "09876543210"
     else if (/^0\d{10}$/.test(n)) {
       n = `+91${n.slice(1)}`;
     }
-    // Already has a country code but no +, e.g. "917400261410"
+    // Already has a country code but no +, e.g. "919876543210"
     else if (/^91\d{10}$/.test(n)) {
       n = `+${n}`;
     }
@@ -124,18 +127,19 @@ const msg = await getTwilioClient().messages.create({
   }
 }
 
-export async function sendOwnerWhatsApp(body: string): Promise<WhatsAppSendResult> {
-  return sendWhatsApp(process.env.OWNER_WHATSAPP_NUMBER ?? "", body);
-}
-
-// The existing pattern (sendOwnerWhatsApp) always sends to one hardcoded
-// app-wide number, which is fine for lead-reminders (that route was never
-// updated to be tenant-scoped either) but wrong for pipeline-staleness,
-// which needs to notify each TENANT about their own stuck projects.
-// Recipient is each tenant's own settings.owner_phone (already existed,
-// unused by any notifier until now).
-export async function sendWhatsAppTo(to: string, body: string): Promise<WhatsAppSendResult> {
-  return sendWhatsApp(to, body);
+// The only way to send a WhatsApp message. tenantId is required on purpose:
+// every message is counted against that account's monthly allowance
+// (see lib/usage/rules.ts), so no send path can skip the limit. The use is
+// counted first, so the limit can never be overshot, and given back if the
+// message could not be sent.
+export async function sendWhatsAppTo(to: string, body: string, tenantId: string): Promise<WhatsAppSendResult> {
+  const usage = await consumeUsage(tenantId, "whatsapp");
+  if (!usage.ok) {
+    return { ok: false, error: usage.message, limitReached: !usage.unavailable };
+  }
+  const result = await sendWhatsApp(to, body);
+  if (!result.ok) await refundUsage(tenantId, "whatsapp");
+  return result;
 }
 
 const LEAD_SCORE_LABEL: Record<"hot" | "warm" | "cold", string> = {

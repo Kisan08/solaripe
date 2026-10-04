@@ -21,13 +21,13 @@ const SECTIONS = [
     title: 'Company Info',
     color: 'bg-blue-600',
     fields: [
-      { key: 'name', label: 'Company Name', type: 'text', placeholder: 'Omkar Power Solutions' },
-      { key: 'short_name', label: 'Short Name', type: 'text', placeholder: 'OPS' },
-      { key: 'phone', label: 'Phone', type: 'text', placeholder: '8452035102', indianPhone: true },
+      { key: 'name', label: 'Company Name', type: 'text', placeholder: 'Your company name' },
+      { key: 'short_name', label: 'Short Name', type: 'text', placeholder: 'A short code, e.g. ABC' },
+      { key: 'phone', label: 'Phone', type: 'text', placeholder: '10-digit mobile number', indianPhone: true },
       { key: 'email', label: 'Email', type: 'email', placeholder: 'email@company.com' },
-      { key: 'gst', label: 'GST Number', type: 'text', placeholder: '27XXXXX' },
-      { key: 'proprietor', label: 'Proprietor Name', type: 'text', placeholder: 'Omkar Deshmukh' },
-      { key: 'address', label: 'Address', type: 'text', placeholder: 'Kalyan East, Maharashtra' },
+      { key: 'gst', label: 'GST Number', type: 'text', placeholder: 'Your 15-character GSTIN' },
+      { key: 'proprietor', label: 'Proprietor Name', type: 'text', placeholder: 'Name of the owner or signatory' },
+      { key: 'address', label: 'Address', type: 'text', placeholder: 'Office address' },
       { key: 'website', label: 'Website', type: 'text', placeholder: 'www.yoursite.in' },
     ],
   },
@@ -46,10 +46,10 @@ const SECTIONS = [
     title: 'AI Calling',
     color: 'bg-purple-600',
     fields: [
-      // Twilio's own sending number, not a person's mobile — a US number
-      // by default, deliberately NOT put through the +91 lock below.
-      { key: 'twilio_number', label: 'Twilio Number', type: 'text', placeholder: '+19154403891' },
-      { key: 'owner_phone', label: 'Your Phone (alerts)', type: 'text', placeholder: '8452035102', indianPhone: true },
+      // Twilio's own sending number, not a person's mobile, so deliberately
+      // NOT put through the +91 lock below.
+      { key: 'twilio_number', label: 'Twilio Number', type: 'text', placeholder: '' },
+      { key: 'owner_phone', label: 'Your Phone (alerts)', type: 'text', placeholder: '10-digit mobile number', indianPhone: true },
     ],
   },
 ]

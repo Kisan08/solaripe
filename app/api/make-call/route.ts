@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import twilio from "twilio";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { consumeUsage, refundUsage } from "@/lib/usage/consume";
 
 const client = twilio(
   process.env.TWILIO_ACCOUNT_SID!,
@@ -24,6 +25,10 @@ export async function POST(req: NextRequest) {
     // doesn't exist, so the call gets rejected instead of silently dialing
     // an arbitrary number.
     const supabase = await createServerSupabaseClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     const { data: clientRow, error: fetchError } = await supabase
       .from("clients")
       .select("name, phone")
@@ -55,13 +60,30 @@ export async function POST(req: NextRequest) {
     // applyCrmUpdates for the old flow) — the "calling" status flip below
     // is the only per-client effect of this route once the call is
     // dialed. The AI conversation itself is entirely generic.
-    const call = await client.calls.create({
-      to: `+91${clientRow.phone.replace(/\D/g, "").slice(-10)}`,
-      from: process.env.TWILIO_PHONE_NUMBER!,
-      url: `${baseUrl}/api/call-stream-twiml?clientId=${clientId}&name=${encodeURIComponent(clientRow.name)}`,
-      statusCallback: `${baseUrl}/api/call-webhook?clientId=${clientId}`,
-      statusCallbackMethod: "POST",
-    });
+    // Count this call against the account's monthly AI-call allowance
+    // BEFORE dialing, so the limit can never be overshot. Given back below
+    // if the phone company refuses to place the call.
+    const usage = await consumeUsage(user.id, "ai_call");
+    if (!usage.ok) {
+      return NextResponse.json(
+        { error: usage.message, limitReached: !usage.unavailable },
+        { status: usage.unavailable ? 503 : 429 },
+      );
+    }
+
+    let call;
+    try {
+      call = await client.calls.create({
+        to: `+91${clientRow.phone.replace(/\D/g, "").slice(-10)}`,
+        from: process.env.TWILIO_PHONE_NUMBER!,
+        url: `${baseUrl}/api/call-stream-twiml?clientId=${clientId}&name=${encodeURIComponent(clientRow.name)}`,
+        statusCallback: `${baseUrl}/api/call-webhook?clientId=${clientId}`,
+        statusCallbackMethod: "POST",
+      });
+    } catch (dialErr) {
+      await refundUsage(user.id, "ai_call");
+      throw dialErr;
+    }
 
     await supabase
       .from("clients")

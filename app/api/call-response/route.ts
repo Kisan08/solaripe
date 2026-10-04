@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { validTwilioRequest } from '@/lib/security/twilioRequest';
-import { company } from "@/lib/company.config";
+import { fetchCompanyNameForClient } from "@/lib/calling/companyName";
 import { getOrCreateSession, saveSession } from "@/lib/calling/stateManager";
 import { fetchClientContext, applyCrmUpdates } from "@/lib/calling/crmContext";
 import { buildTurnMessages, parseAiTurnResult } from "@/lib/calling/promptBuilder";
@@ -52,7 +52,8 @@ export async function POST(req: NextRequest) {
 async function handleTurn(req: NextRequest): Promise<NextResponse> {
   const { searchParams } = new URL(req.url);
   const clientId = searchParams.get("clientId") || "";
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || company.website;
+  // Always set once a Twilio request has passed its signature check.
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
   const actionUrl = `${baseUrl}/api/call-response?clientId=${clientId}`;
 
   const formData = await req.formData();
@@ -199,7 +200,9 @@ async function handleTurn(req: NextRequest): Promise<NextResponse> {
   }
 
   const messages = buildTurnMessages({
-    companyName: company.shortName,
+    // The company that owns this customer (cached for a few minutes, so this
+    // does not add a database round trip to every turn of the call).
+    companyName: await fetchCompanyNameForClient(clientId).catch(() => ""),
     crm,
     session: session as CallSession,
     latestCustomerText: customerText,

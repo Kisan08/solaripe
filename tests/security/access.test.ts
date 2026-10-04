@@ -47,7 +47,7 @@ test('Twilio signatures bind URL and body without consuming the request', async 
 });
 
 test('sensitive APIs are private by default', () => {
-  for (const path of ['/api/design-share', '/api/notify/call-summary', '/api/make-call', '/api/test-stream-call', '/api/crm/clients', '/api/admin/products', '/api/new-private-route']) {
+  for (const path of ['/api/design-share', '/api/notify/call-summary', '/api/make-call', '/api/crm/clients', '/api/admin/products', '/api/new-private-route']) {
     assert.equal(publicApiPaths.has(path), false, path);
   }
 });

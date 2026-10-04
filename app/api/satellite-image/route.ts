@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { fetchSatelliteImage } from '@/lib/satelliteImage';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
 import { verifyDesignToken } from '@/lib/security/designShareToken';
+import { consumeUsage, refundUsage } from '@/lib/usage/consume';
 
 // Server boundary for lib/satelliteImage.ts: serves a cached satellite
 // image for a project's location if one exists, otherwise fetches fresh
@@ -14,6 +15,8 @@ interface SatelliteImageResponse {
   dataUrl: string | null;
   cached: boolean;
   fallback: boolean; // true whenever the caller should use the paver/grass ground instead
+  limitReached?: boolean;
+  message?: string; // plain-words reason, shown to the customer when a limit stopped the lookup
 }
 
 function fallbackResponse(): SatelliteImageResponse {
@@ -41,12 +44,16 @@ export async function GET(request: NextRequest) {
 
   const projectId = searchParams.get('projectId');
   const scope = verifyDesignToken(searchParams.get('shareToken'), projectId || '', process.env.DESIGN_SHARE_SECRET);
+  // Whose daily Google allowance a fresh lookup is charged to: the owner of
+  // the shared design for a client link, otherwise the signed-in user.
+  let tenantId: string | null = scope?.tenantId ?? null;
   if (!scope) {
     const db = await createServerSupabaseClient();
     const { data: { user } } = await db.auth.getUser();
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     const { data: project, error } = await db.from('projects').select('id').eq('id', projectId || '').eq('tenant_id', user.id).maybeSingle();
     if (error || !project) return NextResponse.json({ error: 'Project not found' }, { status: 404 });
+    tenantId = user.id;
   }
   const lat = Number(searchParams.get('lat'));
   const lng = Number(searchParams.get('lng'));
@@ -80,9 +87,19 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    // Only a fresh fetch from Google costs money, so only that is counted
+    // (cached images above are free). Stops with a clear message at the cap.
+    const usage = await consumeUsage(tenantId!, 'google_lookup');
+    if (!usage.ok) {
+      return NextResponse.json<SatelliteImageResponse>({
+        ...fallbackResponse(), limitReached: !usage.unavailable, message: usage.message,
+      });
+    }
+
     const result = await fetchSatelliteImage({ lat: latR, lng: lngR, zoom });
 
     if (!result) {
+      await refundUsage(tenantId!, 'google_lookup');
       return NextResponse.json(fallbackResponse());
     }
 

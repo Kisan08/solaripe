@@ -92,7 +92,7 @@ export async function POST(req: NextRequest) {
           // here isn't guaranteed to ever actually finish sending. It already
           // never throws (see sendWhatsApp), so this can't fail the
           // 200 Twilio expects back either way.
-          await sendWhatsAppTo(settingsRow.owner_phone, message);
+          await sendWhatsAppTo(settingsRow.owner_phone, message, client.tenant_id);
         }
       }
     }

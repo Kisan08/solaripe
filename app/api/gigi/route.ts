@@ -5,6 +5,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { callGroqWithTools, stripToolCallSyntax, type GigiMessage } from "@/lib/gigi/groq";
 import { GIGI_TOOLS, REQUIRED_FIELDS, executeTool } from "@/lib/gigi/tools";
+import { consumeUsage } from "@/lib/usage/consume";
+
+const MAX_MESSAGE_CHARS = 1000;
+const MAX_HISTORY_CHARS = 2000;
 
 const SYSTEM_PROMPT = `You are Gigi, an assistant embedded in a solar EPC company's CRM platform. You help the user manage leads, AI Calling contacts, and projects by calling the right tool.
 
@@ -38,7 +42,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ reply: "I couldn't read that request." }, { status: 400 });
   }
 
-  const message = body.message?.trim();
+  const message = typeof body.message === "string" ? body.message.trim().slice(0, MAX_MESSAGE_CHARS) : "";
   if (!message) {
     return NextResponse.json({ reply: "Say something and I'll help." }, { status: 400 });
   }
@@ -49,14 +53,30 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ reply: "You need to be logged in to use Gigi." }, { status: 401 });
   }
 
+  // Daily cap on AI chat messages per account. Counted before anything is
+  // sent to the AI provider, so a capped account costs nothing.
+  const usage = await consumeUsage(user.id, "ai_chat");
+  if (!usage.ok) {
+    return NextResponse.json(
+      { reply: usage.message, limitReached: !usage.unavailable },
+      { status: usage.unavailable ? 503 : 429 },
+    );
+  }
+
   // Cap history to the last 8 messages (~4 exchanges) sent to Groq each
   // turn, to bound token usage — SYSTEM_PROMPT is always sent in full
   // regardless. 8 comfortably covers the duplicate-confirmation flow
   // (resolved within 1-2 turns of the warning), since GigiWidget only ever
   // stores plain user/assistant text turns, never the intermediate
   // tool_calls/tool-role messages from a single request's own round trip.
+  // The browser supplies this history, so keep only plain user/assistant
+  // text and cut each entry to a fixed length: nobody can smuggle in fake
+  // "system" or "tool" messages or oversized text.
   const fullHistory = Array.isArray(body.conversationHistory) ? body.conversationHistory : [];
-  const history = fullHistory.slice(-8);
+  const history: GigiMessage[] = fullHistory
+    .filter((m): m is GigiMessage => !!m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
+    .slice(-8)
+    .map((m) => ({ role: m.role, content: (m.content as string).slice(0, MAX_HISTORY_CHARS) }));
   const messages: GigiMessage[] = [
     { role: "system", content: SYSTEM_PROMPT },
     ...history,
@@ -104,7 +124,13 @@ export async function POST(req: NextRequest) {
       supabase,
       origin: req.nextUrl.origin,
       cookieHeader,
+      tenantId: user.id,
     });
+
+    // A plan-limit message is already final wording; don't let the AI rephrase it.
+    if (result.limitReached) {
+      return NextResponse.json({ reply: result.summary, tool: toolCall.function.name, result });
+    }
 
     // A clean, unambiguous success has nothing left to phrase — every tool
     // executor's own summary (lib/gigi/tools.ts) is already a clear,

@@ -5,7 +5,7 @@ import type { ChatMessage } from "./openai";
 // The entire persona + hard rules live here in one place — this is what
 // keeps every reply sounding like the same experienced sales executive
 // instead of drifting into generic-assistant phrasing turn to turn.
-const SYSTEM_PROMPT = `You are Kajal, an experienced human solar sales executive calling on behalf of {{COMPANY}} in Maharashtra, India. You are NOT an AI assistant. Never say you are an AI, never say "as an AI" or "based on the information provided" or any other assistant-sounding phrase.
+const SYSTEM_PROMPT = `You are Kajal, an experienced human solar sales executive calling on behalf of {{COMPANY}} in India. You are NOT an AI assistant. Never say you are an AI, never say "as an AI" or "based on the information provided" or any other assistant-sounding phrase.
 
 GENDER — you are a WOMAN. Hindi verbs change form by speaker gender, and you must always use the FEMININE first-person form. Examples: "karti hoon" (never "karta hoon"), "dekhti hoon" (never "dekhta hoon"), "bolti hoon" (never "bolta hoon"), "samajhti hoon" (never "samajhta hoon"), "bata sakti hoon" (never "bata sakta hoon"), "rahi hoon" (never "raha hoon"). Check every sentence you generate against this before finalizing it.
 
@@ -56,7 +56,9 @@ export function buildTurnMessages(params: {
   session: CallSession;
   latestCustomerText: string;
 }): ChatMessage[] {
-  const { companyName, crm, session, latestCustomerText } = params;
+  const { crm, session, latestCustomerText } = params;
+  // A company with no name on file is described, never replaced by another's.
+  const companyName = params.companyName || "a solar EPC company";
 
   const knownInfo = Object.entries(session.slots)
     .filter(([, v]) => v !== undefined && v !== null && v !== "")

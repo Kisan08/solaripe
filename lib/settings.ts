@@ -1,5 +1,4 @@
 import { createClient } from '@/lib/supabase/client'
-import { company } from '@/lib/company.config'
 
 export interface WarrantyRow {
   item: string
@@ -62,21 +61,26 @@ export interface AppSettings {
   default_payment_schedule: PaymentMilestone[]
 }
 
+// A new account starts with NO company details: every identity field below is
+// blank, so nothing belonging to the platform owner (or any other company)
+// can ever appear on someone else's quotes, calls or settings. The only
+// prefill is the company name the account's own owner typed at signup (see
+// getSettings).
 export const defaultSettings: AppSettings = {
-  name: company.name,
-  short_name: company.shortName,
-  phone: company.phone,
-  email: company.email,
-  gst: company.gst,
-  proprietor: company.proprietor,
-  address: company.address,
-  website: company.website,
+  name: '',
+  short_name: '',
+  phone: '',
+  email: '',
+  gst: '',
+  proprietor: '',
+  address: '',
+  website: '',
   panel_brand: 'Waaree',
   panel_wp: 580,
   default_rate: 52,
   yield_kwh: 1332,
   gst_rate: 8.9,
-  twilio_number: '+19154403891',
+  twilio_number: '',
   owner_phone: '',
   logo_url: null,
   cover_image_url: null,
@@ -123,18 +127,27 @@ export const defaultSettings: AppSettings = {
 // supabase/migrations/0004_tenant_scope.sql). A brand-new tenant has no
 // settings row yet, which is why this reads with maybeSingle() (not
 // single()) and falls back to defaultSettings rather than erroring.
+const IDENTITY_FIELDS = [
+  'name', 'short_name', 'phone', 'email', 'gst', 'proprietor', 'address', 'website', 'twilio_number',
+] as const
+
 export async function getSettings(): Promise<AppSettings> {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return defaultSettings
 
-  const { data } = await supabase
-    .from('settings')
-    .select('*')
-    .eq('tenant_id', user.id)
-    .maybeSingle()
-  if (!data) return defaultSettings
-  return { ...defaultSettings, ...data }
+  const [{ data }, { data: tenant }] = await Promise.all([
+    supabase.from('settings').select('*').eq('tenant_id', user.id).maybeSingle(),
+    supabase.from('tenants').select('company_name').eq('id', user.id).maybeSingle(),
+  ])
+  const merged: AppSettings = { ...defaultSettings, ...(data ?? {}) }
+  // A saved row can hold nulls; show blanks, never "null" or another company's value.
+  for (const key of IDENTITY_FIELDS) {
+    if (merged[key] == null) merged[key] = ''
+  }
+  // The only prefill: the company name this account's owner gave at signup.
+  if (!merged.name.trim() && tenant?.company_name) merged.name = tenant.company_name
+  return merged
 }
 
 export async function saveSettings(settings: Partial<AppSettings>) {

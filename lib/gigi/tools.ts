@@ -313,6 +313,9 @@ export interface ToolResult {
   ok: boolean;
   summary: string; // handed back to Groq as the tool's result content
   data?: unknown;
+  // True when a plan limit stopped the action; the summary is then already a
+  // finished customer-facing message and must not be reworded by the model.
+  limitReached?: boolean;
 }
 
 // Builds the "heads up, this number already exists elsewhere" sentence
@@ -587,6 +590,7 @@ async function execUpdateProjectPayment(
 async function execSendWhatsappFollowup(
   supabase: SupabaseClient,
   args: { identifier?: string; message?: string },
+  tenantId: string,
 ): Promise<ToolResult> {
   const identifier = args.identifier?.trim();
   if (!identifier) {
@@ -626,7 +630,10 @@ async function execSendWhatsappFollowup(
   // Reuses lib/whatsappNotify.ts's sendWhatsAppTo directly rather than
   // reimplementing WhatsApp sending — same function the pipeline-staleness
   // cron uses to message a tenant's own owner_phone.
-  const result = await sendWhatsAppTo(contact.phone, message);
+  const result = await sendWhatsAppTo(contact.phone, message, tenantId);
+  if (result.limitReached) {
+    return { ok: false, limitReached: true, summary: result.error ?? "Your WhatsApp limit for this month is used up." };
+  }
   if (!result.ok) {
     return { ok: false, summary: `Failed to send WhatsApp to ${contact.name}: ${result.error ?? "unknown error"}` };
   }
@@ -994,6 +1001,10 @@ async function execInitiateCall(
   const body = await res.json().catch(() => ({}));
 
   if (!res.ok) {
+    // A plan-limit message is already written for the customer; pass it on as is.
+    if (res.status === 429 || res.status === 503) {
+      return { ok: false, limitReached: true, summary: body.error ?? "Call limit reached." };
+    }
     return { ok: false, summary: `Failed to place the call: ${body.error ?? "unknown error"}` };
   }
   return { ok: true, summary: "Okay, calling them now.", data: body };
@@ -1002,7 +1013,7 @@ async function execInitiateCall(
 export async function executeTool(
   name: string,
   args: Record<string, unknown>,
-  ctx: { supabase: SupabaseClient; origin: string; cookieHeader: string | null },
+  ctx: { supabase: SupabaseClient; origin: string; cookieHeader: string | null; tenantId: string },
 ): Promise<ToolResult> {
   try {
     switch (name) {
@@ -1019,7 +1030,7 @@ export async function executeTool(
       case "update_project_payment":
         return await execUpdateProjectPayment(ctx.supabase, args);
       case "send_whatsapp_followup":
-        return await execSendWhatsappFollowup(ctx.supabase, args);
+        return await execSendWhatsappFollowup(ctx.supabase, args, ctx.tenantId);
       case "get_status":
         return await execGetStatus(ctx.supabase, args);
       case "get_details":

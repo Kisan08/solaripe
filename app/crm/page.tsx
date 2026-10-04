@@ -6,6 +6,7 @@ import { CALL_STATUSES, type CallStatus } from "@/lib/types";
 import { PhoneInput } from "@/components/ui/phone-input";
 import { CrmDashboardHeader } from "@/components/crm/CrmDashboardHeader";
 import { CrmTable, formatPhone } from "@/components/crm/CrmTable";
+import { CALL_ALL_MAX_PER_RUN } from "@/lib/usage/rules";
 
 export type LeadScore = "hot" | "warm" | "cold";
 
@@ -407,17 +408,38 @@ export default function CRMPage() {
       return;
     }
     if (pending.length === 0) { showToast("No pending clients to call", "err"); return; }
+    // At most CALL_ALL_MAX_PER_RUN calls per click; click again for the next batch.
+    const batch = pending.slice(0, CALL_ALL_MAX_PER_RUN);
     setCallingAll(true);
+    let started = 0;
+    let failed = 0;
+    let stopMessage: string | null = null;
     try {
-      for (const c of pending) {
-        await fetch("/api/make-call", {
+      for (const c of batch) {
+        const res = await fetch("/api/make-call", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ clientId: c.id, phone: c.phone, name: c.name }),
         });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          // A plan limit (or an unreachable usage counter) stops the whole run.
+          if (res.status === 429 || res.status === 503) { stopMessage = body.error ?? "Call limit reached."; break; }
+          failed++;
+          continue;
+        }
+        started++;
         setClients((prev) => prev.map((x) => x.id === c.id ? { ...x, status: "calling" } : x));
         await new Promise((r) => setTimeout(r, 1200));
       }
-      showToast(`Initiated calls for ${pending.length} clients`, "ok");
+      if (stopMessage) {
+        showToast(`${started} call${started === 1 ? "" : "s"} started. Stopped: ${stopMessage}`, "err");
+      } else if (pending.length > batch.length) {
+        showToast(`Started ${started} calls (limit ${CALL_ALL_MAX_PER_RUN} per click). ${pending.length - batch.length} still pending: click Call All again for the next batch.`, "ok");
+      } else if (failed > 0) {
+        showToast(`Started ${started} calls, ${failed} failed`, "err");
+      } else {
+        showToast(`Initiated calls for ${started} clients`, "ok");
+      }
     } catch { showToast("Some calls failed", "err"); }
     finally { setCallingAll(false); await fetchPage(); }
   }

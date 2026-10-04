@@ -50,6 +50,8 @@ import { validTwilioUpgrade } from '../lib/security/twilioRequest';
 import { streamGroqChat, type ChatMessage } from "../lib/calling/streamingGroq";
 import { streamElevenLabsTts } from "../lib/calling/streamingTts";
 import { applyCrmUpdates } from "../lib/calling/crmContext";
+import { fetchCompanyNameForClient } from "../lib/calling/companyName";
+import { buildOpeningGreeting, buildVoiceSystemPrompt } from "../lib/calling/voiceScript";
 
 const PORT = Number(process.env.MEDIA_STREAM_PORT || 8081);
 const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY;
@@ -100,28 +102,13 @@ const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_A
 // that still catches the remainder — trimming this prompt measurably
 // helps but does not fully eliminate what looks like a Groq-side
 // streaming defect for this model.
-const SYSTEM_PROMPT = `You are काजल, a friendly telecalling executive at Omkar Power Solutions, a solar EPC company, calling a potential customer who enquired about solar panels.
+// (The AI instructions are built per call: see buildVoiceSystemPrompt.)
 
-Goal: get their city/area, then their average monthly electricity bill (or units), then close the call saying the team will follow up with a personalized quote.
-
-Rules: Already greeted the caller once (scripted, before this conversation) — don't re-greet. Name always काजल. Write ALL Hindi words in Devanagari (मैं, आप, कैसे, बात, करना), never romanized (not "main", "aap", "kaise", "baat"); only casual English words (sir, solar, bill, team, quote, contact, thank you, city names) stay Roman, every reply, all call long. Never formal/Sanskritized Hindi (not "आपका दिन शुभ रहे"). One short sentence per reply. Skip technical details (roof, appliances, shading) — that's for the site visit. Don't guess on pricing.
-
-Follow these EXACT patterns (fill in only the bracketed part, keep the rest word-for-word):
-- After they state their location: "Okay, [location]! ठीक है sir, आपका average monthly light bill कितना आता है?"
-- After they state their bill amount, close immediately with exactly: "समझ गई sir, [amount] का bill मतलब solar से अच्छी खासी बचत हो सकती है आपकी। हमारी team जल्दी ही आपको एक proper quote के साथ contact करेगी, thank you! [END_CALL][OUTCOME:interested]"
-- If not interested or asked not to call, acknowledge politely in your own words and end with [END_CALL][OUTCOME:not_interested] too.
-[END_CALL] and [OUTCOME:...] are silent signals, never spoken aloud, only on that one final closing message.
-
-Close in 4-6 exchanges total.`;
-
-// Scripted opening line, spoken immediately on call connect instead of
-// waiting for the caller's first word (Part 2) — faster and more reliable
-// than asking the LLM to generate turn 1 live. All Hindi words spelled in
-// Devanagari, matching SYSTEM_PROMPT's rule for every other turn — only
-// the English loanwords (Omkar Power Solutions, solar, city, area) stay
-// Roman, same mixing pattern as the prompt's own example sentences.
-const OPENING_GREETING =
-  "नमस्ते! मैं काजल बोल रही हूँ Omkar Power Solutions से, आपने solar के बारे में enquiry की थी ना? आप कहाँ रहते हैं sir?";
+// The scripted opening line (spoken immediately on call connect instead of
+// waiting for the caller's first word — faster and more reliable than asking
+// the LLM to generate turn 1 live) and the AI instructions are both built per
+// call, from the name of the company that owns the customer being called
+// (see lib/calling/voiceScript.ts).
 
 function ts(): string {
   return new Date().toISOString().slice(11, 23); // HH:MM:SS.mmm
@@ -208,7 +195,11 @@ wss.on("connection", (twilioWs) => {
   // message; the scripted opening greeting is appended as soon as it's
   // spoken (see speakOpeningGreeting), then each turn appends the user
   // utterance and the assistant's reply so later turns have full context.
-  const conversationHistory: ChatMessage[] = [{ role: "system", content: SYSTEM_PROMPT }];
+  // The real instructions and greeting are filled in once the call starts and
+  // we know whose customer is being called (see startCall below); until then
+  // this is a company-free placeholder so no company name is ever assumed.
+  const conversationHistory: ChatMessage[] = [{ role: "system", content: buildVoiceSystemPrompt("") }];
+  let openingGreeting = buildOpeningGreeting("");
 
   // Shared TTS-speaking helper — used both for the scripted opening
   // greeting and for each LLM turn's sentences, each call getting its own
@@ -259,11 +250,30 @@ wss.on("connection", (twilioWs) => {
     console.log(`[${ts()}] [llm] speaking scripted opening greeting`);
     try {
       const { flushSentence } = makeSentenceSpeaker();
-      await flushSentence(OPENING_GREETING);
-      appendToHistory(conversationHistory, { role: "assistant", content: OPENING_GREETING });
+      await flushSentence(openingGreeting);
+      appendToHistory(conversationHistory, { role: "assistant", content: openingGreeting });
     } finally {
       turnInFlight = false;
     }
+  }
+
+  // Looks up whose customer is being called, so the greeting and the AI's
+  // instructions use THAT company's name, then greets. A slow or failed
+  // lookup never delays the call for long: after 1.5 s it falls back to a
+  // greeting with no company name at all, never to another company's.
+  async function startCall() {
+    let companyName = "";
+    if (clientId) {
+      const id = clientId;
+      companyName = await Promise.race([
+        fetchCompanyNameForClient(id).catch(() => ""),
+        new Promise<string>((resolve) => setTimeout(() => resolve(""), 1500)),
+      ]);
+    }
+    console.log(`[${ts()}] [llm] company name for this call: ${companyName ? `"${companyName}"` : "(none, generic greeting)"}`);
+    conversationHistory[0] = { role: "system", content: buildVoiceSystemPrompt(companyName) };
+    openingGreeting = buildOpeningGreeting(companyName);
+    await speakOpeningGreeting();
   }
 
   // ── Deepgram real-time STT connection, one per call ──────────────────
@@ -520,7 +530,7 @@ wss.on("connection", (twilioWs) => {
         console.log(`[${ts()}] [twilio] stream started callSid=${callSid} streamSid=${streamSid} clientId=${clientId}`);
         // Part 2: greet immediately, don't wait for the caller's first
         // word — sendAudioToTwilio needs streamSid, which is set above.
-        speakOpeningGreeting().catch((err) => {
+        startCall().catch((err) => {
           console.error(`[${ts()}] [pipeline] error speaking opening greeting`, err);
         });
         break;

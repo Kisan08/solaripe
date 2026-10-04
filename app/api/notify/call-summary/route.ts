@@ -29,10 +29,14 @@ export async function POST(req: NextRequest) {
     notes: body.notes ?? null,
   });
 
-  const result = await sendWhatsAppTo(settings.owner_phone, message);
+  const result = await sendWhatsAppTo(settings.owner_phone, message, user.id);
 
-  // A notification failure is never a reason to fail the calling flow that
-  // triggered it — always 200, with the actual outcome in the body so a
-  // caller that cares (like the test checklist) can still see what happened.
+  // A plan limit is the one failure the caller must be told about clearly.
+  if (result.limitReached) {
+    return NextResponse.json({ sent: false, error: result.error, limitReached: true }, { status: 429 });
+  }
+
+  // Any other notification failure is never a reason to fail the calling
+  // flow that triggered it — 200, with the actual outcome in the body.
   return NextResponse.json({ sent: result.ok, sid: result.sid, error: result.error });
 }
