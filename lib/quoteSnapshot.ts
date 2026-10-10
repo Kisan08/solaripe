@@ -27,4 +27,12 @@ export interface QuoteSnapshot {
   testimonials: unknown[]
   certifications: unknown[]
   featuredProjects: unknown[]
+  // Added later, so all optional: a quote saved before they existed simply
+  // lacks them and is rendered exactly as it always was.
+  /** Partner brands for the cover strip. Absent = an older quote with its old logo strip. */
+  partnerBrands?: unknown[]
+  /** Whether the optional Company Profile page is in the PDF. */
+  includeProfile?: boolean
+  /** The company profile text for that page. */
+  profile?: Record<string, unknown>
 }

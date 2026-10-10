@@ -1,4 +1,6 @@
 import { createClient } from '@/lib/supabase/client'
+import { EMPTY_PROFILE, normalizeProfile, type CompanyProfile } from '@/lib/companyProfile'
+import { cleanBrand } from '@/lib/brands'
 
 export interface WarrantyRow {
   item: string
@@ -25,7 +27,8 @@ export interface AppSettings {
   proprietor: string
   address: string
   website: string
-  panel_brand: string
+  panel_brand: string // default panel brand for new quotes (a list name or typed text)
+  inverter_brand: string // default inverter brand for new quotes (same)
   panel_wp: number
   default_rate: number
   yield_kwh: number
@@ -59,6 +62,9 @@ export interface AppSettings {
   default_warranty: WarrantyRow[]
   default_scope: ScopeLists
   default_payment_schedule: PaymentMilestone[]
+  // Saved once here, it fills the optional Company Profile page of every new
+  // quote (which can still be edited per quote). Starts completely empty.
+  company_profile: CompanyProfile
 }
 
 // A new account starts with NO company details: every identity field below is
@@ -76,6 +82,7 @@ export const defaultSettings: AppSettings = {
   address: '',
   website: '',
   panel_brand: '',
+  inverter_brand: '',
   panel_wp: 580,
   default_rate: 52,
   yield_kwh: 1332,
@@ -103,6 +110,7 @@ export const defaultSettings: AppSettings = {
     { label: 'Installation & Commissioning', percent: 20 },
     { label: 'Net Meter & Handover', percent: 10 },
   ],
+  company_profile: EMPTY_PROFILE,
 }
 
 // Was a single row shared by everyone, keyed by the literal string
@@ -131,6 +139,10 @@ export async function getSettings(): Promise<AppSettings> {
   }
   // The only prefill: the company name this account's owner gave at signup.
   if (!merged.name.trim() && tenant?.company_name) merged.name = tenant.company_name
+  // Brands are plain text; the profile is rebuilt so it always respects its limits.
+  merged.panel_brand = cleanBrand(merged.panel_brand)
+  merged.inverter_brand = cleanBrand(merged.inverter_brand)
+  merged.company_profile = normalizeProfile(merged.company_profile)
   return merged
 }
 
@@ -139,13 +151,30 @@ export async function saveSettings(settings: Partial<AppSettings>) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) throw new Error('Not authenticated')
 
+  // The company profile and default inverter brand live in two columns added
+  // by migration 0024. They are saved in a second step so that, on a database
+  // that does not have those columns yet, every other setting still saves.
+  const { company_profile, inverter_brand, ...base } = settings
   const { error } = await supabase
     .from('settings')
     .upsert(
-      { id: user.id, tenant_id: user.id, ...settings, updated_at: new Date().toISOString() },
+      { id: user.id, tenant_id: user.id, ...base, updated_at: new Date().toISOString() },
       { onConflict: 'tenant_id' },
     )
   if (error) throw error
+
+  if (company_profile !== undefined || inverter_brand !== undefined) {
+    const extra: Record<string, unknown> = {}
+    if (company_profile !== undefined) extra.company_profile = normalizeProfile(company_profile)
+    if (inverter_brand !== undefined) extra.inverter_brand = cleanBrand(inverter_brand)
+    const { error: extraError } = await supabase.from('settings').update(extra).eq('tenant_id', user.id)
+    if (extraError) {
+      const missingColumn = /company_profile|inverter_brand|schema cache|does not exist/i.test(extraError.message) || extraError.code === 'PGRST204' || extraError.code === '42703'
+      throw new Error(missingColumn
+        ? 'Your other settings were saved, but the company profile and inverter brand could not be saved yet: the database update for them (migration 0024) has not been applied.'
+        : extraError.message)
+    }
+  }
 }
 
 // Uploads to the `branding` storage bucket under the current tenant's own

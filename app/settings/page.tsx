@@ -3,7 +3,10 @@ import { useEffect, useState, type ChangeEvent } from 'react'
 import { Save, CheckCircle, Upload, Plus, Trash2 } from 'lucide-react'
 import { getSettings, saveSettings, uploadBrandingAsset, defaultSettings, type AppSettings } from '@/lib/settings'
 import { PhoneInput, digitsForPhoneInput } from '@/components/ui/phone-input'
-import { ClientLogosSection, TestimonialsSection, CertificationsSection, ProjectsSection, PipelineStagesSection } from './MediaSections'
+import { BrandSelect } from '@/components/ui/brand-select'
+import { PANEL_BRANDS, INVERTER_BRANDS } from '@/lib/brands'
+import { PROFILE_LIMITS, profileHasContent } from '@/lib/companyProfile'
+import { PartnerBrandsSection, ClientLogosSection, TestimonialsSection, CertificationsSection, ProjectsSection, PipelineStagesSection } from './MediaSections'
 
 const COLOR_FIELDS: { key: keyof AppSettings; label: string }[] = [
   { key: 'primary_color', label: 'Primary (headers, backgrounds)' },
@@ -13,7 +16,6 @@ const COLOR_FIELDS: { key: keyof AppSettings; label: string }[] = [
 
 const TOGGLE_FIELDS: { key: keyof AppSettings; label: string; help: string }[] = [
   { key: 'show_why_solar', label: '"Why Go Solar Now" strip', help: 'Generic savings/CO2 messaging on the cover page.' },
-  { key: 'show_partner_logos', label: 'Panel partner logos', help: 'Shows the Waaree, Adani and Premier logos on the cover and page headers. Turn on only if you are entitled to show them.' },
 ]
 
 const SECTIONS = [
@@ -35,7 +37,6 @@ const SECTIONS = [
     title: 'Quote Defaults',
     color: 'bg-green-600',
     fields: [
-      { key: 'panel_brand', label: 'Panel Brand', type: 'text', placeholder: 'Your panel brand' },
       { key: 'panel_wp', label: 'Panel Wp', type: 'number', placeholder: '580' },
       { key: 'default_rate', label: 'Default Rate (₹/Wp)', type: 'number', placeholder: '52' },
       { key: 'yield_kwh', label: 'Yield (kWh/kWp/yr)', type: 'number', placeholder: '1332' },
@@ -86,7 +87,7 @@ export default function SettingsPage() {
       setSaved(true)
       setTimeout(() => setSaved(false), 3000)
     } catch (err) {
-      alert('Failed to save. Check Supabase connection.')
+      alert(err instanceof Error && /migration 0024/.test(err.message) ? err.message : 'Failed to save. Check Supabase connection.')
     } finally {
       setSaving(false)
     }
@@ -174,6 +175,14 @@ export default function SettingsPage() {
                   )}
                 </div>
               ))}
+              {title === 'Quote Defaults' && (
+                <>
+                  <BrandSelect label="Panel Brand" options={PANEL_BRANDS} value={values.panel_brand}
+                    onChange={b => setValues(v => ({ ...v, panel_brand: b }))} />
+                  <BrandSelect label="Inverter Brand" options={INVERTER_BRANDS} value={values.inverter_brand}
+                    onChange={b => setValues(v => ({ ...v, inverter_brand: b }))} />
+                </>
+              )}
             </div>
           </div>
         ))}
@@ -395,6 +404,62 @@ export default function SettingsPage() {
             </div>
           </div>
         </div>
+
+        {/* Company Profile: fills the optional profile page of every new quote */}
+        <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+          <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-2">
+            <span className="w-1.5 h-4 rounded bg-teal-600 inline-block" />
+            <h2 className="text-sm font-semibold text-gray-700">Company Profile</h2>
+          </div>
+          <div className="p-5 space-y-4">
+            <p className="text-xs text-gray-500">
+              Save it once and it fills the optional company profile page of every new quote (you can still edit it on each quote).
+              Everything starts empty, and anything you leave empty is left out of the PDF.
+            </p>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">
+                About us <span className="text-gray-400">({values.company_profile.about.length}/{PROFILE_LIMITS.about})</span>
+              </label>
+              <textarea rows={4} maxLength={PROFILE_LIMITS.about} value={values.company_profile.about}
+                onChange={e => setValues(v => ({ ...v, company_profile: { ...v.company_profile, about: e.target.value.slice(0, PROFILE_LIMITS.about) } }))}
+                className="w-full px-3 py-2.5 text-base rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 transition-all resize-none" />
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              {([
+                ['yearsInBusiness', 'Years in business'],
+                ['projectsCompleted', 'Total projects completed'],
+                ['capacityInstalled', 'Total capacity installed'],
+              ] as const).map(([key, label]) => (
+                <div key={key}>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">{label}</label>
+                  <input type="text" maxLength={PROFILE_LIMITS.stat} value={values.company_profile[key]}
+                    onChange={e => setValues(v => ({ ...v, company_profile: { ...v.company_profile, [key]: e.target.value } }))}
+                    className="w-full px-3 py-2.5 text-base rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 transition-all" />
+                </div>
+              ))}
+            </div>
+            {([
+              ['certifications', 'Certifications', `one per line, up to ${PROFILE_LIMITS.certLines}`, PROFILE_LIMITS.certLines, PROFILE_LIMITS.certLineChars, 3],
+              ['whyChooseUs', 'Why choose us', `up to ${PROFILE_LIMITS.whyLines} lines`, PROFILE_LIMITS.whyLines, PROFILE_LIMITS.whyLineChars, 4],
+            ] as const).map(([key, label, hint, maxLines, maxChars, rows]) => (
+              <div key={key}>
+                <label className="block text-xs font-medium text-gray-500 mb-1">{label} <span className="text-gray-400">({hint})</span></label>
+                <textarea rows={rows} value={values.company_profile[key]}
+                  onChange={e => setValues(v => ({
+                    ...v,
+                    company_profile: { ...v.company_profile, [key]: e.target.value.split('\n').slice(0, maxLines).map(l => l.slice(0, maxChars)).join('\n') },
+                  }))}
+                  className="w-full px-3 py-2.5 text-base rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 transition-all resize-none" />
+              </div>
+            ))}
+            {!profileHasContent(values.company_profile) && (
+              <p className="text-xs text-gray-400">Nothing saved yet, so quotes start with an empty profile.</p>
+            )}
+          </div>
+        </div>
+
+        {/* Partner Brands: the logos in the quote's "Our Partner Brands" strip */}
+        <PartnerBrandsSection />
 
         {/* Media Library (Phase 6) */}
         <ClientLogosSection />

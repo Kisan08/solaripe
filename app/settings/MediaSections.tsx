@@ -1,10 +1,12 @@
 'use client'
 import { useEffect, useState, type ChangeEvent } from 'react'
-import { ChevronUp, ChevronDown, Pencil, Upload, Plus, X } from 'lucide-react'
+import { ChevronUp, ChevronDown, Pencil, Upload, Plus, X, Trash2 } from 'lucide-react'
 import {
   fetchAllClientLogos, fetchAllTestimonials, fetchAllCertifications, fetchAllProjects,
   upsertMediaRow, toggleMediaActive, swapDisplayOrder, uploadMediaAsset,
-  type ClientLogo, type Testimonial, type Certification, type TenantProject,
+  fetchAllPartnerBrands, uploadPartnerLogo, addPartnerBrand, renamePartnerBrand, deletePartnerBrand,
+  partnerLogoProblem, PARTNER_BRAND_MAX, PARTNER_LOGO_MAX_BYTES,
+  type ClientLogo, type Testimonial, type Certification, type TenantProject, type PartnerBrand,
 } from '@/lib/media'
 import { fetchAllPipelineStages, type PipelineStage } from '@/lib/pipeline'
 
@@ -538,6 +540,135 @@ export function PipelineStagesSection() {
             {saving ? 'Saving…' : 'Save'}
           </button>
         </div>
+      )}
+    </SectionShell>
+  )
+}
+
+/* ─── Partner Brands ─── */
+
+export function PartnerBrandsSection() {
+  const [items, setItems] = useState<PartnerBrand[]>([])
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [names, setNames] = useState<Record<string, string>>({})
+  const [newName, setNewName] = useState('')
+  const [newFile, setNewFile] = useState<File | null>(null)
+  const [fileKey, setFileKey] = useState(0)
+  const [adding, setAdding] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+
+  const load = async () => {
+    try {
+      const rows = await fetchAllPartnerBrands()
+      setItems(rows)
+      setNames(Object.fromEntries(rows.map(r => [r.id, r.name])))
+      setLoadError(null)
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : 'Could not load partner brands')
+    }
+  }
+  useEffect(() => { load().finally(() => setLoading(false)) }, [])
+
+  const pickFile = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] ?? null
+    if (file) {
+      const problem = partnerLogoProblem(file)
+      if (problem) { setMessage(problem); setNewFile(null); setFileKey(k => k + 1); return }
+    }
+    setMessage(null)
+    setNewFile(file)
+  }
+
+  const add = async () => {
+    if (items.length >= PARTNER_BRAND_MAX) { setMessage(`You can add up to ${PARTNER_BRAND_MAX} partner brands.`); return }
+    if (!newName.trim()) { setMessage('Give the brand a name.'); return }
+    if (!newFile) { setMessage('Choose a PNG or JPG logo (1 MB or smaller).'); return }
+    setAdding(true); setMessage(null)
+    try {
+      const url = await uploadPartnerLogo(newFile)
+      const nextOrder = items.reduce((m, i) => Math.max(m, i.display_order), 0) + 1
+      await addPartnerBrand(newName, url, nextOrder)
+      setNewName(''); setNewFile(null); setFileKey(k => k + 1)
+      await load()
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'Could not add the brand')
+    } finally {
+      setAdding(false)
+    }
+  }
+
+  const move = async (i: number, dir: -1 | 1) => {
+    const other = items[i + dir]
+    if (!other) return
+    try { await swapDisplayOrder('tenant_partner_brands', items[i], other); await load() }
+    catch (err) { setMessage(err instanceof Error ? err.message : 'Could not reorder') }
+  }
+
+  const rename = async (item: PartnerBrand) => {
+    const value = (names[item.id] ?? '').trim()
+    if (value === item.name) return
+    try { await renamePartnerBrand(item.id, value); await load() }
+    catch (err) { setMessage(err instanceof Error ? err.message : 'Could not rename'); await load() }
+  }
+
+  const remove = async (item: PartnerBrand) => {
+    if (!confirm(`Remove ${item.name} from your partner brands?`)) return
+    try { await deletePartnerBrand(item); await load() }
+    catch (err) { setMessage(err instanceof Error ? err.message : 'Could not delete') }
+  }
+
+  return (
+    <SectionShell title="Partner Brands" color="bg-emerald-600">
+      <p className="text-xs text-gray-500">
+        Shown as &quot;Our Partner Brands&quot; on the first page of every quote. Nothing shows until you add a logo, and the strip is hidden if you add none.
+        PNG or JPG, up to {Math.round(PARTNER_LOGO_MAX_BYTES / 1024 / 1024)} MB each, up to {PARTNER_BRAND_MAX} logos.
+      </p>
+      <p className="text-xs font-medium text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+        Only add logos of brands you are allowed to use.
+      </p>
+      {message && <div role="alert" className="text-xs text-red-700 bg-red-50 border border-red-100 rounded-xl px-3 py-2">{message}</div>}
+      {loadError && (
+        <div className="text-xs text-red-700 bg-red-50 border border-red-100 rounded-xl px-3 py-2">
+          Partner brands could not be loaded ({loadError}). If this is a new feature on your database, the database update (migration 0024) may not have been applied yet.
+        </div>
+      )}
+      {loading ? <p className="text-xs text-gray-400">Loading…</p> : (
+        <div className="space-y-2">
+          {items.map((item, i) => (
+            <div key={item.id} className="flex items-center gap-3 px-3 py-2 rounded-xl border border-gray-200">
+              <ReorderButtons onUp={() => move(i, -1)} onDown={() => move(i, 1)} upDisabled={i === 0} downDisabled={i === items.length - 1} />
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={item.logo_url} alt={item.name} className="w-12 h-10 object-contain rounded border border-gray-100 shrink-0" />
+              <input
+                aria-label={`Name of ${item.name}`}
+                className={inputCls}
+                maxLength={60}
+                value={names[item.id] ?? item.name}
+                onChange={e => setNames(n => ({ ...n, [item.id]: e.target.value }))}
+                onBlur={() => rename(item)}
+              />
+              <button aria-label={`Delete ${item.name}`} onClick={() => remove(item)} className="p-1.5 text-gray-400 hover:text-red-600"><Trash2 size={14} /></button>
+            </div>
+          ))}
+          {!loadError && items.length === 0 && <p className="text-xs text-gray-400">No partner brands yet.</p>}
+        </div>
+      )}
+      {items.length < PARTNER_BRAND_MAX ? (
+        <div className="border border-gray-200 rounded-xl p-4 space-y-3">
+          <span className="text-xs font-semibold text-gray-600">Add a partner brand ({items.length}/{PARTNER_BRAND_MAX})</span>
+          <input className={inputCls} placeholder="Brand name" maxLength={60} value={newName} onChange={e => setNewName(e.target.value)} />
+          <label className="flex items-center gap-2 px-3 py-2 text-xs font-medium rounded-xl border border-gray-200 cursor-pointer hover:bg-gray-50 transition-all w-fit">
+            <Upload size={13} />
+            {newFile ? newFile.name : 'Choose logo (PNG or JPG)'}
+            <input key={fileKey} type="file" accept="image/png,image/jpeg" className="hidden" onChange={pickFile} />
+          </label>
+          <button onClick={add} disabled={adding} className="flex items-center gap-1 px-3 py-2 text-xs font-medium rounded-lg bg-blue-600 text-white disabled:opacity-50">
+            <Plus size={13} /> {adding ? 'Adding…' : 'Add'}
+          </button>
+        </div>
+      ) : (
+        <p className="text-xs text-gray-400">You have reached the limit of {PARTNER_BRAND_MAX} partner brands. Delete one to add another.</p>
       )}
     </SectionShell>
   )

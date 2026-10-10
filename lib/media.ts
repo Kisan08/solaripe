@@ -52,7 +52,7 @@ type MediaKind = 'logo' | 'testimonial' | 'certificate' | 'project'
 // "media" table, but it shares the exact same reorder/toggle-active/
 // upsert shape, so the settings-side PipelineStagesSection reuses these
 // generic helpers instead of a duplicate generic layer for one table.
-type MediaTable = 'tenant_client_logos' | 'tenant_testimonials' | 'tenant_certifications' | 'tenant_projects' | 'tenant_pipeline_stages'
+type MediaTable = 'tenant_client_logos' | 'tenant_testimonials' | 'tenant_certifications' | 'tenant_projects' | 'tenant_pipeline_stages' | 'tenant_partner_brands'
 
 // Reuses the existing `branding` storage bucket/policies (see
 // supabase/migrations/0006_quote_branding.sql) exactly like
@@ -200,4 +200,92 @@ export async function swapDisplayOrder(table: MediaTable, rowA: { id: string; di
   if (errA) throw errA
   const { error: errB } = await supabase.from(table).update({ display_order: rowA.display_order }).eq('id', rowB.id)
   if (errB) throw errB
+}
+
+// ── Partner brands ("Our Partner Brands" strip on the quote's first page) ──
+// Stored per company in tenant_partner_brands (row-level security: a company
+// can only ever see or change its own rows) with the image files in the
+// dedicated `partner-logos` bucket (see migration 0024): PNG or JPG, 1 MB at
+// most, writable only inside the uploader's own <tenant id>/ folder.
+export interface PartnerBrand {
+  id: string
+  name: string
+  logo_url: string
+  display_order: number
+}
+
+export const PARTNER_BRAND_MAX = 8
+export const PARTNER_LOGO_MAX_BYTES = 1024 * 1024
+const PARTNER_LOGO_TYPES = ['image/png', 'image/jpeg']
+
+// A plain-words reason a file cannot be used, or null if it is fine. Checked in
+// the page for a quick message; the bucket enforces the same limits again.
+export function partnerLogoProblem(file: { type: string; size: number }): string | null {
+  if (!PARTNER_LOGO_TYPES.includes(file.type)) return 'Logos must be PNG or JPG images.'
+  if (file.size > PARTNER_LOGO_MAX_BYTES) return 'Each logo must be 1 MB or smaller.'
+  return null
+}
+
+export async function uploadPartnerLogo(file: File): Promise<string> {
+  const problem = partnerLogoProblem(file)
+  if (problem) throw new Error(problem)
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+
+  const ext = file.type === 'image/png' ? 'png' : 'jpg'
+  const path = `${user.id}/${crypto.randomUUID()}.${ext}`
+  const { error } = await supabase.storage.from('partner-logos').upload(path, file, { contentType: file.type, cacheControl: '3600' })
+  if (error) throw error
+  return supabase.storage.from('partner-logos').getPublicUrl(path).data.publicUrl
+}
+
+// Quote page: degrades to [] so a hiccup hides the strip instead of crashing.
+export async function fetchPartnerBrands(): Promise<PartnerBrand[]> {
+  const supabase = createClient()
+  const { data, error } = await supabase.from('tenant_partner_brands').select('id, name, logo_url, display_order').order('display_order', { ascending: true })
+  if (error) {
+    // Table not created yet (migration 0024 pending): simply no logos, no error.
+    if (error.code !== 'PGRST205') console.error('Failed to load partner brands:', error.message)
+    return []
+  }
+  return (data ?? []) as PartnerBrand[]
+}
+
+export async function fetchAllPartnerBrands(): Promise<PartnerBrand[]> {
+  const supabase = createClient()
+  const { data, error } = await supabase.from('tenant_partner_brands').select('id, name, logo_url, display_order').order('display_order', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as PartnerBrand[]
+}
+
+export async function addPartnerBrand(name: string, logoUrl: string, nextOrder: number): Promise<void> {
+  const trimmed = name.replace(/\s+/g, ' ').trim()
+  if (!trimmed) throw new Error('Give the brand a name.')
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+  // tenant_id is stamped again by the database from the login, never trusted from here.
+  const { error } = await supabase.from('tenant_partner_brands').insert({
+    name: trimmed.slice(0, 60), logo_url: logoUrl, display_order: nextOrder, tenant_id: user.id,
+  })
+  if (error) throw error
+}
+
+export async function renamePartnerBrand(id: string, name: string): Promise<void> {
+  const trimmed = name.replace(/\s+/g, ' ').trim()
+  if (!trimmed) throw new Error('A brand needs a name.')
+  const supabase = createClient()
+  const { error } = await supabase.from('tenant_partner_brands').update({ name: trimmed.slice(0, 60) }).eq('id', id)
+  if (error) throw error
+}
+
+export async function deletePartnerBrand(brand: PartnerBrand): Promise<void> {
+  const supabase = createClient()
+  const { error } = await supabase.from('tenant_partner_brands').delete().eq('id', brand.id)
+  if (error) throw error
+  // Best effort: remove the image file too. A leftover file is harmless.
+  const marker = '/partner-logos/'
+  const at = brand.logo_url.indexOf(marker)
+  if (at >= 0) await supabase.storage.from('partner-logos').remove([decodeURIComponent(brand.logo_url.slice(at + marker.length))])
 }

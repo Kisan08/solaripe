@@ -1,17 +1,26 @@
 "use client";
-import { useState, useEffect, useRef, type ChangeEvent, type ReactNode, type CSSProperties, Suspense } from "react";
+import { useState, useEffect, useRef, createContext, useContext, type ChangeEvent, type ReactNode, type CSSProperties, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   Phone, Mail, MapPin, Zap, Sun, Wallet, Calendar, Cpu, Gauge, TrendingUp,
-  PiggyBank, BatteryCharging, Clock, IndianRupee, FileText, Leaf, ShieldCheck,
+  PiggyBank, BatteryCharging, Clock, IndianRupee, FileText, Leaf, ShieldCheck, Check,
   type LucideIcon,
 } from "lucide-react";
+import { BrandSelect } from "@/components/ui/brand-select";
+import {
+  PROJECT_TYPES, isOpexType, isLoanType, MIN_YEARS, MAX_YEARS, DEFAULT_YEARS, MAX_LOAN_RATE,
+  yearsIsValid, horizon, formErrors, loanSummary,
+} from "@/lib/quoteTerms";
+import { PANEL_BRANDS, INVERTER_BRANDS, cleanBrand } from "@/lib/brands";
+import {
+  EMPTY_PROFILE, PROFILE_LIMITS, normalizeProfile, profileView, profileHasContent, type CompanyProfile,
+} from "@/lib/companyProfile";
 import { PhoneInput, digitsForPhoneInput } from "@/components/ui/phone-input";
 import { getSettings, defaultSettings, type AppSettings, type PaymentMilestone } from '@/lib/settings'
 import { fetchActiveProducts, type Product } from '@/lib/products'
 import {
-  fetchClientLogos, fetchTestimonials, fetchCertifications, fetchFeaturedProjects,
-  type ClientLogo, type Testimonial, type Certification, type TenantProject,
+  fetchClientLogos, fetchTestimonials, fetchCertifications, fetchFeaturedProjects, fetchPartnerBrands,
+  type ClientLogo, type Testimonial, type Certification, type TenantProject, type PartnerBrand,
 } from '@/lib/media'
 import { saveLeadQuote, getLeadQuote } from '@/lib/data'
 import type { QuoteSnapshot } from '@/lib/quoteSnapshot'
@@ -40,12 +49,26 @@ export interface QuoteForm {
   monthlyBill: number;
   gridRate: number;
   gridEscalation: number; // annual grid-tariff escalation, as a whole-number percent (e.g. 5 = 5%/yr) — different DISCOMs/regions warrant different assumptions, so this is vendor-editable rather than a fixed constant
-  roofType: string;
-  floors: string;
-  shadow: string;
+  // Site fields are no longer asked for. They stay in the type, optional, only
+  // so quotes saved earlier (which still carry them) keep rendering as before.
+  roofType?: string;
+  floors?: string;
+  shadow?: string;
   projectType: string;
   ppaRate: number;
-  ppaTermYears: string; // "10 Years" | "15 Years" — kept a string like the other <select>-bound fields (projectType, roofType, ...); parsed with parseInt() at the two OPEX table calc sites
+  // Used only by quotes saved before the "Number of years" field existed
+  // ("10 Years" | "15 Years" for OPEX); new quotes use `years` below.
+  ppaTermYears?: string;
+  // CAPEX: years of savings shown. OPEX: contract period. Loan: loan tenure.
+  // Absent on quotes saved earlier, which keep their original periods (see horizon()).
+  years?: number;
+  // Loan only.
+  loanInterestRate?: number; // % per year
+  loanDownPaymentPct?: number; // % of the amount payable after subsidy
+  // Brand names printed wherever the panel / inverter are named. Plain text:
+  // a name from lib/brands.ts or whatever the vendor typed under "Other".
+  panelBrand?: string;
+  inverterBrand?: string;
   acCableSpec: string;
   batteryKwh: number;
 }
@@ -96,28 +119,31 @@ const DEFAULT_SCHEDULE: PaymentMilestone[] = [
 // With no product selected these name no brand and claim no certification: a
 // quote only states a make, certificate or degradation figure that the
 // selected product actually lists.
-function moduleSpecP2(p: Product | null): string {
-  if (!p) return `${PANEL_WP} Wp solar PV module`;
+// The brand chosen on the quote ("Panel Brand" / "Inverter Brand") is what is
+// printed when no library model is selected; a selected library model (which
+// carries its own brand) takes precedence. No brand is ever assumed.
+function moduleSpecP2(p: Product | null, brand = ""): string {
+  if (!p) return [brand, `${PANEL_WP} Wp solar PV module`].filter(Boolean).join(" ");
   const base = [p.brand, p.model, p.wattage_or_spec].filter(Boolean).join(" ");
   return [base, p.specs?.certification].filter(Boolean).join(" | ");
 }
 
-function moduleSpecP4(p: Product | null): string {
-  if (!p) return `${PANEL_WP} Wp solar PV module`;
+function moduleSpecP4(p: Product | null, brand = ""): string {
+  if (!p) return [brand, `${PANEL_WP} Wp solar PV module`].filter(Boolean).join(" ");
   const base = [p.brand, p.model, p.wattage_or_spec].filter(Boolean).join(" ");
   return [base, p.specs?.certification, p.specs?.degradation].filter(Boolean).join(" | ");
 }
 
-function inverterBrandModel(p: Product | null): string {
-  return p ? [p.brand, p.model].filter(Boolean).join(" ") : "String inverter";
+function inverterBrandModel(p: Product | null, brand = ""): string {
+  return p ? [p.brand, p.model].filter(Boolean).join(" ") : (brand || "String inverter");
 }
 
-function inverterSpecP2(p: Product | null, capacityKw: number): string {
-  return `${inverterBrandModel(p)} ${capacityKw} kW | ${p?.specs?.connectivity || "Grid-tied"}`;
+function inverterSpecP2(p: Product | null, capacityKw: number, brand = ""): string {
+  return `${inverterBrandModel(p, brand)} ${capacityKw} kW | ${p?.specs?.connectivity || "Grid-tied"}`;
 }
 
-function inverterSpecP4(p: Product | null): string {
-  return [inverterBrandModel(p), p?.specs?.connectivity || "Grid-tied", p?.specs?.monitoring].filter(Boolean).join(" | ");
+function inverterSpecP4(p: Product | null, brand = ""): string {
+  return [inverterBrandModel(p, brand), p?.specs?.connectivity || "Grid-tied", p?.specs?.monitoring].filter(Boolean).join(" | ");
 }
 
 function compute(f: QuoteForm, schedule: PaymentMilestone[] = DEFAULT_SCHEDULE) {
@@ -131,10 +157,13 @@ function compute(f: QuoteForm, schedule: PaymentMilestone[] = DEFAULT_SCHEDULE) 
   const netAfterSubsidy = Math.max(0, net - subsidy);
   const annualSavingsY1 = Math.round(gen * f.gridRate);
   const paybackYears    = netAfterSubsidy > 0 ? +(netAfterSubsidy / annualSavingsY1).toFixed(1) : 0;
-  const roi25           = Math.round(((totalSavings25(f, gen) - netAfterSubsidy) / netAfterSubsidy) * 100);
+  const h               = horizon(f);
+  const years           = h.capex;
+  const roi             = Math.round(((totalSavings(f, gen, years) - netAfterSubsidy) / netAfterSubsidy) * 100);
   return {
     wp, panels, gen, exGst, gst, net, subsidy, netAfterSubsidy,
-    annualSavingsY1, paybackYears, roi25,
+    annualSavingsY1, paybackYears, roi, years,
+    loan: loanSummary(f, netAfterSubsidy, h.loan),
     // Falls back to the original fixed 30/40/20/10 split whenever schedule
     // is shorter than expected (e.g. a not-yet-migrated settings row) —
     // `?? 0` on top of that so a malformed/missing entry never produces
@@ -146,19 +175,19 @@ function compute(f: QuoteForm, schedule: PaymentMilestone[] = DEFAULT_SCHEDULE) 
   };
 }
 
-function totalSavings25(f: QuoteForm, gen: number) {
+function totalSavings(f: QuoteForm, gen: number, years: number) {
   let total = 0;
-  for (let y = 1; y <= 25; y++) {
+  for (let y = 1; y <= years; y++) {
     total += gen * Math.pow(1 - DEGRADE, y - 1) * f.gridRate * Math.pow(1 + f.gridEscalation / 100, y - 1);
   }
   return Math.round(total);
 }
 
-function savingsTable(f: QuoteForm, gen: number) {
+function savingsTable(f: QuoteForm, gen: number, years: number) {
   const rows = [];
   let cumSavings = 0;
   const netCost = Math.max(0, (f.systemCapacity * 1000 * f.ratePerWp * (1 + GST_RATE)) - f.subsidyTotal);
-  for (let y = 1; y <= 25; y++) {
+  for (let y = 1; y <= years; y++) {
     const genY    = Math.round(gen * Math.pow(1 - DEGRADE, y - 1));
     const gridY   = f.gridRate * Math.pow(1 + f.gridEscalation / 100, y - 1);
     const savings = Math.round(genY * gridY);
@@ -273,7 +302,14 @@ function LogoBadge({ s, size = 54 }: { s: AppSettings; size?: number }) {
 }
 
 /* ─── PDF Shell ─── */
+// True only for a quote saved BEFORE company partner brands existed and that had
+// the old fixed logo strip switched on: such a quote keeps printing that strip
+// exactly as it always did. Every newer quote prints only the logos its own
+// company added under Settings > Partner Brands, and nothing when it added none.
+const LegacyPartnerLogos = createContext(false);
+
 function PdfHeader({ s }: { s: AppSettings }) {
+  const legacyLogos = useContext(LegacyPartnerLogos);
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingBottom: 12, borderBottom: `3px solid ${BLUE2}`, marginBottom: 6 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
@@ -286,8 +322,8 @@ function PdfHeader({ s }: { s: AppSettings }) {
             {s.tagline || defaultSettings.tagline}
           </div>
           <div style={{ display: "flex", gap: 16, fontSize: FONT_S, color: "#444" }}>
-            <span>Ph: {s.phone}</span>
-            <span>{s.email}</span>
+            {s.phone && <span>Ph: {s.phone}</span>}
+            {s.email && <span>{s.email}</span>}
             {s.gst && <span>GST: {s.gst}</span>}
           </div>
           {/* Address never appeared anywhere in the quote before this
@@ -300,7 +336,7 @@ function PdfHeader({ s }: { s: AppSettings }) {
         </div>
       </div>
       <div style={{ textAlign: "right" }}>
-        {s.show_partner_logos && (
+        {legacyLogos && (
           <img src="/waaree_logo.png" alt="Waaree" style={{ height: 46, objectFit: "contain", display: "block" }} />
         )}
       </div>
@@ -311,7 +347,7 @@ function PdfHeader({ s }: { s: AppSettings }) {
 function PdfFooter({ s }: { s: AppSettings }) {
   return (
     <div style={{ borderTop: "1px solid #ddd", paddingTop: 6, marginTop: "auto", textAlign: "center", color: "#555", fontSize: FONT_S }}>
-      {s.name} &nbsp;|&nbsp; {s.phone} &nbsp;|&nbsp; {s.email} &nbsp;|&nbsp; Confidential
+      {[s.name, s.phone, s.email, "Confidential"].filter(Boolean).join("  |  ")}
     </div>
   );
 }
@@ -510,12 +546,16 @@ function CoverHeaderBand({ f, s }: { f: QuoteForm; s: AppSettings }) {
               {s.tagline || defaultSettings.tagline}
             </div>
             <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 4 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#444", fontSize: FONT_S }}>
-                <Phone size={12} /> {s.phone}
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#444", fontSize: FONT_S }}>
-                <Mail size={12} /> {s.email}
-              </div>
+              {s.phone && (
+                <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#444", fontSize: FONT_S }}>
+                  <Phone size={12} /> {s.phone}
+                </div>
+              )}
+              {s.email && (
+                <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#444", fontSize: FONT_S }}>
+                  <Mail size={12} /> {s.email}
+                </div>
+              )}
               {s.address && (
                 <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#444", fontSize: FONT_S }}>
                   <MapPin size={12} /> {s.address}
@@ -555,7 +595,8 @@ function CoverHeaderBand({ f, s }: { f: QuoteForm; s: AppSettings }) {
   );
 }
 
-function P1({ f, c, s, showSiteDetails }: { f: QuoteForm; c: Calc; s: AppSettings; showSiteDetails: boolean }) {
+function P1({ f, c, s, showSiteDetails, partnerBrands }: { f: QuoteForm; c: Calc; s: AppSettings; showSiteDetails: boolean; partnerBrands: PartnerBrand[] }) {
+  const legacyLogos = useContext(LegacyPartnerLogos);
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", flex: 1, justifyContent: "space-between", gap: 0 }}>
       <div>
@@ -658,8 +699,8 @@ function P1({ f, c, s, showSiteDetails }: { f: QuoteForm; c: Calc; s: AppSetting
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
             {[
               { icon: Zap, color: BLUE2, t: "Reduce Electricity Bill", d: `Save approx. ${lakh(c.annualSavingsY1)} in Year 1 alone` },
-              { icon: TrendingUp, color: GREEN, t: "Total Savings", d: `${lakh(totalSavings25(f, c.gen))} projected over 25 years` },
-              { icon: Leaf, color: ACCENT, t: "Clean Energy", d: `${Math.round(c.gen * 25 * 0.82 / 1000)}T CO2 avoided over 25 years` },
+              { icon: TrendingUp, color: GREEN, t: "Total Savings", d: `${lakh(totalSavings(f, c.gen, c.years))} projected over ${c.years} years` },
+              { icon: Leaf, color: ACCENT, t: "Clean Energy", d: `${Math.round(c.gen * c.years * 0.82 / 1000)}T CO2 avoided over ${c.years} years` },
               { icon: ShieldCheck, color: "#7C3AED", t: "Energy Independence", d: "Protect against rising electricity costs" },
             ].map(item => (
               <div key={item.t} style={{ textAlign: "center" }}>
@@ -689,7 +730,8 @@ function P1({ f, c, s, showSiteDetails }: { f: QuoteForm; c: Calc; s: AppSetting
           matches the reference exactly (no "Authorized Partner" caption
           or similar text below the row). */}
       <QuoteDesignSection url={f.designUrl}/>
-      {s.show_partner_logos && (
+      {legacyLogos ? (
+        // Only quotes saved before Partner Brands existed: the old fixed strip.
         <div style={{ textAlign: "center" }}>
           <div style={{ fontSize: FONT_S, color: "#7a8aa8", fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", marginBottom: 12 }}>
             Our Partner Brands
@@ -698,6 +740,19 @@ function P1({ f, c, s, showSiteDetails }: { f: QuoteForm; c: Calc; s: AppSetting
             <img src="/waaree_logo.png" alt="Waaree" style={{ height: 60, objectFit: "contain", opacity: 0.9 }} />
             <img src="/adani_solar.png" alt="Adani" style={{ height: 60, objectFit: "contain", opacity: 0.9 }} />
             <img src="/premier_energies.png" alt="Premier" style={{ height: 60, objectFit: "contain", opacity: 0.9 }} />
+          </div>
+        </div>
+      ) : partnerBrands.length > 0 && (
+        // This company's own logos, in the order it set. No logos = no strip at all.
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontSize: FONT_S, color: "#7a8aa8", fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", marginBottom: 12 }}>
+            Our Partner Brands
+          </div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", flexWrap: "wrap", gap: "12px 32px" }}>
+            {partnerBrands.slice(0, 8).map(b => (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img key={b.id} src={b.logo_url} alt={b.name} style={{ height: 60, maxWidth: 150, objectFit: "contain", opacity: 0.9 }} />
+            ))}
           </div>
         </div>
       )}
@@ -713,11 +768,11 @@ function P1({ f, c, s, showSiteDetails }: { f: QuoteForm; c: Calc; s: AppSetting
 function P2({ f, c, s, panel, inverter }: { f: QuoteForm; c: Calc; s: AppSettings; panel: Product | null; inverter: Product | null }) {
   // The company named in the proposal text is always this account's own.
   const who = s.name || "the company";
-  const ppaTermYears = parseInt(f.ppaTermYears, 10) || 10;
+  const ppaTermYears = horizon(f).opex;
   const opexRows = opexSavingsTable(f, c.gen, ppaTermYears);
   const opexTotal = opexTotalSavings(f, c.gen, ppaTermYears);
   const buybackRows = buybackTable(c.net, ppaTermYears);
-  const panelKpiSub = panel ? [panel.brand, panel.model].filter(Boolean).join(" ") : `${PANEL_WP} Wp`;
+  const panelKpiSub = panel ? [panel.brand, panel.model].filter(Boolean).join(" ") : [f.panelBrand, `${PANEL_WP} Wp`].filter(Boolean).join(" ");
   // Per-page running counter for SectionTitle's numbered badge — see that
   // component's comment. Advances in source order, so it naturally skips
   // numbers for whatever's conditionally absent (Battery/Hybrid, the
@@ -729,7 +784,7 @@ function P2({ f, c, s, panel, inverter }: { f: QuoteForm; c: Calc; s: AppSetting
         <SectionTitle number={++n} title="System Design" sub="Technical configuration" />
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 12 }}>
           <KpiCard icon={Sun} label="Solar Panels" value={`${c.panels}`} sub={panelKpiSub} color={BLUE2} bg="#EEF5FF" />
-          <KpiCard icon={Cpu} label="Inverter" value={`${f.systemCapacity} kW`} sub={inverterBrandModel(inverter)} color={NAVY} bg={LIGHT} />
+          <KpiCard icon={Cpu} label="Inverter" value={`${f.systemCapacity} kW`} sub={inverterBrandModel(inverter, f.inverterBrand)} color={NAVY} bg={LIGHT} />
           <KpiCard icon={Zap} label="AC Generation" value={`${c.gen.toLocaleString("en-IN")}`} sub="kWh / year" color={GREEN} bg={GREEN_L} />
           <KpiCard icon={Gauge} label="Performance Ratio" value="75%" sub="GHI: 1,850 kWh/m2" color="#7C3AED" bg="#F3EEFF" />
         </div>
@@ -737,8 +792,8 @@ function P2({ f, c, s, panel, inverter }: { f: QuoteForm; c: Calc; s: AppSetting
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <tbody>
             {[
-              ["Module", moduleSpecP2(panel), "Structure", "Hot-Dip Galvanized (HDG) | 15-yr warranty"],
-              ["Inverter", inverterSpecP2(inverter, f.systemCapacity), "DC Cable", "4 mm2 Tinned Cu | EN-50618"],
+              ["Module", moduleSpecP2(panel, f.panelBrand), "Structure", "Hot-Dip Galvanized (HDG) | 15-yr warranty"],
+              ["Inverter", inverterSpecP2(inverter, f.systemCapacity, f.inverterBrand), "DC Cable", "4 mm2 Tinned Cu | EN-50618"],
               ["Degradation", "0.45% YoY from Year 2", "Timeline", "60-70 days from PO & Advance"],
               ["Earthing", "Chemical Earth Pits per IS 3043", "Lightning Arrester", "Conventional LA per IEC-62305"],
             ].map((row, i) => (
@@ -843,9 +898,9 @@ function P2({ f, c, s, panel, inverter }: { f: QuoteForm; c: Calc; s: AppSetting
         </div>
       </Card>
 
-      {f.projectType === "OPEX / PPA" && f.ppaRate > 0 && (
+      {isOpexType(f.projectType) && f.ppaRate > 0 && (
         <Card>
-          <SectionTitle number={++n} title="OPEX / PPA Model" sub="Alternative to CAPEX" />
+          <SectionTitle number={++n} title={f.projectType === "OPEX / PPA" ? "OPEX / PPA Model" : "OPEX Model"} sub="Alternative to CAPEX" />
           <div style={{ background: "#F3EEFF", border: "1px solid #7C3AED30", borderRadius: 8, padding: "12px 16px" }}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
               <KpiCard icon={IndianRupee} label="PPA Rate" value={`Rs.${f.ppaRate}/kWh`} sub="Fixed for contract term" color="#7C3AED" bg="white" />
@@ -935,18 +990,19 @@ function P2({ f, c, s, panel, inverter }: { f: QuoteForm; c: Calc; s: AppSetting
 
 /* ─── PAGE 3 — Financial Analysis ─── */
 function P3({ f, c }: { f: QuoteForm; c: Calc }) {
-  const rows = savingsTable(f, c.gen);
-  const total25 = totalSavings25(f, c.gen);
+  const years = c.years;
+  const rows = savingsTable(f, c.gen, years);
+  const totalYears = totalSavings(f, c.gen, years);
   const paybackRow = rows.find(r => r.cumSavings >= c.netAfterSubsidy);
 
   return (
     <Card>
-      <SectionTitle number={1} title="Financial Analysis" sub="25-year savings projection" />
+      <SectionTitle number={1} title="Financial Analysis" sub={`${years}-year savings projection`} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 12 }}>
         <KpiCard icon={Wallet} label="Investment" value={lakh(c.netAfterSubsidy)} sub="Net after subsidy" color={BLUE2} bg="#EEF5FF" />
         <KpiCard icon={TrendingUp} label="Year 1 Savings" value={lakh(c.annualSavingsY1)} sub={`@ Rs.${f.gridRate}/kWh`} color={GREEN} bg={GREEN_L} />
         <KpiCard icon={Calendar} label="Payback Period" value={`${c.paybackYears} yrs`} sub="Simple payback" color={ACCENT} bg="#FFF8EE" />
-        <KpiCard icon={PiggyBank} label="25-Year Returns" value={lakh(total25)} sub={`ROI: ${c.roi25}%`} color="#7C3AED" bg="#F3EEFF" />
+        <KpiCard icon={PiggyBank} label={`${years}-Year Returns`} value={lakh(totalYears)} sub={`ROI: ${c.roi}%`} color="#7C3AED" bg="#F3EEFF" />
       </div>
 
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: FONT }}>
@@ -982,16 +1038,23 @@ function P3({ f, c }: { f: QuoteForm; c: Calc }) {
           {/* Restyle: pale mint tint instead of a solid NAVY bar — same
               treatment as the NET TOTAL box on the Pricing Breakdown. */}
           <tr style={{ background: GREEN_L }}>
-            <td colSpan={3} style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: NAVY, fontWeight: 700, fontSize: FONT_L }}>TOTAL 25-YEAR SAVINGS</td>
-            <td style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: GREEN, fontWeight: 800, fontSize: 16, textAlign: "right" }}>{inr(total25)}</td>
-            <td style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: GREEN, fontWeight: 800, fontSize: 16, textAlign: "right" }}>{inr(total25)}</td>
-            <td style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: GREEN, fontWeight: 800, fontSize: 16, textAlign: "right" }}>+{inr(total25 - c.netAfterSubsidy)}</td>
+            <td colSpan={3} style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: NAVY, fontWeight: 700, fontSize: FONT_L }}>TOTAL {years}-YEAR SAVINGS</td>
+            <td style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: GREEN, fontWeight: 800, fontSize: 16, textAlign: "right" }}>{inr(totalYears)}</td>
+            <td style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: GREEN, fontWeight: 800, fontSize: 16, textAlign: "right" }}>{inr(totalYears)}</td>
+            <td style={{ padding: "10px 12px", border: "1px solid #d0d7e2", color: GREEN, fontWeight: 800, fontSize: 16, textAlign: "right" }}>+{inr(totalYears - c.netAfterSubsidy)}</td>
           </tr>
         </tbody>
       </table>
       <div style={{ marginTop: 8, fontSize: FONT_S, color: "#555" }}>
         * Payback year highlighted. Assumes {f.gridEscalation}% annual grid tariff escalation and {DEGRADE*100}% panel degradation from Year 2. Actual savings may vary based on usage and local tariff.
       </div>
+      {/* Only for quotes that choose their own number of years: say so when the
+          payback falls after the last year shown, instead of leaving no row marked. */}
+      {f.years !== undefined && c.netAfterSubsidy > 0 && !paybackRow && (
+        <div style={{ marginTop: 6, fontSize: FONT_S, color: "#555" }}>
+          Payback (about {c.paybackYears} years) comes after the {years} years shown above.
+        </div>
+      )}
     </Card>
   );
 }
@@ -1039,7 +1102,7 @@ function P3B({ projects }: { projects: TenantProject[] }) {
 // settings-page decision in Phase 4's report.
 const WARRANTY_COLORS = [BLUE2, "#7C3AED", GREEN, ACCENT];
 
-function P4({ s, panel, inverter, certifications }: { s: AppSettings; panel: Product | null; inverter: Product | null; certifications: Certification[] }) {
+function P4({ f, s, panel, inverter, certifications }: { f: QuoteForm; s: AppSettings; panel: Product | null; inverter: Product | null; certifications: Certification[] }) {
   // Warranties and scope are shown only if this company has entered them in
   // Settings; nothing is assumed on its behalf. Section numbers follow what is shown.
   const warranty = s.default_warranty ?? [];
@@ -1118,8 +1181,8 @@ function P4({ s, panel, inverter, certifications }: { s: AppSettings; panel: Pro
         </thead>
         <tbody>
           {[
-            ["1", "Solar PV Modules", moduleSpecP4(panel)],
-            ["2", "String Inverter", inverterSpecP4(inverter)],
+            ["1", "Solar PV Modules", moduleSpecP4(panel, f.panelBrand)],
+            ["2", "String Inverter", inverterSpecP4(inverter, f.inverterBrand)],
             ["3", "Mounting Structure", "Hot-Dip Galvanized (HDG) | SS-304 fasteners | 15-yr warranty"],
             ["4", "DC Cables", "4 mm2 Tinned Cu UV-Protected | EN-50618"],
             ["5", "AC Cables", "Al XLPE Armoured | Bimetallic Lugs"],
@@ -1230,32 +1293,154 @@ function P5({ f, s, testimonials, clientLogos }: { f: QuoteForm; s: AppSettings;
           light card language. */}
       <Card style={{ textAlign: "center", padding: "18px" }}>
         <div style={{ color: BLUE2, fontWeight: 700, fontSize: FONT_L }}>Thank you for choosing {s.name}</div>
-        <div style={{ color: "#555", fontSize: FONT, marginTop: 4 }}>Powering a Greener Tomorrow  |  {s.phone}  |  {s.email}</div>
+        <div style={{ color: "#555", fontSize: FONT, marginTop: 4 }}>{["Powering a Greener Tomorrow", s.phone, s.email].filter(Boolean).join("  |  ")}</div>
       </Card>
     </div>
   );
 }
 
-/* ─── Full Document ─── */
-function QuotationDocument({
-  f, c, s, showSiteDetails, panel, inverter, clientLogos, testimonials, certifications, featuredProjects,
-}: {
-  f: QuoteForm; c: Calc; s: AppSettings; showSiteDetails: boolean; panel: Product | null; inverter: Product | null;
-  clientLogos: ClientLogo[]; testimonials: Testimonial[]; certifications: Certification[]; featuredProjects: TenantProject[];
-}) {
+/* ─── Loan Summary page (Loan quotes only) ───
+   Its own page, right after the system/pricing page, so it never makes that
+   page taller than one A4 sheet (the PDF squeezes anything taller). */
+function PLoan({ c }: { c: Calc }) {
+  const l = c.loan;
+  if (!l) return null;
   return (
-    <div id="quotation-document">
-      <Page s={s} hideHeader><P1 f={f} c={c} s={s} showSiteDetails={showSiteDetails} /></Page>
-      <Page s={s}><P2 f={f} c={c} s={s} panel={panel} inverter={inverter} /></Page>
-      <Page s={s}><P3 f={f} c={c} /></Page>
-      {featuredProjects.length > 0 && (
-        <Page s={s}><P3B projects={featuredProjects} /></Page>
+    <Card>
+      <SectionTitle number={1} title="Loan Summary" sub={`${l.years}-year loan tenure`} />
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+        <KpiCard icon={Wallet} label="Monthly EMI" value={inrFull(l.emi)} sub={`${l.months} monthly instalments`} color={BLUE2} bg="#EEF5FF" />
+        <KpiCard icon={Gauge} label="Total Interest" value={inrFull(l.totalInterest)} sub={`@ ${l.rate}% per year`} color={RED} bg="#FEF2F2" />
+        <KpiCard icon={IndianRupee} label="Total Repayment" value={inrFull(l.totalRepayment)} sub="All EMIs together" color={NAVY} bg={LIGHT} />
+        <KpiCard icon={PiggyBank} label="Total Paid" value={inrFull(l.totalPaid)} sub="Down payment + all EMIs" color={GREEN} bg={GREEN_L} />
+      </div>
+      <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 12 }}>
+        <tbody>
+          {[
+            ["Amount payable (after subsidy)", inrFull(l.cost)],
+            [`Down payment (${l.dpPct}%)`, inrFull(l.downPayment)],
+            ["Loan amount", inrFull(l.principal)],
+            ["Interest rate", `${l.rate}% per year (reducing balance)`],
+            ["Tenure", `${l.years} years (${l.months} months)`],
+            ["Monthly EMI", inrFull(l.emi)],
+            ["Total repayment (EMI x months)", inrFull(l.totalRepayment)],
+            ["Total interest", inrFull(l.totalInterest)],
+            ["Total paid (down payment + all EMIs)", inrFull(l.totalPaid)],
+          ].map(([k, v], i) => (
+            <tr key={k} style={{ background: i % 2 === 0 ? "#fff" : "#F5F9FF" }}>
+              <td style={{ ...TD, width: "55%", fontWeight: 600, color: NAVY }}>{k}</td>
+              <td style={{ ...TD, textAlign: "right" }}>{v}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div style={{ marginTop: 10, fontSize: FONT_S, color: "#555" }}>
+        The loan amount is the amount payable after subsidy, less the down payment. The EMI is calculated on a reducing balance at the stated yearly rate and rounded to the rupee. Actual lender terms may vary.
+      </div>
+    </Card>
+  );
+}
+
+/* ─── Company Profile page (optional) ───
+   Uses the same Page shell as every other page, so the company's own logo,
+   name, contact line and colours come with it. Only fields the vendor filled in
+   are printed. The page exists only when the switch is on AND there is at least
+   one thing to print (see QuotationDocument), so it is never an empty page. */
+function PCompany({ s, profile }: { s: AppSettings; profile: CompanyProfile }) {
+  const v = profileView(profile);
+  const statIcons: LucideIcon[] = [Calendar, FileText, Zap];
+  const statColors = [BLUE2, "#7C3AED", GREEN];
+  const statBgs = ["#EEF5FF", "#F3EEFF", GREEN_L];
+  let n = 0;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      {(v.about || v.stats.length > 0) && (
+        <Card>
+          <SectionTitle number={++n} title={s.name ? `About ${s.name}` : "About Us"} />
+          {v.about && (
+            <div style={{ fontSize: FONT, color: "#333", lineHeight: 1.7, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{v.about}</div>
+          )}
+          {v.stats.length > 0 && (
+            <div style={{ display: "grid", gridTemplateColumns: `repeat(${v.stats.length}, 1fr)`, gap: 8, marginTop: v.about ? 14 : 0 }}>
+              {v.stats.map((st, i) => (
+                <KpiCard key={st.label} icon={statIcons[i % 3]} label={st.label} value={st.value} color={statColors[i % 3]} bg={statBgs[i % 3]} />
+              ))}
+            </div>
+          )}
+        </Card>
       )}
-      <Page s={s}><P4 s={s} panel={panel} inverter={inverter} certifications={certifications} /></Page>
-      <Page s={s}><P5 f={f} s={s} testimonials={testimonials} clientLogos={clientLogos} /></Page>
+      {v.certifications.length > 0 && (
+        <Card>
+          <SectionTitle number={++n} title="Certifications" />
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {v.certifications.map(line => (
+              <div key={line} style={{ display: "flex", alignItems: "center", gap: 6, border: "1px solid #E7ECF5", borderRadius: 20, padding: "6px 14px", background: "#FAFCFF" }}>
+                <ShieldCheck size={14} color={BLUE2} />
+                <span style={{ fontSize: FONT, fontWeight: 600, color: NAVY }}>{line}</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+      {v.whyChooseUs.length > 0 && (
+        <Card>
+          <SectionTitle number={++n} title="Why Choose Us" />
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {v.whyChooseUs.map(line => (
+              <div key={line} style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+                <div style={{ position: "relative", width: 24, height: 24, flexShrink: 0, marginTop: 1 }}>
+                  <div style={{ position: "absolute", inset: 0, borderRadius: "50%", background: GREEN, opacity: 0.16 }} />
+                  <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <Check size={14} color={GREEN} strokeWidth={3} />
+                  </div>
+                </div>
+                <div style={{ fontSize: FONT, color: "#333", lineHeight: 1.5, wordBreak: "break-word" }}>{line}</div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
     </div>
   );
 }
+
+/* ─── Full Document ─── */
+// partnerBrands === undefined means "a quote saved before Partner Brands
+// existed" (see LegacyPartnerLogos); includeProfile/profile are absent on those
+// too, so an older quote prints exactly the pages it always did.
+function QuotationDocument({
+  f, c, s, showSiteDetails, panel, inverter, clientLogos, testimonials, certifications, featuredProjects,
+  partnerBrands, includeProfile = false, profile = EMPTY_PROFILE,
+}: {
+  f: QuoteForm; c: Calc; s: AppSettings; showSiteDetails: boolean; panel: Product | null; inverter: Product | null;
+  clientLogos: ClientLogo[]; testimonials: Testimonial[]; certifications: Certification[]; featuredProjects: TenantProject[];
+  partnerBrands?: PartnerBrand[]; includeProfile?: boolean; profile?: CompanyProfile;
+}) {
+  const legacyPartnerLogos = partnerBrands === undefined && !!s.show_partner_logos;
+  const showProfile = includeProfile && profileHasContent(profile);
+  // A typed brand is tidied only when printed, so typing a name with spaces works.
+  f = { ...f, panelBrand: cleanBrand(f.panelBrand), inverterBrand: cleanBrand(f.inverterBrand) };
+  return (
+    <LegacyPartnerLogos.Provider value={legacyPartnerLogos}>
+      <div id="quotation-document">
+        <Page s={s} hideHeader><P1 f={f} c={c} s={s} showSiteDetails={showSiteDetails} partnerBrands={partnerBrands ?? []} /></Page>
+        {showProfile && <Page s={s}><PCompany s={s} profile={profile} /></Page>}
+        <Page s={s}><P2 f={f} c={c} s={s} panel={panel} inverter={inverter} /></Page>
+        {c.loan && <Page s={s}><PLoan c={c} /></Page>}
+        <Page s={s}><P3 f={f} c={c} /></Page>
+        {featuredProjects.length > 0 && (
+          <Page s={s}><P3B projects={featuredProjects} /></Page>
+        )}
+        <Page s={s}><P4 f={f} s={s} panel={panel} inverter={inverter} certifications={certifications} /></Page>
+        <Page s={s}><P5 f={f} s={s} testimonials={testimonials} clientLogos={clientLogos} /></Page>
+      </div>
+    </LegacyPartnerLogos.Provider>
+  );
+}
+
+// Live trimming for the "one per line" profile boxes.
+const limitLines = (text: string, maxLines: number, maxChars: number) =>
+  text.split("\n").slice(0, maxLines).map(l => l.slice(0, maxChars)).join("\n");
 
 /* ─── Form Field ─── */
 function Field({ label, name, value, onChange, type = "text", placeholder = "" }: {
@@ -1288,6 +1473,8 @@ function SelectField({ label, name, value, onChange, options }: {
 
 /* ─── Inner Component ─── */
 function QuotePageInner() {
+  // No longer a switch: new quotes never print a site-details block. It is set
+  // only when reopening a quote saved earlier that had it switched on.
   const [showSiteDetails, setShowSiteDetails] = useState(false)
   const [showPreview, setShowPreview] = useState(true)
   const today = new Date().toISOString().split("T")[0];
@@ -1335,6 +1522,13 @@ function QuotePageInner() {
   const [testimonials, setTestimonials] = useState<Testimonial[]>([])
   const [certifications, setCertifications] = useState<Certification[]>([])
   const [featuredProjects, setFeaturedProjects] = useState<TenantProject[]>([])
+  // This company's own partner logos. undefined only while reopening a quote
+  // saved before Partner Brands existed (it then keeps its old logo strip).
+  const [partnerBrands, setPartnerBrands] = useState<PartnerBrand[] | undefined>(viewMode ? undefined : [])
+  // Optional Company Profile page: off by default; fields start from the
+  // profile saved in Settings (empty unless the company filled it in).
+  const [includeProfile, setIncludeProfile] = useState(false)
+  const [profile, setProfile] = useState<CompanyProfile>(EMPTY_PROFILE)
 
   const [f, setF] = useState<QuoteForm>({
     proposalNo: `QT-${new Date().getFullYear()}-001`,
@@ -1349,12 +1543,9 @@ function QuotePageInner() {
     monthlyBill: 8000,
     gridRate: 19,
     gridEscalation: 5,
-    roofType: "RCC Flat",
-    floors: "G+4",
-    shadow: "Minimal",
-    projectType: "CAPEX (EPC)",
+    projectType: "CAPEX",
     ppaRate: 5.5,
-    ppaTermYears: "10 Years",
+    years: DEFAULT_YEARS,
     acCableSpec: "4C x 25 sq. mm AL Armoured as per Design",
     batteryKwh: 0,
   })
@@ -1382,6 +1573,10 @@ function QuotePageInner() {
           setTestimonials((snap.testimonials as Testimonial[]) ?? [])
           setCertifications((snap.certifications as Certification[]) ?? [])
           setFeaturedProjects((snap.featuredProjects as TenantProject[]) ?? [])
+          // Absent on quotes saved before these existed: left as they were.
+          setPartnerBrands(snap.partnerBrands as PartnerBrand[] | undefined)
+          setIncludeProfile(!!snap.includeProfile)
+          setProfile(normalizeProfile(snap.profile))
         })
         .catch((err) => {
           console.error("Failed to load saved quote:", err)
@@ -1396,13 +1591,17 @@ function QuotePageInner() {
       if (designUrl) setF(prev=>({...prev,designUrl}));
       const s = await getSettings()
       setSettings(s)
+      setProfile(s.company_profile)
       setF(prev => ({
         ...prev,
         proposalNo: `${s.short_name || s.name.split(/\s+/).map(w => w[0]).join('').slice(0, 4).toUpperCase() || 'QT'}-${new Date().getFullYear()}-001`,
         ratePerWp: s.default_rate,
+        panelBrand: prev.panelBrand || s.panel_brand,
+        inverterBrand: prev.inverterBrand || s.inverter_brand,
       }))
     }
     run()
+    fetchPartnerBrands().then(setPartnerBrands)
     fetchActiveProducts('panel').then(setPanelOptions)
     fetchActiveProducts('inverter').then(setInverterOptions)
     fetchClientLogos().then(setClientLogos)
@@ -1460,6 +1659,9 @@ function QuotePageInner() {
     panel: (selectedPanel as unknown as Record<string, unknown>) ?? null,
     inverter: (selectedInverter as unknown as Record<string, unknown>) ?? null,
     clientLogos, testimonials, certifications, featuredProjects,
+    partnerBrands: partnerBrands ?? [],
+    includeProfile,
+    profile: profile as unknown as Record<string, unknown>,
   });
 
   // Auto-save the quote "recipe" to the originating lead after a
@@ -1561,6 +1763,8 @@ function QuotePageInner() {
   };
 
   const downloadPDF = async () => {
+    const problems = formErrors(f);
+    if (problems.length) { alert(problems.join("\n")); return; }
     setBusy(true);
     try {
       await waitForImages();
@@ -1619,6 +1823,8 @@ function QuotePageInner() {
   };
 
   const shareWhatsApp = async () => {
+    const problems = formErrors(f);
+    if (problems.length) { alert(problems.join("\n")); return; }
     setBusy(true);
     setShareHint(null);
     try {
@@ -1636,7 +1842,8 @@ function QuotePageInner() {
         ...(f.subsidyTotal > 0 ? [`After Subsidy (Net Payable): ${inrFull(c.netAfterSubsidy)}`] : []),
         `Year 1 Bill Savings: ${inrFull(c.annualSavingsY1)}`,
         `Payback Period: ${c.paybackYears} years`,
-        `25-Year Total Savings: ${lakh(totalSavings25(f, c.gen))}`,
+        `${c.years}-Year Total Savings: ${lakh(totalSavings(f, c.gen, c.years))}`,
+        ...(c.loan ? [`Monthly EMI: ${inrFull(c.loan.emi)} for ${c.loan.years} years`] : []),
         ``,
         `Contact: ${settings.phone}`,
         `Email: ${settings.email}`,
@@ -1737,7 +1944,7 @@ function QuotePageInner() {
               {hydrating ? "Loading saved quote…" : `${f.clientName || "Saved quote"} — ${f.systemCapacity} kWp`}
             </h1>
             {!hydrating && (
-              <p className="text-xs text-gray-500 truncate">Proposal {f.proposalNo}</p>
+              <p className="text-xs text-gray-500 truncate">Proposal {f.proposalNo} · {f.projectType}</p>
             )}
           </div>
           <button
@@ -1819,6 +2026,7 @@ function QuotePageInner() {
                 panel={selectedPanel} inverter={selectedInverter}
                 clientLogos={clientLogos} testimonials={testimonials}
                 certifications={certifications} featuredProjects={featuredProjects}
+                partnerBrands={partnerBrands} includeProfile={includeProfile} profile={profile}
               />
             </div>
           </div>
@@ -1888,13 +2096,27 @@ function QuotePageInner() {
 
           <div className="bg-white rounded-2xl border border-gray-100 p-5">
             <h2 className="text-sm font-semibold text-gray-700 mb-4 flex items-center gap-2">
-              <span className="w-1.5 h-4 rounded bg-amber-500 inline-block" />Site Details
+              <span className="w-1.5 h-4 rounded bg-amber-500 inline-block" />Project Details
             </h2>
             <div className="grid grid-cols-2 gap-3">
-              <SelectField label="Roof Type" name="roofType" value={f.roofType} onChange={onSelect} options={["RCC Flat","Mangalore Tile","GI Sheet","Trapezoidal","Terrace"]} />
-              <SelectField label="Shadow" name="shadow" value={f.shadow} onChange={onSelect} options={["None","Minimal","Moderate","Heavy"]} />
-              <Field label="Floors (e.g. G+4)" name="floors" value={f.floors} onChange={onChange} placeholder="G+4" />
-              <SelectField label="Project Type" name="projectType" value={f.projectType} onChange={onSelect} options={["CAPEX (EPC)","OPEX / PPA","AMC","Hybrid"]} />
+              <SelectField label="Project Type" name="projectType" value={f.projectType} onChange={onSelect}
+                options={(PROJECT_TYPES as readonly string[]).includes(f.projectType) ? [...PROJECT_TYPES] : [...PROJECT_TYPES, f.projectType]} />
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Number of years</label>
+                <input type="number" inputMode="numeric" min={MIN_YEARS} max={MAX_YEARS} step={1}
+                  value={f.years === undefined || Number.isNaN(f.years) ? "" : f.years}
+                  onChange={e => setF(p => ({ ...p, years: e.target.value === "" ? NaN : Number(e.target.value) }))}
+                  aria-invalid={f.years !== undefined && !yearsIsValid(f.years)}
+                  className={`w-full px-3 py-2 text-base rounded-lg bg-white border text-gray-900 outline-none focus:ring-2 transition-all ${f.years !== undefined && !yearsIsValid(f.years) ? "border-red-400 focus:border-red-500 focus:ring-red-50" : "border-gray-200 focus:border-blue-400 focus:ring-blue-50"}`} />
+              </div>
+              <p className="col-span-2 text-xs text-gray-400 -mt-1">
+                {isOpexType(f.projectType) ? "OPEX: the contract period." : isLoanType(f.projectType) ? "Loan: the loan tenure." : "CAPEX: the years of savings shown in the quote."} Allowed: {MIN_YEARS} to {MAX_YEARS}.
+              </p>
+              {formErrors(f).length > 0 && (
+                <div role="alert" className="col-span-2 text-xs text-red-700 bg-red-50 border border-red-100 rounded-lg px-3 py-2 space-y-0.5">
+                  {formErrors(f).map(m => <div key={m}>{m}</div>)}
+                </div>
+              )}
             </div>
           </div>
 
@@ -1902,16 +2124,6 @@ function QuotePageInner() {
             <h2 className="text-sm font-semibold text-gray-700 mb-4 flex items-center gap-2">
               <span className="w-1.5 h-4 rounded bg-amber-500 inline-block" />Proposal Options
             </h2>
-            <div className="flex items-center justify-between mb-3">
-              <div>
-                <p className="text-sm font-medium text-gray-700">Show Site Details in PDF</p>
-                <p className="text-xs text-gray-400 mt-0.5">Roof type, floors, shading on cover page</p>
-              </div>
-              <button onClick={() => setShowSiteDetails(p => !p)}
-                className={`w-12 h-6 rounded-full transition-all relative ${showSiteDetails ? 'bg-blue-600' : 'bg-gray-200'}`}>
-                <span className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${showSiteDetails ? 'left-7' : 'left-1'}`} />
-              </button>
-            </div>
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-gray-700">Show PDF Preview</p>
@@ -1926,6 +2138,63 @@ function QuotePageInner() {
 
           <div className="bg-white rounded-2xl border border-gray-100 p-5">
             <h2 className="text-sm font-semibold text-gray-700 mb-4 flex items-center gap-2">
+              <span className="w-1.5 h-4 rounded bg-teal-600 inline-block" />Company Profile
+            </h2>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-700">Include company profile in PDF</p>
+                <p className="text-xs text-gray-400 mt-0.5">Adds one extra page after the cover. Off by default.</p>
+              </div>
+              <button type="button" role="switch" aria-checked={includeProfile} aria-label="Include company profile in PDF"
+                onClick={() => setIncludeProfile(p => !p)}
+                className={`w-12 h-6 rounded-full transition-all relative ${includeProfile ? 'bg-blue-600' : 'bg-gray-200'}`}>
+                <span className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${includeProfile ? 'left-7' : 'left-1'}`} />
+              </button>
+            </div>
+            {includeProfile && (
+              <div className="mt-4 space-y-3">
+                <p className="text-xs text-gray-400">Fill it in once under Settings to start every new quote with it. Anything you leave empty is left out of the PDF.</p>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">About us <span className="text-gray-400">({profile.about.length}/{PROFILE_LIMITS.about})</span></label>
+                  <textarea rows={4} maxLength={PROFILE_LIMITS.about} value={profile.about}
+                    onChange={e => setProfile(p => ({ ...p, about: e.target.value.slice(0, PROFILE_LIMITS.about) }))}
+                    className="w-full px-3 py-2 text-base rounded-lg bg-white border border-gray-200 text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 resize-none" />
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  {([
+                    ["yearsInBusiness", "Years in business"],
+                    ["projectsCompleted", "Total projects completed"],
+                    ["capacityInstalled", "Total capacity installed"],
+                  ] as const).map(([key, label]) => (
+                    <div key={key}>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">{label}</label>
+                      <input type="text" maxLength={PROFILE_LIMITS.stat} value={profile[key]}
+                        onChange={e => setProfile(p => ({ ...p, [key]: e.target.value }))}
+                        className="w-full px-3 py-2 text-base rounded-lg bg-white border border-gray-200 text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50" />
+                    </div>
+                  ))}
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Certifications <span className="text-gray-400">(one per line, up to {PROFILE_LIMITS.certLines})</span></label>
+                  <textarea rows={3} value={profile.certifications}
+                    onChange={e => setProfile(p => ({ ...p, certifications: limitLines(e.target.value, PROFILE_LIMITS.certLines, PROFILE_LIMITS.certLineChars) }))}
+                    className="w-full px-3 py-2 text-base rounded-lg bg-white border border-gray-200 text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 resize-none" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Why choose us <span className="text-gray-400">(up to {PROFILE_LIMITS.whyLines} lines)</span></label>
+                  <textarea rows={4} value={profile.whyChooseUs}
+                    onChange={e => setProfile(p => ({ ...p, whyChooseUs: limitLines(e.target.value, PROFILE_LIMITS.whyLines, PROFILE_LIMITS.whyLineChars) }))}
+                    className="w-full px-3 py-2 text-base rounded-lg bg-white border border-gray-200 text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 resize-none" />
+                </div>
+                {!profileHasContent(profile) && (
+                  <p className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">Nothing is filled in yet, so no profile page will be added to the PDF.</p>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="bg-white rounded-2xl border border-gray-100 p-5">
+            <h2 className="text-sm font-semibold text-gray-700 mb-4 flex items-center gap-2">
               <span className="w-1.5 h-4 rounded bg-green-600 inline-block" />System & Pricing
             </h2>
             <div className="grid grid-cols-2 gap-3">
@@ -1933,32 +2202,57 @@ function QuotePageInner() {
               <Field label="Rate (Rs./Wp excl. GST)" name="ratePerWp" type="number" value={f.ratePerWp} onChange={onChange} />
               <Field label="Govt. Subsidy Total (Rs.) — 0 if none" name="subsidyTotal" type="number" value={f.subsidyTotal} onChange={onChange} placeholder="270000" />
               <Field label="Battery Capacity (kWh) — 0 if none" name="batteryKwh" type="number" value={f.batteryKwh} onChange={onChange} placeholder="0" />
-              {f.projectType === "OPEX / PPA" && (
+              {isOpexType(f.projectType) && (
                 <>
                   <Field label="PPA Rate (Rs./kWh)" name="ppaRate" type="number" value={f.ppaRate} onChange={onChange} />
-                  <SelectField label="Contract Term" name="ppaTermYears" value={f.ppaTermYears} onChange={onSelect} options={["10 Years", "15 Years"]} />
                 </>
               )}
-              <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">Panel Model (optional)</label>
-                <select value={selectedPanelId} onChange={e => setSelectedPanelId(e.target.value)}
-                  className="w-full px-3 py-2.5 text-base rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400">
-                  <option value="">Default ({PANEL_WP} Wp, no brand named)</option>
-                  {panelOptions.map(p => (
-                    <option key={p.id} value={p.id}>{p.brand} {p.model}{p.wattage_or_spec ? ` — ${p.wattage_or_spec}` : ""}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">Inverter Model (optional)</label>
-                <select value={selectedInverterId} onChange={e => setSelectedInverterId(e.target.value)}
-                  className="w-full px-3 py-2.5 text-base rounded-xl border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400">
-                  <option value="">Default (string inverter, no brand named)</option>
-                  {inverterOptions.map(p => (
-                    <option key={p.id} value={p.id}>{p.brand} {p.model}{p.wattage_or_spec ? ` — ${p.wattage_or_spec}` : ""}</option>
-                  ))}
-                </select>
-              </div>
+              {isLoanType(f.projectType) && (
+                <>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Interest rate (% per year)</label>
+                    <input type="number" inputMode="decimal" min={0} max={MAX_LOAN_RATE} step="0.01" value={f.loanInterestRate ?? ""}
+                      onChange={e => setF(p => ({ ...p, loanInterestRate: e.target.value === "" ? undefined : Number(e.target.value) }))}
+                      className="w-full px-3 py-2 text-base rounded-lg bg-white border border-gray-200 text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 transition-all" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Down payment (%)</label>
+                    <input type="number" inputMode="decimal" min={0} max={99.99} step="0.01" value={f.loanDownPaymentPct ?? ""}
+                      onChange={e => setF(p => ({ ...p, loanDownPaymentPct: e.target.value === "" ? undefined : Number(e.target.value) }))}
+                      className="w-full px-3 py-2 text-base rounded-lg bg-white border border-gray-200 text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 transition-all" />
+                  </div>
+                </>
+              )}
+              <BrandSelect label="Panel Brand" options={PANEL_BRANDS} value={f.panelBrand ?? ""}
+                onChange={b => setF(p => ({ ...p, panelBrand: b }))} />
+              <BrandSelect label="Inverter Brand" options={INVERTER_BRANDS} value={f.inverterBrand ?? ""}
+                onChange={b => setF(p => ({ ...p, inverterBrand: b }))} />
+              {/* The library models only appear when the library has some; a
+                  selected model carries its own brand and so takes precedence. */}
+              {panelOptions.length > 0 && (
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Panel Model (optional, replaces the brand above)</label>
+                  <select value={selectedPanelId} onChange={e => setSelectedPanelId(e.target.value)}
+                    className="w-full px-3 py-2 text-base rounded-lg border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400">
+                    <option value="">None</option>
+                    {panelOptions.map(p => (
+                      <option key={p.id} value={p.id}>{p.brand} {p.model}{p.wattage_or_spec ? ` — ${p.wattage_or_spec}` : ""}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {inverterOptions.length > 0 && (
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Inverter Model (optional, replaces the brand above)</label>
+                  <select value={selectedInverterId} onChange={e => setSelectedInverterId(e.target.value)}
+                    className="w-full px-3 py-2 text-base rounded-lg border border-gray-200 bg-white text-gray-900 outline-none focus:border-blue-400">
+                    <option value="">None</option>
+                    {inverterOptions.map(p => (
+                      <option key={p.id} value={p.id}>{p.brand} {p.model}{p.wattage_or_spec ? ` — ${p.wattage_or_spec}` : ""}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <div className="col-span-2"><Field label="AC Cable Spec" name="acCableSpec" value={f.acCableSpec} onChange={onChange} /></div>
             </div>
           </div>
@@ -1986,15 +2280,20 @@ function QuotePageInner() {
                 ...(f.subsidyTotal > 0 ? [["Subsidy", `- ${inrFull(c.subsidy)}`], ["Net Payable", inrFull(c.netAfterSubsidy)]] as [string,string][] : []),
                 ["Year 1 Savings", inrFull(c.annualSavingsY1)],
                 ["Payback", `${c.paybackYears} years`],
-                ["25-yr Returns", lakh(totalSavings25(f, c.gen))],
-                ["ROI", `${c.roi25}%`],
+                [`${c.years}-yr Returns`, lakh(totalSavings(f, c.gen, c.years))],
+                ["ROI", `${c.roi}%`],
+                ...(c.loan ? [
+                  ["Monthly EMI", inrFull(c.loan.emi)],
+                  ["Total Interest", inrFull(c.loan.totalInterest)],
+                  ["Total Paid", inrFull(c.loan.totalPaid)],
+                ] as [string, string][] : []),
                 ...(settings.default_payment_schedule ?? DEFAULT_SCHEDULE).map((m, i): [string, string] =>
                   [`T-${i + 1} (${m.percent}%)`, inrFull([c.t1, c.t2, c.t3, c.t4][i] ?? 0)]
                 ),
               ].map(([l, v]) => (
                 <div key={l} className="contents">
                   <div className="text-blue-600">{l}:</div>
-                  <div className={`font-semibold ${l === "Net Total" || l === "Net Payable" || l === "25-yr Returns" ? "text-blue-800" : "text-gray-800"}`}>{v}</div>
+                  <div className={`font-semibold ${l === "Net Total" || l === "Net Payable" || l === `${c.years}-yr Returns` ? "text-blue-800" : "text-gray-800"}`}>{v}</div>
                 </div>
               ))}
             </div>
@@ -2017,7 +2316,8 @@ function QuotePageInner() {
               } as CSSProperties}
             >
               <QuotationDocument f={f} c={c} s={settings} showSiteDetails={showSiteDetails} panel={selectedPanel} inverter={selectedInverter}
-                clientLogos={clientLogos} testimonials={testimonials} certifications={certifications} featuredProjects={featuredProjects} />
+                clientLogos={clientLogos} testimonials={testimonials} certifications={certifications} featuredProjects={featuredProjects}
+                partnerBrands={partnerBrands} includeProfile={includeProfile} profile={profile} />
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center h-64 gap-4">
